@@ -1,0 +1,28 @@
+# 构建产物
+/mota-agent-server
+/target
+*.exe
+*.test
+
+# 本地/vendored 工具链与构建缓存(体积大,且每台机器路径不同)
+/.tools/
+/.hwhkit-go-src/
+/.gocache/
+/.gotmp/
+
+# 环境变量与本地密钥(.env.example 是模板,必须提交)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# 测试与覆盖率产物
+*.log
+coverage.out
+coverage.html
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/

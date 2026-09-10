@@ -1,0 +1,130 @@
+# hwhkit 标准配置段(server / observability / runtime / integrations)
+[server]
+host = "0.0.0.0"
+port = 8080
+
+[observability]
+service_name = "mota-agent-server"
+environment = "dev"
+
+[observability.logging]
+level = "info"
+format = "pretty"
+
+# MOTA 接入配置段。
+# 说明:
+#   - 本段由 mota-agent-server 自己的配置加载器解析([mota] 段),
+#     hwhkit 的 AppConfig 解析会忽略未知段,两者互不干扰。
+#   - 环境变量优先级更高: MOTA__PUSH_ENABLED / MOTA__SIGNING_SECRET /
+#     MOTA__SIGNATURE_ENCODING / MOTA__PUSH_PATH / MOTA__PULL_ENABLED /
+#     MOTA__QUEUE_URL / MOTA__BIND_TOKEN / MOTA__WORKER_ID / ... ,
+#     空字符串视为"未设置",会被环境变量覆盖。
+[mota]
+# --- Push 接入:接收 MOTA 推送任务 ---
+# POST <your endpoint> -> 200 + V2 结果信封，或 202 + callback v2。
+push_enabled = true
+push_path = "/mota/push"
+# HMAC-SHA256 签名密钥(MOTA 平台签发)。此处为本地开发占位值;
+# 生产环境务必通过环境变量 MOTA__SIGNING_SECRET 注入,不要明文提交到仓库。
+signing_secret = "change-me"
+# X-MoTA-Signature 编码方式:hex(小写十六进制)或 base64。
+signature_encoding = "hex"
+
+# --- Pull 接入:worker 轮询队列 ---
+# claim / complete / renew / heartbeat,全部使用 Bearer <bind token>。
+pull_enabled = false
+queue_url = ""
+bind_token = ""
+worker_id = ""
+# claim 是长轮询:HTTP 客户端读超时不要低于 35 秒。
+claim_timeout_secs = 60
+# 心跳间隔(秒);若服务端回执带 heartbeatIntervalSeconds,以回执为准。
+heartbeat_interval_secs = 60
+# 任务处理期间续租间隔(秒)。
+renew_interval_secs = 30
+# 单任务最长处理时间(秒),超时后放弃(不再续租)。
+task_timeout_secs = 600
+
+# --- 新协议(mota-agent-bound-task v1) ---
+# Push 响应形态:"sync" = 200 + 结果信封(默认);"async" = 202 + callback 回传。
+# push_mode = "sync"
+# Push 形态心跳地址(平台绑定信息下发);留空则 Push 心跳禁用。
+# heartbeat_url = "https://..."
+# agentCode 未匹配本地 slug 时使用的默认 Agent;留空表示必须精确匹配。
+default_agent_slug = ""
+
+# 可选的回调令牌(mpk_*)。配置了会在 callback URL 上附加 ?token=,
+# 兼容要求「令牌+签名」双凭证的存量平台;新平台(2026-08-17 起)令牌可选,可留空。
+# callback_token = "mpk_xxxxxxxx"
+# 仅受信 Investor Workflow Host 可开启；开启后成功结果必须携带供应商 FINAL usage。
+trusted_usage_reporting_enabled = false
+
+# --- 单体多 Agent 管理平台 ---
+# 管理页面、管理 API、动态 /agent/{slug} 接口、PostgreSQL 与执行器全部运行在
+# 当前 Rust 进程内。生产环境建议通过环境变量覆盖密码和 session secret。
+[platform]
+enabled = true
+public_base_url = "http://127.0.0.1:8080"
+max_request_body_bytes = 2097152
+global_max_concurrency = 16
+
+[admin]
+username = "admin"
+# 必须通过 ADMIN__PASSWORD 或 ADMIN__PASSWORD_HASH 配置，禁止提交真实密码。
+# password_hash = "$argon2id$..."
+# 必须通过 ADMIN__SESSION_SECRET 注入至少 32 字节随机值；也作为本地 Agent
+# Signing Secret 的 AES-256-GCM 主密钥，因此生产后不可随意更换。
+# 管理会话有效期必须为 300-2592000 秒（最长 30 天）。
+session_ttl_secs = 259200
+secure_cookies = false
+
+[claude]
+# Claude Code 以服务进程的 OS 权限运行，并非文件系统沙箱；只有在已完成
+# 独立低权限用户/容器等隔离后才显式启用。
+enabled = false
+workspace_root = "."
+binary = "claude"
+max_output_bytes = 1048576
+max_prompt_bytes = 131072
+allowed_env = [
+  "HOME", "PATH", "USER", "TMPDIR", "XDG_CONFIG_HOME",
+  "ANTHROPIC_API_KEY", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
+  "AWS_PROFILE", "AWS_REGION", "AWS_DEFAULT_REGION"
+]
+
+# --- Agent 网关调用 ---
+# 支持 anthropic(/v1/messages)和 openai(/v1/chat/completions)两种兼容协议。
+# 密钥生产环境用 AGENT_GATEWAY__API_KEY 注入，勿写入配置文件。
+[gateway]
+base_url = ""
+model = "dsk_4f"
+protocol = "anthropic"
+max_tokens = 16384
+max_attempts = 3
+max_response_bytes = 2097152
+
+# --- 本机 Agent CLI ---
+# 可通过环境变量替换为绝对路径，便于 systemd/容器内稳定定位。
+[local_agents]
+codex_binary = "codex"
+pi_binary = "/usr/local/bin/pi"
+reasonix_binary = "/usr/local/bin/reasonix"
+# 可选：Pi 基本面/技术分析岗位的只读金融与行情数据扩展。生产环境建议通过
+# LOCAL_AGENT__FINANCE_EXTENSION_PATH 指向已审计的本地 TypeScript 文件。
+# finance_extension_path = "/home/ubuntu/mota-agent-server/extensions/pi/mota-finance-data.ts"
+# 策略分析师可配置 2-3 个标准 SKILL.md；生产环境建议通过
+# LOCAL_AGENT__STRATEGY_SKILL_PATHS 使用逗号分隔的绝对路径。
+# strategy_skill_paths = []
+# 基本面/技术分析师可按 Agent 从此集合中选择一个 Skill。
+# LOCAL_AGENT__ANALYSIS_SKILL_PATHS 使用逗号分隔的绝对路径。
+# analysis_skill_paths = []
+# 组合/风控/执行岗位可按 Agent 从此集合中选择一个 Skill。
+# LOCAL_AGENT__WORKFLOW_SKILL_PATHS 使用逗号分隔的绝对路径。
+# workflow_skill_paths = []
+default_model = "litellm/dsk_4f"
+max_output_bytes = 1048576
+allowed_env = [
+  "HOME", "PATH", "USER", "TMPDIR", "XDG_CONFIG_HOME", "CODEX_HOME",
+  "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
+  "LITELLM_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY"
+]

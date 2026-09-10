@@ -1,0 +1,629 @@
+package mota
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+// validPlatformRoot 返回一份最小的、能通过校验的 TOML 镜像。
+func validPlatformRoot() *platformRootFile {
+	password := "strong-test-password"
+	secret := strings.Repeat("s", 32)
+	return &platformRootFile{
+		Admin: adminSectionFile{Password: &password, SessionSecret: &secret},
+	}
+}
+
+// 对应 rs execution_backends_have_safe_defaults。
+func TestPlatformExecutionBackendsHaveSafeDefaults(t *testing.T) {
+	cfg, err := platformConfigFromFile(validPlatformRoot())
+	if err != nil {
+		t.Fatalf("expected valid config, got %v", err)
+	}
+	if cfg.Gateway.Protocol != GatewayProtocolAnthropic {
+		t.Errorf("gateway.protocol = %q, want anthropic", cfg.Gateway.Protocol)
+	}
+	if cfg.Gateway.MaxAttempts != 3 {
+		t.Errorf("gateway.max_attempts = %d, want 3", cfg.Gateway.MaxAttempts)
+	}
+	if cfg.Gateway.Model != "dsk_4f" {
+		t.Errorf("gateway.model = %q, want dsk_4f", cfg.Gateway.Model)
+	}
+	if cfg.Gateway.MaxTokens != 16384 {
+		t.Errorf("gateway.max_tokens = %d, want 16384", cfg.Gateway.MaxTokens)
+	}
+	if cfg.Gateway.MaxResponseBytes != 2*1024*1024 {
+		t.Errorf("gateway.max_response_bytes = %d, want 2097152", cfg.Gateway.MaxResponseBytes)
+	}
+	if cfg.LocalAgents.CodexBinary != "codex" {
+		t.Errorf("local_agents.codex_binary = %q, want codex", cfg.LocalAgents.CodexBinary)
+	}
+	if cfg.LocalAgents.PiBinary != "/usr/local/bin/pi" {
+		t.Errorf("local_agents.pi_binary = %q, want /usr/local/bin/pi", cfg.LocalAgents.PiBinary)
+	}
+	if cfg.LocalAgents.ReasonixBinary != "/usr/local/bin/reasonix" {
+		t.Errorf("local_agents.reasonix_binary = %q, want /usr/local/bin/reasonix", cfg.LocalAgents.ReasonixBinary)
+	}
+	if cfg.LocalAgents.DefaultModel != "litellm/dsk_4f" {
+		t.Errorf("local_agents.default_model = %q, want litellm/dsk_4f", cfg.LocalAgents.DefaultModel)
+	}
+	if cfg.LocalAgents.MaxPromptBytes != 128*1024 {
+		t.Errorf("local_agents.max_prompt_bytes = %d, want 131072", cfg.LocalAgents.MaxPromptBytes)
+	}
+	if !containsString(cfg.LocalAgents.AllowedEnv, "CODEX_HOME") {
+		t.Error("local_agents.allowed_env must include CODEX_HOME")
+	}
+	if !containsString(cfg.LocalAgents.AllowedEnv, "MOTA_FINANCE_USER_AGENT") {
+		t.Error("local_agents.allowed_env must include MOTA_FINANCE_USER_AGENT")
+	}
+	if !containsString(cfg.ClaudeAllowedEnv, "ANTHROPIC_API_KEY") {
+		t.Error("claude.allowed_env must include ANTHROPIC_API_KEY")
+	}
+	if cfg.ClaudeDefaultModel != "dsk_4f" {
+		t.Errorf("claude.default_model = %q, want dsk_4f", cfg.ClaudeDefaultModel)
+	}
+	// 会话 TTL 默认 72 小时。
+	if cfg.AdminSessionTTL != 72*time.Hour {
+		t.Errorf("admin.session_ttl = %s, want 72h", cfg.AdminSessionTTL)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+// 对应 rs invalid_gateway_protocol_is_rejected。
+func TestPlatformInvalidGatewayProtocolRejected(t *testing.T) {
+	root := validPlatformRoot()
+	protocol := "grpc"
+	root.Gateway.Protocol = &protocol
+	_, err := platformConfigFromFile(root)
+	requireErrContains(t, err, "anthropic or openai")
+}
+
+func TestPlatformGatewayProtocolAliases(t *testing.T) {
+	for _, raw := range []string{"anthropic", "ANTHROPIC", "  Anthropic  "} {
+		root := validPlatformRoot()
+		value := raw
+		root.Gateway.Protocol = &value
+		cfg, err := platformConfigFromFile(root)
+		if err != nil {
+			t.Fatalf("protocol %q: %v", raw, err)
+		}
+		if cfg.Gateway.Protocol != GatewayProtocolAnthropic {
+			t.Errorf("protocol %q => %q, want anthropic", raw, cfg.Gateway.Protocol)
+		}
+	}
+	for _, raw := range []string{"openai", "open_ai", "OpenAI"} {
+		root := validPlatformRoot()
+		value := raw
+		root.Gateway.Protocol = &value
+		cfg, err := platformConfigFromFile(root)
+		if err != nil {
+			t.Fatalf("protocol %q: %v", raw, err)
+		}
+		if cfg.Gateway.Protocol != GatewayProtocolOpenAI {
+			t.Errorf("protocol %q => %q, want openai", raw, cfg.Gateway.Protocol)
+		}
+	}
+}
+
+// 对应 rs unsafe_retry_and_output_limits_are_rejected。
+func TestPlatformUnsafeRetryAndOutputLimitsRejected(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*platformRootFile)
+		wantIn string
+	}{
+		{"gateway.max_attempts=0", func(r *platformRootFile) {
+			value := 0
+			r.Gateway.MaxAttempts = &value
+		}, "[gateway].max_attempts"},
+		{"gateway.max_attempts=7", func(r *platformRootFile) {
+			value := 7
+			r.Gateway.MaxAttempts = &value
+		}, "[gateway].max_attempts"},
+		{"gateway.max_tokens=255", func(r *platformRootFile) {
+			value := uint64(255)
+			r.Gateway.MaxTokens = &value
+		}, "[gateway].max_tokens"},
+		{"gateway.max_response_bytes=1024", func(r *platformRootFile) {
+			value := 1024
+			r.Gateway.MaxResponseBytes = &value
+		}, "[gateway].max_response_bytes"},
+		{"gateway.model empty", func(r *platformRootFile) {
+			value := "   "
+			r.Gateway.Model = &value
+		}, "[gateway].model"},
+		{"local_agents.max_output_bytes=1024", func(r *platformRootFile) {
+			value := 1024
+			r.LocalAgents.MaxOutputBytes = &value
+		}, "[local_agents].max_output_bytes"},
+		{"local_agents.max_prompt_bytes=1024", func(r *platformRootFile) {
+			value := 1024
+			r.LocalAgents.MaxPromptBytes = &value
+		}, "[local_agents].max_prompt_bytes"},
+		{"local_agents.max_prompt_bytes too large", func(r *platformRootFile) {
+			value := 2 * 1024 * 1024
+			r.LocalAgents.MaxPromptBytes = &value
+		}, "[local_agents].max_prompt_bytes"},
+		{"local_agents.pi_binary empty", func(r *platformRootFile) {
+			value := "  "
+			r.LocalAgents.PiBinary = &value
+		}, "[local_agents].pi_binary"},
+		{"claude.max_output_bytes=1024", func(r *platformRootFile) {
+			value := 1024
+			r.Claude.MaxOutputBytes = &value
+		}, "[claude].max_output_bytes"},
+		{"platform.max_request_body_bytes=512", func(r *platformRootFile) {
+			value := 512
+			r.Platform.MaxRequestBodyBytes = &value
+		}, "[platform].max_request_body_bytes"},
+		{"platform.global_max_concurrency=0", func(r *platformRootFile) {
+			value := 0
+			r.Platform.GlobalMaxConcurrency = &value
+		}, "[platform].global_max_concurrency"},
+		{"platform.global_max_concurrency=257", func(r *platformRootFile) {
+			value := 257
+			r.Platform.GlobalMaxConcurrency = &value
+		}, "[platform].global_max_concurrency"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := validPlatformRoot()
+			tc.mutate(root)
+			_, err := platformConfigFromFile(root)
+			requireErrContains(t, err, tc.wantIn)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// admin / public_base_url 安全规则
+// ---------------------------------------------------------------------------
+
+func TestPlatformAdminCredentialRules(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*platformRootFile)
+		wantIn string
+	}{
+		{"no password at all", func(r *platformRootFile) { r.Admin.Password = nil }, "admin login requires"},
+		{"blank password treated as unset", func(r *platformRootFile) {
+			value := "   "
+			r.Admin.Password = &value
+		}, "admin login requires"},
+		{"placeholder admin", func(r *platformRootFile) {
+			value := "admin"
+			r.Admin.Password = &value
+		}, "unsafe placeholder"},
+		{"placeholder password", func(r *platformRootFile) {
+			value := "password"
+			r.Admin.Password = &value
+		}, "unsafe placeholder"},
+		{"placeholder change-me", func(r *platformRootFile) {
+			value := "change-me"
+			r.Admin.Password = &value
+		}, "unsafe placeholder"},
+		{"short session secret", func(r *platformRootFile) {
+			value := strings.Repeat("s", 31)
+			r.Admin.SessionSecret = &value
+		}, "[admin].session_secret"},
+		{"session ttl too short", func(r *platformRootFile) {
+			value := uint64(299)
+			r.Admin.SessionTTLSecs = &value
+		}, "[admin].session_ttl_secs"},
+		{"session ttl too long", func(r *platformRootFile) {
+			value := uint64(30*24*60*60 + 1)
+			r.Admin.SessionTTLSecs = &value
+		}, "[admin].session_ttl_secs"},
+		{"empty username", func(r *platformRootFile) {
+			value := "   "
+			r.Admin.Username = &value
+		}, "[admin].username"},
+		{"non-argon2 hash", func(r *platformRootFile) {
+			r.Admin.Password = nil
+			value := "$2b$12$notargon"
+			r.Admin.PasswordHash = &value
+		}, "Argon2 PHC string"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := validPlatformRoot()
+			tc.mutate(root)
+			_, err := platformConfigFromFile(root)
+			requireErrContains(t, err, tc.wantIn)
+		})
+	}
+}
+
+// password_hash 单独提供(不给明文密码)时应通过。
+func TestPlatformArgon2HashAloneIsAccepted(t *testing.T) {
+	root := validPlatformRoot()
+	root.Admin.Password = nil
+	hash := "$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHQ$aGFzaA"
+	root.Admin.PasswordHash = &hash
+	cfg, err := platformConfigFromFile(root)
+	if err != nil {
+		t.Fatalf("argon2 hash alone must be accepted, got %v", err)
+	}
+	if cfg.AdminPasswordHash != hash {
+		t.Errorf("admin_password_hash = %q, want %q", cfg.AdminPasswordHash, hash)
+	}
+}
+
+func TestPlatformPublicBaseURLRules(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		baseURL       string
+		secureCookies bool
+		wantIn        string
+	}{
+		{"https requires secure cookies", "https://agents.example.com", false, "secure_cookies"},
+		{"non-loopback http rejected", "http://agents.example.com", false, "loopback"},
+		{"bad scheme rejected", "ftp://127.0.0.1:8080", false, "must use http or https"},
+		{"relative rejected", "127.0.0.1:8080", false, "public_base_url"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := validPlatformRoot()
+			baseURL := tc.baseURL
+			root.Platform.PublicBaseURL = &baseURL
+			secure := tc.secureCookies
+			root.Admin.SecureCookies = &secure
+			_, err := platformConfigFromFile(root)
+			requireErrContains(t, err, tc.wantIn)
+		})
+	}
+
+	for _, tc := range []struct {
+		baseURL       string
+		secureCookies bool
+	}{
+		{"http://127.0.0.1:8080", false},
+		{"http://localhost:8080", false},
+		{"https://agents.example.com", true},
+	} {
+		root := validPlatformRoot()
+		baseURL := tc.baseURL
+		root.Platform.PublicBaseURL = &baseURL
+		secure := tc.secureCookies
+		root.Admin.SecureCookies = &secure
+		if _, err := platformConfigFromFile(root); err != nil {
+			t.Errorf("%s should be accepted, got %v", tc.baseURL, err)
+		}
+	}
+}
+
+// public_base_url 的尾部斜杠会被去掉。
+func TestPlatformPublicBaseURLTrailingSlashTrimmed(t *testing.T) {
+	root := validPlatformRoot()
+	baseURL := "http://127.0.0.1:8080///"
+	root.Platform.PublicBaseURL = &baseURL
+	cfg, err := platformConfigFromFile(root)
+	if err != nil {
+		t.Fatalf("expected valid config, got %v", err)
+	}
+	if cfg.PublicBaseURL != "http://127.0.0.1:8080" {
+		t.Errorf("public_base_url = %q, want http://127.0.0.1:8080", cfg.PublicBaseURL)
+	}
+}
+
+// 平台禁用时跳过全部校验。
+func TestPlatformDisabledSkipsValidation(t *testing.T) {
+	root := &platformRootFile{}
+	disabled := false
+	root.Platform.Enabled = &disabled
+	if _, err := platformConfigFromFile(root); err != nil {
+		t.Fatalf("disabled platform must skip validation, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// skill / extension 路径校验
+// ---------------------------------------------------------------------------
+
+func TestPlatformSkillPathRules(t *testing.T) {
+	dir := t.TempDir()
+	makeSkill := func(name string) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte("# skill"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+		return path
+	}
+	one, two, three := makeSkill("a.md"), makeSkill("b.md"), makeSkill("c.md")
+
+	// strategy 必须是 2-3 个。
+	for _, tc := range []struct {
+		name  string
+		paths []string
+		valid bool
+	}{
+		{"one strategy skill rejected", []string{one}, false},
+		{"two accepted", []string{one, two}, true},
+		{"three accepted", []string{one, two, three}, true},
+		{"four rejected", []string{one, two, three, one}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := validPlatformRoot()
+			paths := tc.paths
+			root.LocalAgents.StrategySkillPaths = &paths
+			_, err := platformConfigFromFile(root)
+			if tc.valid && err != nil {
+				t.Fatalf("expected valid, got %v", err)
+			}
+			if !tc.valid {
+				requireErrContains(t, err, "[local_agents].strategy_skill_paths")
+			}
+		})
+	}
+
+	// 不存在的路径一律拒绝。
+	missing := filepath.Join(dir, "missing.md")
+	for _, tc := range []struct {
+		name   string
+		mutate func(*platformRootFile)
+		wantIn string
+	}{
+		{"strategy missing file", func(r *platformRootFile) {
+			paths := []string{one, missing}
+			r.LocalAgents.StrategySkillPaths = &paths
+		}, "[local_agents].strategy_skill_paths"},
+		{"analysis missing file", func(r *platformRootFile) {
+			paths := []string{missing}
+			r.LocalAgents.AnalysisSkillPaths = &paths
+		}, "[local_agents].analysis_skill_paths"},
+		{"workflow missing file", func(r *platformRootFile) {
+			paths := []string{missing}
+			r.LocalAgents.WorkflowSkillPaths = &paths
+		}, "[local_agents].workflow_skill_paths"},
+		{"finance extension missing file", func(r *platformRootFile) {
+			r.LocalAgents.FinanceExtensionPath = &missing
+		}, "[local_agents].finance_extension_path"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := validPlatformRoot()
+			tc.mutate(root)
+			_, err := platformConfigFromFile(root)
+			requireErrContains(t, err, tc.wantIn)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 环境变量覆盖
+// ---------------------------------------------------------------------------
+
+func TestApplyPlatformEnvOverrides(t *testing.T) {
+	t.Setenv("PLATFORM__GLOBAL_MAX_CONCURRENCY", "32")
+	t.Setenv("AGENT_GATEWAY__PROTOCOL", "openai")
+	t.Setenv("AGENT_GATEWAY__MAX_ATTEMPTS", "5")
+	t.Setenv("AGENT_GATEWAY__MAX_TOKENS", "8192")
+	t.Setenv("LOCAL_AGENT__PI_BINARY", "/opt/pi")
+	t.Setenv("LOCAL_AGENT__ALLOWED_ENV", " HOME , PATH ,, CUSTOM ")
+	t.Setenv("ADMIN__SECURE_COOKIES", "yes")
+
+	root := validPlatformRoot()
+	if err := applyPlatformEnv(root); err != nil {
+		t.Fatalf("applyPlatformEnv: %v", err)
+	}
+	// secure_cookies=true 时 http loopback 仍然合法。
+	cfg, err := platformConfigFromFile(root)
+	if err != nil {
+		t.Fatalf("platformConfigFromFile: %v", err)
+	}
+	if cfg.GlobalMaxConcurrency != 32 {
+		t.Errorf("global_max_concurrency = %d, want 32", cfg.GlobalMaxConcurrency)
+	}
+	if cfg.Gateway.Protocol != GatewayProtocolOpenAI {
+		t.Errorf("gateway.protocol = %q, want openai", cfg.Gateway.Protocol)
+	}
+	if cfg.Gateway.MaxAttempts != 5 {
+		t.Errorf("gateway.max_attempts = %d, want 5", cfg.Gateway.MaxAttempts)
+	}
+	if cfg.Gateway.MaxTokens != 8192 {
+		t.Errorf("gateway.max_tokens = %d, want 8192", cfg.Gateway.MaxTokens)
+	}
+	if cfg.LocalAgents.PiBinary != "/opt/pi" {
+		t.Errorf("local_agents.pi_binary = %q, want /opt/pi", cfg.LocalAgents.PiBinary)
+	}
+	want := []string{"HOME", "PATH", "CUSTOM"}
+	if len(cfg.LocalAgents.AllowedEnv) != len(want) {
+		t.Fatalf("allowed_env = %v, want %v", cfg.LocalAgents.AllowedEnv, want)
+	}
+	for i, value := range want {
+		if cfg.LocalAgents.AllowedEnv[i] != value {
+			t.Errorf("allowed_env[%d] = %q, want %q", i, cfg.LocalAgents.AllowedEnv[i], value)
+		}
+	}
+	if !cfg.SecureCookies {
+		t.Error("ADMIN__SECURE_COOKIES=yes should parse as true")
+	}
+}
+
+// 数值/布尔环境变量无法解析时报错(rs set_parsed 语义)。
+func TestApplyPlatformEnvRejectsUnparsableValues(t *testing.T) {
+	t.Run("int", func(t *testing.T) {
+		t.Setenv("PLATFORM__GLOBAL_MAX_CONCURRENCY", "many")
+		requireErrContains(t, applyPlatformEnv(validPlatformRoot()),
+			"invalid PLATFORM__GLOBAL_MAX_CONCURRENCY value")
+	})
+	t.Run("bool", func(t *testing.T) {
+		t.Setenv("CLAUDE__ENABLED", "maybe")
+		requireErrContains(t, applyPlatformEnv(validPlatformRoot()), "invalid CLAUDE__ENABLED value")
+	})
+	t.Run("uint", func(t *testing.T) {
+		t.Setenv("ADMIN__SESSION_TTL_SECS", "-1")
+		requireErrContains(t, applyPlatformEnv(validPlatformRoot()), "invalid ADMIN__SESSION_TTL_SECS value")
+	})
+}
+
+// AGENT_GATEWAY__* 优先于兼容的 ANTHROPIC_* 变量。
+func TestApplyPlatformEnvGatewayFallbacks(t *testing.T) {
+	t.Run("anthropic fallback used when gateway unset", func(t *testing.T) {
+		t.Setenv("ANTHROPIC_BASE_URL", "https://litellm.internal/")
+		t.Setenv("ANTHROPIC_AUTH_TOKEN", "sk-fallback")
+		root := validPlatformRoot()
+		if err := applyPlatformEnv(root); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := platformConfigFromFile(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Gateway.BaseURL != "https://litellm.internal" {
+			t.Errorf("gateway.base_url = %q, want https://litellm.internal", cfg.Gateway.BaseURL)
+		}
+		if cfg.Gateway.APIKey != "sk-fallback" {
+			t.Errorf("gateway.api_key = %q, want sk-fallback", cfg.Gateway.APIKey)
+		}
+	})
+
+	t.Run("gateway env wins", func(t *testing.T) {
+		t.Setenv("ANTHROPIC_BASE_URL", "https://fallback.internal")
+		t.Setenv("AGENT_GATEWAY__BASE_URL", "https://primary.internal")
+		root := validPlatformRoot()
+		if err := applyPlatformEnv(root); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := platformConfigFromFile(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Gateway.BaseURL != "https://primary.internal" {
+			t.Errorf("gateway.base_url = %q, want https://primary.internal", cfg.Gateway.BaseURL)
+		}
+	})
+
+	t.Run("gateway model falls back to claude default model", func(t *testing.T) {
+		t.Setenv("CLAUDE__DEFAULT_MODEL", "custom-model")
+		root := validPlatformRoot()
+		if err := applyPlatformEnv(root); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := platformConfigFromFile(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Gateway.Model != "custom-model" {
+			t.Errorf("gateway.model = %q, want custom-model", cfg.Gateway.Model)
+		}
+		if cfg.ClaudeDefaultModel != "custom-model" {
+			t.Errorf("claude.default_model = %q, want custom-model", cfg.ClaudeDefaultModel)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// 分层加载
+// ---------------------------------------------------------------------------
+
+func TestLoadPlatformConfigLayersFilesThenEnv(t *testing.T) {
+	dir := chdirTemp(t)
+	writeConfigFile(t, dir, "default.toml", `
+[platform]
+enabled = true
+public_base_url = "http://127.0.0.1:8080"
+global_max_concurrency = 8
+
+[admin]
+username = "admin"
+session_ttl_secs = 259200
+
+[gateway]
+model = "from-default"
+max_attempts = 2
+
+[local_agents]
+pi_binary = "/from/default/pi"
+`)
+	writeConfigFile(t, dir, "staging.toml", `
+[gateway]
+max_attempts = 4
+
+[local_agents]
+pi_binary = "/from/staging/pi"
+`)
+	t.Setenv("PLATFORM_ENV", "staging")
+	t.Setenv("ADMIN__PASSWORD", "strong-test-password")
+	t.Setenv("ADMIN__SESSION_SECRET", strings.Repeat("s", 32))
+	t.Setenv("LOCAL_AGENT__PI_BINARY", "/from/env/pi")
+
+	cfg, err := LoadPlatformConfig()
+	if err != nil {
+		t.Fatalf("LoadPlatformConfig: %v", err)
+	}
+	if cfg.GlobalMaxConcurrency != 8 {
+		t.Errorf("global_max_concurrency = %d, want 8 (from default.toml)", cfg.GlobalMaxConcurrency)
+	}
+	if cfg.Gateway.Model != "from-default" {
+		t.Errorf("gateway.model = %q, want from-default", cfg.Gateway.Model)
+	}
+	if cfg.Gateway.MaxAttempts != 4 {
+		t.Errorf("gateway.max_attempts = %d, want 4 (from staging.toml)", cfg.Gateway.MaxAttempts)
+	}
+	if cfg.LocalAgents.PiBinary != "/from/env/pi" {
+		t.Errorf("local_agents.pi_binary = %q, want /from/env/pi", cfg.LocalAgents.PiBinary)
+	}
+	if cfg.AdminSessionTTL != 259200*time.Second {
+		t.Errorf("admin.session_ttl = %s, want 72h", cfg.AdminSessionTTL)
+	}
+}
+
+// PLATFORM_ENV 未设置时回退 MOTA_ENV。
+func TestLoadPlatformConfigFallsBackToMotaEnv(t *testing.T) {
+	dir := chdirTemp(t)
+	writeConfigFile(t, dir, "default.toml", `
+[gateway]
+model = "from-default"
+`)
+	writeConfigFile(t, dir, "qa.toml", `
+[gateway]
+model = "from-qa"
+`)
+	t.Setenv("MOTA_ENV", "qa")
+	t.Setenv("ADMIN__PASSWORD", "strong-test-password")
+	t.Setenv("ADMIN__SESSION_SECRET", strings.Repeat("s", 32))
+
+	cfg, err := LoadPlatformConfig()
+	if err != nil {
+		t.Fatalf("LoadPlatformConfig: %v", err)
+	}
+	if cfg.Gateway.Model != "from-qa" {
+		t.Errorf("gateway.model = %q, want from-qa", cfg.Gateway.Model)
+	}
+}
+
+// WorkspaceRoot 校验通过后被规范化为绝对路径。
+func TestLoadPlatformConfigResolvesWorkspaceRoot(t *testing.T) {
+	dir := chdirTemp(t)
+	t.Setenv("MOTA_ENV", "default")
+	t.Setenv("ADMIN__PASSWORD", "strong-test-password")
+	t.Setenv("ADMIN__SESSION_SECRET", strings.Repeat("s", 32))
+	t.Setenv("CLAUDE__WORKSPACE_ROOT", ".")
+
+	cfg, err := LoadPlatformConfig()
+	if err != nil {
+		t.Fatalf("LoadPlatformConfig: %v", err)
+	}
+	if !filepath.IsAbs(cfg.WorkspaceRoot) {
+		t.Errorf("workspace_root = %q, want an absolute path", cfg.WorkspaceRoot)
+	}
+	resolvedDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(cfg.WorkspaceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolvedRoot != resolvedDir {
+		t.Errorf("workspace_root = %q, want %q", resolvedRoot, resolvedDir)
+	}
+}

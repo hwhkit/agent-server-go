@@ -1,0 +1,3027 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#07110f">
+  <title data-i18n="title.page">MOTA Agent 控制台</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #06100e;
+      --bg-deep: #030907;
+      --surface: rgba(12, 28, 24, 0.86);
+      --surface-solid: #0c1c18;
+      --surface-raised: #112620;
+      --surface-soft: rgba(15, 34, 29, 0.62);
+      --text: #eef9f3;
+      --text-soft: #bfd2c8;
+      --muted: #7f9b8e;
+      --faint: #526c61;
+      --line: rgba(153, 204, 180, 0.14);
+      --line-strong: rgba(153, 204, 180, 0.28);
+      --mint: #75efba;
+      --mint-strong: #42d99c;
+      --mint-ink: #052117;
+      --cyan: #73d7ea;
+      --violet: #b8a7ff;
+      --amber: #efc879;
+      --danger: #ff8f96;
+      --danger-strong: #ff6f79;
+      --shadow-lg: 0 28px 90px rgba(0, 0, 0, 0.38);
+      --shadow-md: 0 16px 42px rgba(0, 0, 0, 0.25);
+      --radius-xl: 24px;
+      --radius-lg: 16px;
+      --radius-md: 11px;
+      --sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html { min-width: 320px; scroll-behavior: smooth; }
+    body {
+      min-height: 100vh;
+      margin: 0;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 8% -8%, rgba(66, 217, 156, 0.15), transparent 30rem),
+        radial-gradient(circle at 98% 14%, rgba(115, 215, 234, 0.10), transparent 30rem),
+        linear-gradient(155deg, var(--bg) 0%, var(--bg-deep) 100%);
+      font: 14px/1.55 var(--sans);
+      overflow-x: hidden;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: -2;
+      pointer-events: none;
+      opacity: 0.5;
+      background-image:
+        linear-gradient(rgba(141, 194, 169, 0.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(141, 194, 169, 0.035) 1px, transparent 1px);
+      background-size: 44px 44px;
+      mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, 0.62) 64%, transparent 100%);
+    }
+    body::after {
+      content: "";
+      position: fixed;
+      z-index: -1;
+      width: 38rem;
+      height: 38rem;
+      right: -22rem;
+      bottom: -22rem;
+      border: 1px solid rgba(117, 239, 186, 0.08);
+      border-radius: 50%;
+      box-shadow: 0 0 0 7rem rgba(117, 239, 186, 0.018), 0 0 0 14rem rgba(117, 239, 186, 0.012);
+      pointer-events: none;
+    }
+
+    button, input, textarea, select { font: inherit; }
+    button, a { -webkit-tap-highlight-color: transparent; }
+    button { color: inherit; }
+    a { color: inherit; }
+    code, .mono { font-family: var(--mono); }
+    [hidden] { display: none !important; }
+    ::selection { color: var(--mint-ink); background: var(--mint); }
+    :focus-visible { outline: 2px solid var(--mint); outline-offset: 3px; }
+
+    .sr-only {
+      position: absolute !important;
+      width: 1px !important;
+      height: 1px !important;
+      padding: 0 !important;
+      margin: -1px !important;
+      overflow: hidden !important;
+      clip: rect(0, 0, 0, 0) !important;
+      white-space: nowrap !important;
+      border: 0 !important;
+    }
+    .skip-link {
+      position: fixed;
+      z-index: 1000;
+      top: 12px;
+      left: 12px;
+      padding: 9px 13px;
+      color: var(--mint-ink);
+      background: var(--mint);
+      border-radius: 8px;
+      font-weight: 750;
+      text-decoration: none;
+      transform: translateY(-180%);
+      transition: transform 160ms ease;
+    }
+    .skip-link:focus { transform: translateY(0); }
+
+    .view { min-height: 100vh; }
+    .boot-view {
+      display: grid;
+      place-items: center;
+      padding: 28px;
+    }
+    .boot-card { text-align: center; }
+    .boot-mark, .brand-mark {
+      position: relative;
+      display: inline-grid;
+      place-items: center;
+      width: 42px;
+      height: 42px;
+      border: 1px solid rgba(117, 239, 186, 0.42);
+      border-radius: 12px;
+      background: linear-gradient(145deg, rgba(117, 239, 186, 0.16), rgba(115, 215, 234, 0.04));
+      box-shadow: inset 0 0 24px rgba(117, 239, 186, 0.08), 0 0 30px rgba(66, 217, 156, 0.08);
+    }
+    .boot-mark::before, .brand-mark::before {
+      content: "";
+      width: 13px;
+      height: 13px;
+      border: 2px solid var(--mint);
+      border-radius: 4px;
+      transform: rotate(45deg);
+    }
+    .boot-mark::after {
+      content: "";
+      position: absolute;
+      inset: -8px;
+      border: 1px solid rgba(117, 239, 186, 0.12);
+      border-radius: 17px;
+      animation: boot-pulse 1.8s ease-in-out infinite;
+    }
+    .boot-card p { margin: 18px 0 0; color: var(--muted); font: 11px/1.5 var(--mono); letter-spacing: 0.12em; }
+    @keyframes boot-pulse { 50% { opacity: 0.25; transform: scale(1.07); } }
+
+    .login-view {
+      display: grid;
+      place-items: center;
+      padding: max(28px, env(safe-area-inset-top)) max(28px, env(safe-area-inset-right)) max(28px, env(safe-area-inset-bottom)) max(28px, env(safe-area-inset-left));
+    }
+    .login-shell {
+      width: min(1080px, 100%);
+      min-height: 650px;
+      display: grid;
+      grid-template-columns: minmax(0, 1.12fr) minmax(390px, 0.88fr);
+      overflow: hidden;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius-xl);
+      background: rgba(7, 18, 15, 0.86);
+      box-shadow: var(--shadow-lg);
+      backdrop-filter: blur(20px);
+    }
+    .login-story {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      min-height: 650px;
+      padding: 52px;
+      overflow: hidden;
+      border-right: 1px solid var(--line);
+      background:
+        linear-gradient(150deg, rgba(22, 52, 43, 0.66), rgba(5, 15, 12, 0.86)),
+        repeating-linear-gradient(90deg, transparent 0 50px, rgba(117, 239, 186, 0.025) 50px 51px);
+    }
+    .login-story::before {
+      content: "";
+      position: absolute;
+      width: 400px;
+      height: 400px;
+      right: -150px;
+      top: 70px;
+      border: 1px solid rgba(117, 239, 186, 0.16);
+      border-radius: 50%;
+      box-shadow: 0 0 0 55px rgba(117, 239, 186, 0.025), 0 0 0 110px rgba(115, 215, 234, 0.018);
+    }
+    .story-brand { position: relative; display: flex; align-items: center; gap: 13px; }
+    .story-brand strong { font: 750 12px/1 var(--mono); letter-spacing: 0.12em; }
+    .story-brand span:last-child { display: block; margin-top: 6px; color: var(--muted); font: 9px/1 var(--mono); letter-spacing: 0.14em; }
+    .story-copy { position: relative; max-width: 510px; margin: 72px 0; }
+    .eyebrow { color: var(--mint); font: 700 10px/1.3 var(--mono); letter-spacing: 0.16em; text-transform: uppercase; }
+    .story-copy h1 { margin: 18px 0 20px; max-width: 500px; font-size: clamp(42px, 5vw, 68px); line-height: 1.03; letter-spacing: -0.055em; }
+    .story-copy h1 span { color: var(--mint); }
+    .story-copy p { max-width: 450px; margin: 0; color: var(--text-soft); font-size: 15px; line-height: 1.8; }
+    .story-metrics { position: relative; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .story-metric { padding: 14px 0 2px; border-top: 1px solid var(--line-strong); }
+    .story-metric b { display: block; margin-bottom: 7px; color: var(--text); font: 700 11px/1 var(--mono); }
+    .story-metric span { color: var(--muted); font-size: 11px; }
+
+    .login-panel { display: grid; align-items: center; padding: 52px; background: rgba(8, 20, 17, 0.72); }
+    .login-form-wrap { width: 100%; }
+    .login-form-wrap h2 { margin: 0 0 10px; font-size: 28px; letter-spacing: -0.035em; }
+    .login-intro { margin: 0 0 32px; color: var(--muted); }
+    .login-status {
+      margin: 0 0 20px;
+      padding: 12px 14px;
+      border: 1px solid rgba(255, 143, 150, 0.28);
+      border-radius: 9px;
+      color: #ffc2c6;
+      background: rgba(107, 28, 34, 0.18);
+      font-size: 12px;
+    }
+    .retry-session { margin-top: 10px; }
+    .login-meta { display: flex; align-items: center; gap: 8px; margin-top: 22px; color: var(--faint); font-size: 11px; }
+    .security-dot, .network-dot, .status-dot {
+      flex: 0 0 auto;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--mint-strong);
+      box-shadow: 0 0 12px rgba(66, 217, 156, 0.62);
+    }
+
+    .field { display: grid; min-width: 0; }
+    .field > * + * { margin-top: 8px; }
+    @supports (gap: 8px) {
+      .field { gap: 8px; }
+      .field > * + * { margin-top: 0; }
+    }
+    .field + .field { margin-top: 18px; }
+    .field label, .field-label { color: var(--text-soft); font-size: 12px; font-weight: 680; }
+    .required { color: var(--amber); }
+    .field-help { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
+    .input, .select, .textarea {
+      width: 100%;
+      min-height: 44px;
+      padding: 10px 12px;
+      border: 1px solid var(--line-strong);
+      border-radius: 9px;
+      color: var(--text);
+      background: rgba(4, 14, 11, 0.72);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.018);
+      transition: border-color 150ms ease, background 150ms ease, box-shadow 150ms ease;
+    }
+    .textarea { min-height: 94px; resize: vertical; line-height: 1.6; }
+    .textarea.tall { min-height: 150px; }
+    .input::placeholder, .textarea::placeholder { color: #526b61; }
+    .input:hover, .select:hover, .textarea:hover { border-color: rgba(153, 204, 180, 0.42); }
+    .input:focus, .select:focus, .textarea:focus {
+      outline: none;
+      border-color: var(--mint);
+      background: rgba(6, 19, 15, 0.9);
+      box-shadow: 0 0 0 3px rgba(117, 239, 186, 0.09);
+    }
+    .input:read-only { color: var(--muted); background: rgba(5, 13, 11, 0.5); cursor: not-allowed; }
+    .select { appearance: none; padding-right: 34px; background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 17px) 19px, calc(100% - 12px) 19px; background-size: 5px 5px; background-repeat: no-repeat; }
+    .agent-execution-select { height: 44px; min-height: 44px; align-self: start; }
+    .input-group { display: flex; gap: 8px; align-items: stretch; }
+    .input-group .input { min-width: 0; flex: 1; }
+
+    .button {
+      min-height: 40px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 9px 14px;
+      border: 1px solid var(--line-strong);
+      border-radius: 9px;
+      color: var(--text-soft);
+      background: rgba(13, 31, 26, 0.72);
+      font-weight: 680;
+      font-size: 12px;
+      text-decoration: none;
+      cursor: pointer;
+      transition: color 150ms ease, border-color 150ms ease, background 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+    }
+    .button:hover:not(:disabled) { color: var(--text); border-color: rgba(117, 239, 186, 0.44); background: rgba(19, 43, 36, 0.92); }
+    .button:active:not(:disabled) { transform: translateY(1px); }
+    .button:disabled { opacity: 0.48; cursor: not-allowed; }
+    .button.primary { color: var(--mint-ink); border-color: var(--mint); background: linear-gradient(135deg, var(--mint), var(--mint-strong)); box-shadow: 0 8px 24px rgba(66, 217, 156, 0.14); }
+    .button.primary:hover:not(:disabled) { color: var(--mint-ink); border-color: #a2f7d3; background: linear-gradient(135deg, #8bf4c8, #52e0a8); box-shadow: 0 10px 30px rgba(66, 217, 156, 0.22); }
+    .button.danger { color: #ffc2c6; border-color: rgba(255, 111, 121, 0.38); background: rgba(116, 28, 35, 0.19); }
+    .button.danger:hover:not(:disabled) { color: #ffe2e4; border-color: var(--danger); background: rgba(140, 32, 41, 0.28); }
+    .button.ghost { background: transparent; }
+    .button.compact { min-height: 32px; padding: 6px 9px; border-radius: 7px; font-size: 11px; }
+    .button.full { width: 100%; min-height: 46px; margin-top: 24px; }
+    .button.busy { position: relative; color: transparent !important; pointer-events: none; }
+    .button.busy::after {
+      content: "";
+      position: absolute;
+      width: 15px;
+      height: 15px;
+      border: 2px solid currentColor;
+      border-top-color: transparent;
+      border-radius: 50%;
+      color: var(--mint-ink);
+      animation: spin 680ms linear infinite;
+    }
+    .button:not(.primary).busy::after { color: var(--text-soft); }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .app-view { display: grid; grid-template-columns: minmax(0, 1fr) 248px; }
+    .sidebar {
+      position: fixed;
+      z-index: 20;
+      inset: 0 0 0 auto;
+      width: 248px;
+      display: flex;
+      flex-direction: column;
+      padding: 24px 17px calc(18px + env(safe-area-inset-bottom));
+      border-left: 1px solid var(--line);
+      background: rgba(5, 15, 12, 0.88);
+      backdrop-filter: blur(18px);
+    }
+    .sidebar-brand { display: flex; align-items: center; gap: 11px; padding: 3px 8px 25px; text-decoration: none; }
+    .brand-mark { width: 34px; height: 34px; border-radius: 10px; }
+    .brand-mark::before { width: 10px; height: 10px; }
+    .sidebar-brand strong { display: block; font: 750 11px/1 var(--mono); letter-spacing: 0.1em; }
+    .sidebar-brand small { display: block; margin-top: 6px; color: var(--muted); font: 8px/1 var(--mono); letter-spacing: 0.13em; }
+    .nav-label { padding: 0 11px 8px; color: var(--faint); font: 700 8px/1 var(--mono); letter-spacing: 0.16em; text-transform: uppercase; }
+    .side-nav { display: grid; gap: 4px; }
+    .side-nav a {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 42px;
+      padding: 10px 11px;
+      border: 1px solid transparent;
+      border-radius: 9px;
+      color: var(--muted);
+      text-decoration: none;
+      font-weight: 650;
+      transition: color 150ms ease, background 150ms ease, border-color 150ms ease;
+    }
+    .side-nav a::after { content: ""; width: 5px; height: 5px; border-radius: 50%; background: transparent; }
+    .side-nav a:hover, .side-nav a.active { color: var(--text); border-color: var(--line); background: rgba(117, 239, 186, 0.055); }
+    .side-nav a.active::after { background: var(--mint); box-shadow: 0 0 9px rgba(117, 239, 186, 0.6); }
+    .sidebar-spacer { flex: 1; }
+    .sidebar-status {
+      margin: 16px 3px;
+      padding: 13px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: rgba(14, 32, 27, 0.54);
+    }
+    .network-line { display: flex; align-items: center; gap: 8px; color: var(--text-soft); font-size: 11px; font-weight: 680; }
+    .network-dot.offline { background: var(--danger); box-shadow: 0 0 12px rgba(255, 111, 121, 0.5); }
+    .sidebar-status p { margin: 8px 0 0; color: var(--faint); font: 9px/1.55 var(--mono); }
+    .sidebar-user { display: grid; grid-template-columns: 34px 1fr auto; align-items: center; gap: 9px; padding: 11px 7px 0; border-top: 1px solid var(--line); }
+    .user-avatar { width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid var(--line-strong); border-radius: 9px; color: var(--mint); background: rgba(117, 239, 186, 0.07); font: 750 12px/1 var(--mono); }
+    .user-meta { min-width: 0; }
+    .user-meta strong { display: block; overflow: hidden; text-overflow: ellipsis; color: var(--text-soft); font-size: 11px; white-space: nowrap; }
+    .user-meta span { display: block; margin-top: 3px; color: var(--muted); font: 9px/1.2 var(--mono); }
+    .logout-button { width: auto; min-width: 44px; min-height: 30px; padding: 4px 10px; border-radius: 7px; white-space: nowrap; }
+
+    .app-main { min-width: 0; grid-column: 1; padding: 0 34px 64px; }
+    .topbar {
+      position: sticky;
+      z-index: 15;
+      top: 0;
+      min-height: 76px;
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      gap: 22px;
+      margin: 0 -34px;
+      padding: 14px 34px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(5, 15, 12, 0.76);
+      backdrop-filter: blur(18px);
+    }
+    .topbar-title p { margin: 0 0 4px; color: var(--muted); font: 8px/1 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; }
+    .topbar-title h1 { margin: 0; font-size: 18px; letter-spacing: -0.025em; }
+    .topbar-actions { display: flex; align-items: center; gap: 9px; }
+    .sync-meta { margin-right: 4px; color: var(--faint); font: 9px/1.4 var(--mono); text-align: right; }
+    .mobile-brand { display: none; align-items: center; gap: 9px; color: var(--text); text-decoration: none; font: 750 10px/1 var(--mono); letter-spacing: 0.09em; }
+    .mobile-logout { display: none; }
+
+    .content { width: min(1440px, 100%); margin: 0 auto; }
+    .hero-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 28px; padding: 42px 0 24px; }
+    .hero-row h2 { margin: 9px 0 8px; font-size: clamp(28px, 3vw, 42px); line-height: 1.08; letter-spacing: -0.05em; }
+    .hero-row p { max-width: 620px; margin: 0; color: var(--muted); font-size: 13px; }
+    .hero-signal { min-width: 184px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); }
+    .hero-signal span { color: var(--muted); font: 8px/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; }
+    .hero-signal b { display: flex; align-items: center; gap: 8px; margin-top: 8px; color: var(--mint); font: 700 11px/1 var(--mono); }
+
+    .stats-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 22px; }
+    .stat-card {
+      position: relative;
+      min-height: 62px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-rows: auto auto;
+      align-items: center;
+      column-gap: 14px;
+      padding: 9px 13px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background: linear-gradient(145deg, rgba(17, 39, 33, 0.76), rgba(8, 22, 18, 0.72));
+      box-shadow: var(--shadow-md);
+    }
+    .stat-card::after { content: ""; position: absolute; width: 86px; height: 86px; right: -40px; top: -42px; border: 1px solid rgba(117, 239, 186, 0.12); border-radius: 50%; }
+    .stat-label { grid-column: 1; grid-row: 1; color: var(--muted); font: 9px/1 var(--mono); letter-spacing: 0.11em; text-transform: uppercase; }
+    .stat-value { grid-column: 2; grid-row: 1 / 3; justify-self: end; font: 720 24px/1 var(--mono); letter-spacing: -0.06em; }
+    .stat-foot { grid-column: 1; grid-row: 2; color: var(--faint); font-size: 9px; }
+    .stat-card:nth-child(2) .stat-value { color: var(--mint); }
+    .stat-card:nth-child(3) .stat-value { color: var(--cyan); }
+    .stat-card:nth-child(4) .stat-value { color: var(--amber); }
+
+    .section { margin-top: 26px; scroll-margin-top: 96px; }
+    .section + .section { margin-top: 38px; }
+    .section-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 14px; }
+    .section-title h2 { margin: 6px 0 0; font-size: 20px; letter-spacing: -0.03em; }
+    .section-title p { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
+    .section-actions { display: flex; gap: 8px; align-items: flex-end; }
+    .agents-toolbar { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; margin: 2px 0 14px; }
+    .agents-filters { display: flex; align-items: center; gap: 22px; flex: 1; flex-wrap: wrap; }
+    .agents-filters .filter-select-wrap .select { min-width: 150px; }
+    .panel { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-md); backdrop-filter: blur(14px); }
+    .table-scroll { overflow-x: auto; scrollbar-color: var(--line-strong) transparent; }
+    table { width: 100%; border-collapse: collapse; }
+    caption { text-align: left; }
+    th, td { padding: 14px 15px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
+    th { color: var(--muted); background: rgba(13, 31, 26, 0.78); font: 700 8px/1.2 var(--mono); letter-spacing: 0.11em; text-transform: uppercase; white-space: nowrap; }
+    td { color: var(--text-soft); font-size: 11px; }
+    tbody tr { transition: background 150ms ease; }
+    tbody tr:last-child td { border-bottom: 0; }
+    tbody tr:hover { background: rgba(117, 239, 186, 0.026); }
+    .agents-table { min-width: 1120px; }
+    .agents-table th:first-child, .agents-table td:first-child { padding-right: 4px; }
+    .agents-table th:nth-child(2), .agents-table .endpoint-cell { padding-left: 4px; }
+    .runs-table { min-width: 1120px; }
+    .agent-primary { min-width: 96px; max-width: 150px; }
+    .agent-primary strong { display: block; color: var(--text); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .agent-primary code { display: block; margin-top: 4px; color: var(--muted); font-size: 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .agent-role { display: inline-block; margin: 3px 0 0; padding: 1px 6px; border-radius: 6px; color: var(--violet); background: rgba(175, 123, 255, 0.12); font: 600 9px/1.5 Inter, ui-sans-serif, sans-serif; white-space: nowrap; }
+    .endpoint-cell { max-width: 250px; }
+    .endpoint { display: block; overflow: hidden; color: var(--cyan); font: 9px/1.5 var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+    .inline-actions { display: flex; align-items: center; gap: 5px; margin-top: 7px; }
+    .text-action { padding: 0; border: 0; color: var(--muted); background: transparent; font-size: 9px; cursor: pointer; }
+    .text-action:hover { color: var(--mint); }
+    .status-pill, .kind-pill, .run-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 5px 8px;
+      border: 1px solid var(--line-strong);
+      border-radius: 999px;
+      color: var(--text-soft);
+      background: rgba(8, 22, 18, 0.7);
+      font: 700 8px/1 var(--mono);
+      white-space: nowrap;
+    }
+    .status-pill.disabled .status-dot { background: var(--muted); box-shadow: none; }
+    .kind-pill { color: var(--violet); border-radius: 6px; }
+    .capacity { color: var(--text); font: 700 10px/1.45 var(--mono); white-space: nowrap; }
+    .capacity span { display: block; margin-top: 3px; color: var(--muted); font: 9px/1.3 var(--sans); }
+    .revision { color: var(--mint); font: 700 10px/1.4 var(--mono); }
+    .secret-hint { display: block; margin-top: 4px; color: var(--muted); font: 10px/1.35 var(--mono); }
+    .date-cell { color: var(--muted); font: 9px/1.5 var(--mono); white-space: nowrap; }
+    .row-actions { display: flex; gap: 6px; justify-content: flex-end; }
+    .agent-runs-row { cursor: pointer; }
+    .payload-json { margin: 12px 0 4px; padding: 14px; max-height: 60vh; overflow: auto; background: rgba(13, 31, 26, 0.6); border: 1px solid var(--line); border-radius: 8px; font: 11px/1.6 var(--mono, monospace); white-space: pre-wrap; word-break: break-word; color: var(--text-soft, #cfe0d9); }
+    .run-id { cursor: pointer; text-decoration: underline dotted rgba(153,204,180,0.4); }
+    .run-payload-link { display: inline-flex; align-items: center; max-width: 150px; min-height: 26px; padding: 5px 9px; overflow: hidden; border: 1px solid rgba(94, 194, 168, 0.24); border-radius: 7px; color: var(--accent, #5ec2a8); background: rgba(94, 194, 168, 0.06); font: 9px/1.3 var(--mono); text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+    .run-payload-link:hover { border-color: rgba(94, 194, 168, 0.55); background: rgba(94, 194, 168, 0.12); }
+    .payload-empty { color: var(--muted); font: 9px/1.4 var(--mono); }
+    .execution-agent { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+    .execution-agent-name { color: var(--text-soft); font: 700 9px/1 var(--mono); }
+    .execution-mode-badge { display: inline-grid; width: 20px; height: 20px; place-items: center; border: 1px solid rgba(115, 215, 234, 0.32); border-radius: 6px; color: var(--cyan); background: rgba(115, 215, 234, 0.08); font: 800 9px/1 var(--mono); }
+    .execution-mode-badge.local { border-color: rgba(117, 239, 186, 0.34); color: var(--mint); background: rgba(117, 239, 186, 0.09); }
+    .execution-agent-unknown { color: var(--muted); font: 9px/1.4 var(--mono); white-space: nowrap; }
+    .agent-runs-row:hover { background: var(--surface-2, rgba(255,255,255,0.03)); }
+    .agent-runs-card { cursor: pointer; }
+    .runs-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 2px 0 14px; }
+    .runs-filters { display: flex; flex: 1; min-width: 0; align-items: center; gap: 22px; overflow-x: auto; flex-wrap: nowrap; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+    .runs-toolbar > .section-actions { flex: 0 0 auto; }
+    .runs-toolbar > .section-actions .button { flex: 0 0 auto; }
+    .runs-filter-group { display: flex; align-items: center; gap: 10px; }
+    .runs-filter-label { color: var(--muted); font: 600 10px/1 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; white-space: nowrap; }
+    .filter-segmented { display: inline-flex; height: 30px; padding: 0 3px; align-items: center; gap: 3px; box-sizing: border-box; background: rgba(5, 13, 11, 0.55); border: 1px solid var(--line); border-radius: 999px; }
+    .filter-segmented button { border: 0; height: 24px; padding: 0 14px; background: transparent; color: var(--muted); font: 600 11px/1 Inter, ui-sans-serif, sans-serif; border-radius: 999px; cursor: pointer; white-space: nowrap; transition: color 0.15s, background 0.15s, box-shadow 0.15s; }
+    .filter-segmented button:hover { color: var(--text-soft); }
+    .filter-segmented button.active { background: var(--mint); color: #052018; box-shadow: 0 0 16px rgba(117, 239, 186, 0.3); }
+    .filter-select-wrap { position: relative; }
+    .filter-select-wrap .select { height: 26px; padding: 0 28px 0 10px; box-sizing: border-box; font-size: 11px; line-height: 24px; color: var(--text-soft); background: rgba(5, 13, 11, 0.55); border: 1px solid var(--line); border-radius: 999px; cursor: pointer; transition: border-color 0.15s; }
+    #runs-role-filter { min-width: 150px; }
+    #runs-agent-filter { min-width: 180px; }
+    .runs-success-rate { display: inline-flex; align-items: center; height: 26px; padding: 0 14px; box-sizing: border-box; font: 600 11px/1 Inter, ui-sans-serif, sans-serif; color: var(--text-soft); background: rgba(5, 13, 11, 0.55); border: 1px solid var(--line); border-radius: 999px; white-space: nowrap; }
+    .runs-success-rate.good { color: var(--mint); border-color: rgba(117, 239, 186, 0.45); }
+    .runs-success-rate.warn { color: #f4c86a; border-color: rgba(244, 200, 106, 0.45); }
+    .runs-success-rate.bad { color: #ff8f8f; border-color: rgba(255, 143, 143, 0.45); }
+    .filter-select-wrap .select:hover { border-color: rgba(153, 204, 180, 0.42); }
+    .runs-filter-context { margin: 6px 0 0; color: var(--muted, #8a9a94); font: 11px/1.5 var(--mono, monospace); }
+    .runs-pagination { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 16px; border-top: 1px solid var(--line); background: rgba(5, 13, 11, 0.38); flex-wrap: wrap; }
+    .runs-page-summary { color: var(--muted); font: 10px/1.4 var(--mono); }
+    .runs-page-controls { display: flex; align-items: center; gap: 6px; }
+    .runs-page-button { min-width: 30px; height: 28px; padding: 0 8px; border: 1px solid var(--line); border-radius: 7px; color: var(--text-soft); background: rgba(8, 22, 18, 0.72); font: 700 10px/1 var(--mono); cursor: pointer; }
+    .runs-page-button:hover:not(:disabled) { border-color: rgba(117, 239, 186, 0.48); color: var(--mint); }
+    .runs-page-button.active { border-color: var(--mint); color: #052018; background: var(--mint); }
+    .runs-page-button:disabled { opacity: 0.38; cursor: not-allowed; }
+    .runs-page-size { height: 28px; padding: 0 24px 0 8px; border: 1px solid var(--line); border-radius: 7px; color: var(--text-soft); background: rgba(8, 22, 18, 0.72); font: 10px/1 var(--mono); }
+    .run-id { color: var(--cyan); font: 9px/1.4 var(--mono); }
+    .run-pill.success, .run-pill.completed { color: var(--mint); border-color: rgba(117, 239, 186, 0.26); }
+    .run-pill.running, .run-pill.queued { color: var(--cyan); border-color: rgba(115, 215, 234, 0.28); }
+    .run-pill.failed, .run-pill.error, .run-pill.cancelled { color: var(--danger); border-color: rgba(255, 143, 150, 0.3); }
+    .error-code { color: var(--danger); font: 9px/1.4 var(--mono); }
+    .agent-cards { display: none; }
+
+    .panel-state { min-height: 270px; display: grid; place-items: center; padding: 34px; text-align: center; }
+    .state-inner { max-width: 420px; }
+    .state-mark { width: 42px; height: 42px; display: grid; place-items: center; margin: 0 auto 15px; border: 1px solid var(--line-strong); border-radius: 12px; color: var(--mint); background: rgba(117, 239, 186, 0.055); font: 750 10px/1 var(--mono); }
+    .panel-state.error .state-mark { color: var(--danger); border-color: rgba(255, 143, 150, 0.3); background: rgba(255, 143, 150, 0.05); }
+    .panel-state h3 { margin: 0 0 7px; font-size: 15px; }
+    .panel-state p { margin: 0; color: var(--muted); font-size: 12px; }
+    .panel-state .button { margin-top: 17px; }
+    .skeleton-wrap { padding: 4px 0; }
+    .skeleton-row { height: 60px; display: grid; grid-template-columns: 1.3fr 1.8fr 0.8fr 0.8fr 0.8fr; gap: 28px; align-items: center; padding: 0 16px; border-bottom: 1px solid var(--line); }
+    .skeleton-row:last-child { border-bottom: 0; }
+    .skeleton-line { height: 9px; border-radius: 99px; background: linear-gradient(90deg, rgba(153, 204, 180, 0.07), rgba(153, 204, 180, 0.15), rgba(153, 204, 180, 0.07)); background-size: 220% 100%; animation: shimmer 1.45s linear infinite; }
+    .skeleton-line:nth-child(2n) { width: 72%; }
+    @keyframes shimmer { to { background-position: -220% 0; } }
+
+    .drawer-layer, .modal-layer {
+      position: fixed;
+      z-index: 100;
+      inset: 0;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 180ms ease, visibility 180ms ease;
+    }
+    .drawer-layer.open, .modal-layer.open { opacity: 1; visibility: visible; }
+    .drawer-backdrop, .modal-backdrop { position: absolute; inset: 0; background: rgba(1, 7, 5, 0.7); backdrop-filter: blur(4px); }
+    .drawer {
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: 680px;
+      max-width: 100%;
+      height: 100%;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      border-left: 1px solid var(--line-strong);
+      background: #091713;
+      box-shadow: -24px 0 80px rgba(0, 0, 0, 0.38);
+      transform: translateX(100%);
+      transition: transform 220ms cubic-bezier(.2, .75, .25, 1);
+    }
+    .drawer-layer.open .drawer { transform: translateX(0); }
+    .drawer-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 24px 26px 20px; border-bottom: 1px solid var(--line); background: rgba(14, 33, 27, 0.82); }
+    .drawer-head h2 { margin: 6px 0 0; font-size: 22px; letter-spacing: -0.035em; }
+    .drawer-close { min-width: 58px; }
+    .agent-form { min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr) auto; }
+    .form-scroll { overflow-y: auto; padding: 25px 26px 34px; }
+    .form-section + .form-section { margin-top: 30px; padding-top: 27px; border-top: 1px solid var(--line); }
+    .form-section-head { margin-bottom: 17px; }
+    .form-section-head h3 { margin: 0; font-size: 14px; }
+    .form-section-head p { margin: 5px 0 0; color: var(--muted); font-size: 11px; }
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; column-gap: 14px; row-gap: 17px; }
+    @supports (grid-template-columns: repeat(2, minmax(0, 1fr))) {
+      .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    .form-grid .field + .field { margin-top: 0; }
+    .span-2 { grid-column: 1 / -1; }
+    .switch-row { min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 9px; background: rgba(6, 17, 14, 0.54); }
+    .switch-copy strong { display: block; color: var(--text-soft); font-size: 12px; }
+    .switch-copy span { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; }
+    .switch { position: relative; width: 40px; height: 22px; flex: 0 0 auto; }
+    .switch input { position: absolute; opacity: 0; pointer-events: none; }
+    .switch-track { position: absolute; inset: 0; border: 1px solid var(--line-strong); border-radius: 999px; background: #12231e; cursor: pointer; transition: background 160ms ease, border-color 160ms ease; }
+    .switch-track::after { content: ""; position: absolute; width: 14px; height: 14px; left: 3px; top: 3px; border-radius: 50%; background: var(--muted); transition: transform 160ms ease, background 160ms ease; }
+    .switch input:checked + .switch-track { border-color: var(--mint-strong); background: rgba(66, 217, 156, 0.18); }
+    .switch input:checked + .switch-track::after { transform: translateX(18px); background: var(--mint); box-shadow: 0 0 10px rgba(117, 239, 186, 0.4); }
+    .switch input:focus-visible + .switch-track { outline: 2px solid var(--mint); outline-offset: 3px; }
+    .secret-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
+    .form-error { margin: 0 0 14px; padding: 11px 12px; border: 1px solid rgba(255, 143, 150, 0.28); border-radius: 8px; color: #ffc2c6; background: rgba(107, 28, 34, 0.18); font-size: 11px; }
+    .form-footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 16px 26px calc(16px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: rgba(13, 30, 25, 0.94); box-shadow: 0 -16px 35px rgba(0, 0, 0, 0.16); }
+    .form-footer-note { color: var(--muted); font-size: 10px; }
+    .form-footer-actions { display: flex; gap: 8px; }
+
+    .modal-layer { z-index: 120; display: grid; place-items: center; padding: 20px; }
+    .modal-card {
+      position: relative;
+      width: min(460px, 100%);
+      padding: 25px;
+      border: 1px solid rgba(255, 143, 150, 0.3);
+      border-radius: 17px;
+      background: #0d1c18;
+      box-shadow: var(--shadow-lg);
+      transform: translateY(12px) scale(0.985);
+      transition: transform 180ms ease;
+    }
+    .modal-layer.open .modal-card { transform: translateY(0) scale(1); }
+    .danger-label { color: var(--danger); font: 700 9px/1 var(--mono); letter-spacing: 0.13em; text-transform: uppercase; }
+    .modal-card h2 { margin: 10px 0 8px; font-size: 21px; }
+    .modal-card > p { margin: 0 0 20px; color: var(--muted); font-size: 12px; }
+    .delete-target { margin-bottom: 17px; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: rgba(5, 15, 12, 0.62); }
+    .delete-target strong { display: block; color: var(--text); }
+    .delete-target code { display: block; margin-top: 5px; color: var(--danger); font-size: 10px; }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 22px; }
+
+    .toast-region { position: fixed; z-index: 200; top: 18px; right: 18px; width: min(370px, calc(100% - 36px)); display: grid; gap: 9px; pointer-events: none; }
+    .toast {
+      position: relative;
+      display: grid;
+      grid-template-columns: 6px 1fr auto;
+      gap: 12px;
+      align-items: start;
+      padding: 13px 13px 13px 11px;
+      overflow: hidden;
+      border: 1px solid var(--line-strong);
+      border-radius: 11px;
+      background: rgba(13, 31, 26, 0.96);
+      box-shadow: var(--shadow-md);
+      backdrop-filter: blur(16px);
+      pointer-events: auto;
+      animation: toast-in 190ms ease both;
+    }
+    .toast.leaving { animation: toast-out 160ms ease both; }
+    .toast-bar { width: 4px; min-height: 34px; border-radius: 9px; background: var(--cyan); box-shadow: 0 0 12px rgba(115, 215, 234, 0.4); }
+    .toast.success .toast-bar { background: var(--mint); box-shadow: 0 0 12px rgba(117, 239, 186, 0.42); }
+    .toast.error .toast-bar { background: var(--danger); box-shadow: 0 0 12px rgba(255, 143, 150, 0.42); }
+    .toast-copy strong { display: block; margin-bottom: 3px; font-size: 11px; }
+    .toast-copy p { margin: 0; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+    .toast-close { min-width: 27px; min-height: 27px; padding: 3px; border: 0; border-radius: 6px; color: var(--muted); background: transparent; cursor: pointer; font-size: 10px; }
+    .toast-close:hover { color: var(--text); background: rgba(255, 255, 255, 0.04); }
+    @keyframes toast-in { from { opacity: 0; transform: translateY(-8px) scale(0.98); } }
+    @keyframes toast-out { to { opacity: 0; transform: translateX(14px); } }
+    body.overlay-open { overflow: hidden; }
+
+    @media (hover: hover) {
+      .stat-card { transition: transform 170ms ease, border-color 170ms ease; }
+      .stat-card:hover { transform: translateY(-2px); border-color: rgba(117, 239, 186, 0.26); }
+    }
+    @media (max-width: 1120px) {
+      .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .login-shell { grid-template-columns: minmax(0, 1fr) minmax(360px, 0.9fr); }
+      .login-story, .login-panel { padding: 40px; }
+    }
+    @media (max-width: 860px) {
+      .login-shell { width: min(500px, 100%); min-height: 0; display: block; }
+      .login-story { min-height: 250px; padding: 30px; border-right: 0; border-bottom: 1px solid var(--line); }
+      .story-copy { margin: 48px 0 10px; }
+      .story-copy h1 { margin: 13px 0 12px; font-size: 40px; }
+      .story-copy p { font-size: 13px; }
+      .story-metrics { display: none; }
+      .login-panel { padding: 34px 30px 38px; }
+      .app-view { display: block; }
+      .sidebar { position: static; width: 100%; height: auto; display: none; }
+      .app-main { padding: 0 22px 56px; }
+      .topbar { display: flex; min-height: 66px; margin: 0 -22px; padding: 11px 22px; }
+      .topbar-title { display: none; }
+      .mobile-brand { display: flex; }
+      .mobile-logout { display: inline-flex; }
+      .sync-meta { display: none; }
+      .hero-row { padding-top: 32px; }
+      .desktop-only { display: none; }
+      .agent-cards { display: grid; gap: 10px; padding: 10px; }
+      .agent-card { padding: 15px; border: 1px solid var(--line); border-radius: 12px; background: rgba(10, 27, 22, 0.68); }
+      .agent-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+      .agent-card-head strong { display: block; color: var(--text); font-size: 13px; }
+      .agent-card-head code { display: block; margin-top: 4px; color: var(--muted); font-size: 9px; }
+      .agent-card-route { margin-top: 14px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: rgba(4, 14, 11, 0.62); }
+      .agent-card-route code { display: block; overflow: hidden; color: var(--cyan); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+      .agent-card-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin: 14px 0; }
+      .agent-card-meta span { display: block; color: var(--muted); font: 9px/1.25 var(--mono); text-transform: uppercase; }
+      .agent-card-meta b { display: block; margin-top: 6px; color: var(--text-soft); font: 650 11px/1.45 var(--mono); }
+      .agent-card-actions { display: flex; gap: 7px; padding-top: 12px; border-top: 1px solid var(--line); }
+      .agent-card-actions .button { flex: 1; }
+    }
+    @media (max-width: 760px) {
+      .login-view { padding: 0; place-items: stretch; }
+      .login-shell { width: 100%; min-height: 100vh; border: 0; border-radius: 0; }
+      .login-story { min-height: 220px; padding: 26px 22px; }
+      .story-copy { margin: 40px 0 0; }
+      .story-copy h1 { font-size: 34px; }
+      .story-copy p { display: none; }
+      .login-panel { padding: 30px 22px max(34px, env(safe-area-inset-bottom)); }
+      .app-main { padding: 0 14px 48px; }
+      .topbar { margin: 0 -14px; padding: 10px 14px; }
+      .topbar-actions { gap: 6px; }
+      .topbar-actions .button { padding-inline: 10px; }
+      .hero-row { display: block; padding: 28px 0 20px; }
+      .hero-signal { width: 100%; margin-top: 18px; }
+      .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+      .stat-card { min-height: 60px; padding: 8px 11px; }
+      .stat-value { font-size: 22px; }
+      .section-head { align-items: flex-start; flex-direction: column; }
+      .agents-toolbar { align-items: stretch; flex-direction: column; }
+      .runs-toolbar { gap: 10px; }
+      .runs-filters { gap: 14px; }
+      .runs-toolbar > .section-actions { width: auto; }
+      .section-actions { width: 100%; }
+      .section-actions .button { flex: 1; }
+      .form-grid { grid-template-columns: 1fr; }
+      .span-2 { grid-column: auto; }
+      .drawer-head, .form-scroll { padding-left: 18px; padding-right: 18px; }
+      .form-footer { align-items: stretch; flex-direction: column; padding-left: 18px; padding-right: 18px; }
+      .form-footer-note { display: none; }
+      .form-footer-actions { display: grid; grid-template-columns: 1fr 1.4fr; }
+      .input-group { flex-wrap: wrap; }
+      .input-group .input { flex-basis: 100%; }
+      .input-group .button { flex: 1; }
+      .modal-card { padding: 21px; }
+      .toast-region { top: 10px; right: 10px; width: calc(100% - 20px); }
+    }
+    @media (max-width: 390px) {
+      .mobile-brand span:last-child { display: none; }
+      .stats-grid { grid-template-columns: 1fr; }
+      .stat-card { min-height: 58px; }
+      .agent-card-grid { grid-template-columns: 1fr; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: 0.001ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <a id="skip-link" class="skip-link" href="#main-content" hidden data-i18n="skip.main">跳到主要内容</a>
+
+  <div id="boot-view" class="view boot-view" aria-live="polite" aria-busy="true">
+    <div class="boot-card">
+      <span class="boot-mark" aria-hidden="true"></span>
+      <p data-i18n="boot.checking">正在确认管理会话</p>
+    </div>
+  </div>
+
+  <section id="login-view" class="view login-view" aria-labelledby="login-title" hidden>
+    <div class="login-shell">
+      <div class="login-story" aria-hidden="true">
+        <div class="story-brand">
+          <span class="boot-mark"></span>
+          <div><strong>MOTA / 智能体控制</strong><span>本地管理平面</span></div>
+        </div>
+        <div class="story-copy">
+          <h1><span data-i18n="login.hero.h1a">管理运行中的</span><br><span data-i18n="login.hero.h1b">智能体网络。</span></h1>
+          <p data-i18n="login.hero.desc">在一个清晰、安全的控制面中配置路由、执行策略与容量边界，并持续掌握最近运行状态。</p>
+        </div>
+        <div class="story-metrics">
+          <div class="story-metric"><b>SESSION</b><span data-i18n="login.metric.session">HttpOnly 会话</span></div>
+          <div class="story-metric"><b>CSRF</b><span data-i18n="login.metric.csrf">写操作保护</span></div>
+          <div class="story-metric"><b>SECRETS</b><span data-i18n="login.metric.secrets">只显示脱敏提示</span></div>
+        </div>
+      </div>
+
+      <div class="login-panel">
+        <div class="login-form-wrap">
+          <h2 id="login-title" data-i18n="login.title">登录控制台</h2>
+          <p class="login-intro" data-i18n="login.intro">使用管理员凭据继续。会话凭据仅由服务器 Cookie 管理。</p>
+          <div id="login-status" class="login-status" role="alert" hidden>
+            <span id="login-status-text"></span>
+            <button id="retry-session-button" class="button ghost compact retry-session" type="button" hidden data-i18n="login.retry">重新检查会话</button>
+          </div>
+          <form id="login-form">
+            <div class="field">
+              <label for="login-username" data-i18n="login.username">用户名</label>
+              <input id="login-username" class="input" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required maxlength="120">
+            </div>
+            <div class="field">
+              <label for="login-password" data-i18n="login.password">密码</label>
+              <input id="login-password" class="input" name="password" type="password" autocomplete="current-password" required maxlength="512">
+            </div>
+            <button id="login-button" class="button primary full" type="submit" data-i18n="login.submit">安全登录</button>
+          </form>
+          <div class="login-meta"><span class="security-dot" aria-hidden="true"></span><span data-i18n="login.meta">凭据仅发送至同源管理服务，不写入本地存储</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div id="app-view" class="view app-view" hidden>
+    <aside class="sidebar" aria-label="控制台导航" data-i18n-aria="sidebar.label">
+      <a class="sidebar-brand" href="#agents-section" aria-label="返回控制台概览" data-i18n-aria="sidebar.brand.label">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span><strong>智能体控制台</strong><small>Copyright @ MoTA</small></span>
+      </a>
+      <nav class="side-nav">
+        <a class="active" href="#agents-section" data-nav-target="agents-section" data-i18n="sidebar.nav.agents">智能体管理</a>
+        <a href="#runs-section" data-nav-target="runs-section" data-i18n="sidebar.nav.runs">最近运行</a>
+      </nav>
+      <div class="sidebar-spacer"></div>
+      <div class="sidebar-status">
+        <div class="network-line"><span id="network-dot" class="network-dot" aria-hidden="true"></span><span id="network-label" data-i18n="state.online">服务连接可用</span></div>
+      </div>
+      <div class="sidebar-user">
+        <span id="user-avatar" class="user-avatar" aria-hidden="true">A</span>
+        <div class="user-meta"><strong id="sidebar-username">admin</strong></div>
+        <button id="logout-button" class="button ghost compact logout-button" type="button" aria-label="退出登录" title="退出登录" data-i18n-aria="sidebar.logout.label" data-i18n-title="sidebar.logout.label" data-i18n="sidebar.logout">退出</button>
+      </div>
+    </aside>
+
+    <main id="main-content" class="app-main" tabindex="-1">
+      <header class="topbar">
+        <a class="mobile-brand" href="#agents-section"><span class="brand-mark" aria-hidden="true"></span><span>智能体控制台</span></a>
+        <button id="mobile-logout-button" class="button ghost mobile-logout" type="button" aria-label="退出登录" data-i18n-aria="sidebar.logout.label" data-i18n="sidebar.logout">退出</button>
+      </header>
+
+      <div class="content">
+        <section id="agents-section" class="section" aria-labelledby="agents-title">
+          <div class="stats-grid" aria-label="关键指标" data-i18n-aria="overview.stats.label">
+            <article class="stat-card"><div class="stat-label" data-i18n="overview.stat.total">智能体总数</div><div id="stat-total" class="stat-value">—</div><div class="stat-foot" data-i18n="overview.stat.total.foot">已注册路由</div></article>
+            <article class="stat-card"><div class="stat-label" data-i18n="overview.stat.enabled">已启用</div><div id="stat-enabled" class="stat-value">—</div><div class="stat-foot" data-i18n="overview.stat.enabled.foot">可接收请求</div></article>
+            <article class="stat-card"><div class="stat-label" data-i18n="overview.stat.running">执行中</div><div id="stat-running" class="stat-value">—</div><div class="stat-foot" data-i18n="overview.stat.running.foot">最近运行窗口</div></article>
+            <article class="stat-card"><div class="stat-label" data-i18n="overview.stat.failed">异常运行</div><div id="stat-failed" class="stat-value">—</div><div class="stat-foot" data-i18n="overview.stat.failed.foot">最近 50 条记录</div></article>
+          </div>
+          <div class="section-head">
+            <div class="section-title">
+              <h2 id="agents-title" data-i18n="agents.title">智能体列表</h2>
+            </div>
+          </div>
+          <div class="agents-toolbar">
+            <div id="agents-filters" class="agents-filters">
+              <div class="runs-filter-group">
+                <span id="agents-role-filter-label" class="runs-filter-label">岗位</span>
+                <div class="filter-select-wrap">
+                  <select id="agents-role-filter" class="select" aria-labelledby="agents-role-filter-label">
+                    <option value="">全部</option>
+                  </select>
+                </div>
+              </div>
+              <div class="runs-filter-group">
+                <span id="agents-executor-filter-label" class="runs-filter-label">执行器</span>
+                <div class="filter-select-wrap">
+                  <select id="agents-executor-filter" class="select" aria-labelledby="agents-executor-filter-label">
+                    <option value="">全部</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+            <div class="section-actions">
+              <button id="refresh-button" class="button ghost" type="button" data-i18n="topbar.refresh">刷新数据</button>
+              <button id="create-agent-button" class="button primary" type="button" data-i18n="topbar.create">创建 Agent</button>
+            </div>
+          </div>
+          <div id="agents-panel" class="panel" aria-live="polite" aria-busy="true"></div>
+        </section>
+
+        <section id="runs-section" class="section" aria-labelledby="runs-title">
+          <div class="section-head">
+            <div class="section-title">
+              <h2 id="runs-title" data-i18n="runs.title">最近运行</h2>
+            </div>
+          </div>
+          <div class="runs-toolbar">
+            <div class="runs-filters">
+              <div class="runs-filter-group">
+                <span id="runs-role-filter-label" class="runs-filter-label">岗位</span>
+                <div class="filter-select-wrap">
+                  <select id="runs-role-filter" class="select" aria-labelledby="runs-role-filter-label">
+                    <option value="">全部</option>
+                  </select>
+                </div>
+              </div>
+              <div class="runs-filter-group">
+                <span class="runs-filter-label" data-i18n="runs.filterAgent">智能体</span>
+                <div class="filter-select-wrap">
+                  <select id="runs-agent-filter" class="select"><option value="" data-i18n="runs.filterAll">全部</option></select>
+                </div>
+              </div>
+              <div class="runs-filter-group">
+                <span class="runs-filter-label" data-i18n="runs.filterType">接口类型</span>
+                <div class="filter-segmented" id="runs-type-filter" role="group">
+                  <button type="button" class="active" data-type="" data-i18n="runs.filterAll">全部</button>
+                  <button type="button" data-type="task">task</button>
+                  <button type="button" data-type="callback">callback</button>
+                  <button type="button" data-type="heartbeat">heartbeat</button>
+                </div>
+              </div>
+              <div class="runs-filter-group">
+                <span class="runs-filter-label" data-i18n="runs.filterStatus">状态</span>
+                <div class="filter-segmented" id="runs-status-filter" role="group">
+                  <button type="button" class="active" data-status="" data-i18n="runs.filterAll">所有</button>
+                  <button type="button" data-status="success" data-i18n="runs.filterSuccess">成功</button>
+                  <button type="button" data-status="failed" data-i18n="runs.filterFailed">失败</button>
+                </div>
+              </div>
+              <div class="runs-filter-group">
+                <span class="runs-filter-label" data-i18n="runs.successRate">成功率</span>
+                <span id="runs-success-rate" class="runs-success-rate" title="">—</span>
+              </div>
+            </div>
+            <div class="section-actions">
+              <button id="runs-refresh-button" class="button ghost" type="button" data-i18n="runs.refresh">刷新</button>
+            </div>
+          </div>
+          <div id="runs-panel" class="panel" aria-live="polite" aria-busy="true"></div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div id="agent-drawer-layer" class="drawer-layer" aria-hidden="true" hidden>
+    <div class="drawer-backdrop" data-close-drawer></div>
+    <section id="agent-drawer" class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" tabindex="-1">
+      <header class="drawer-head">
+        <div><h2 id="drawer-title" data-i18n="drawer.title.create">创建 Agent</h2></div>
+        <button class="button ghost drawer-close" type="button" data-close-drawer aria-label="关闭 Agent 表单" data-i18n-aria="drawer.close.label" data-i18n="drawer.close">关闭</button>
+      </header>
+
+      <form id="agent-form" class="agent-form">
+        <div class="form-scroll">
+          <div id="agent-form-error" class="form-error" role="alert" hidden></div>
+
+          <section class="form-section" aria-labelledby="basic-section-title">
+            <div class="form-section-head"><h3 id="basic-section-title" data-i18n="drawer.basic.title">基础信息</h3><p data-i18n="drawer.basic.desc">定义稳定路由标识、展示信息与执行器类型。</p></div>
+            <div class="form-grid">
+              <div class="field">
+                <label for="agent-slug">Slug <span class="required" aria-hidden="true">*</span></label>
+                <input id="agent-slug" class="input mono" name="slug" type="text" required minlength="2" maxlength="64" pattern="[a-z0-9](?:[a-z0-9\-]{0,62}[a-z0-9])?" autocapitalize="none" spellcheck="false" placeholder="support-agent" aria-describedby="slug-help">
+                <p id="slug-help" class="field-help" data-i18n="drawer.slug.help">2–64 位小写字母、数字或单个连字符；创建后不可修改。</p>
+              </div>
+              <div class="field">
+                <label for="agent-name"><span data-i18n="drawer.name.label">名称</span> <span class="required" aria-hidden="true">*</span></label>
+                <input id="agent-name" class="input" name="name" type="text" required maxlength="50" placeholder="客户支持 Agent" data-i18n-placeholder="drawer.name.placeholder">
+                <p class="field-help">最多 80 字符。</p>
+              </div>
+              <div class="field span-2">
+                <label for="agent-description" data-i18n="drawer.desc.label">描述</label>
+                <textarea id="agent-description" class="textarea" name="description" maxlength="500" placeholder="简要说明职责、输入与预期输出" data-i18n-placeholder="drawer.desc.placeholder"></textarea>
+              </div>
+              <div class="field">
+                <label for="agent-executor-kind" data-i18n="drawer.executor.label">执行器</label>
+                <select id="agent-executor-kind" class="select agent-execution-select" name="executor_kind">
+                  <option value="pi">Pi</option>
+                  <option value="codex">Codex</option>
+                  <option value="reasonix">Reasonix</option>
+                  <option value="claude_code">Claude Code</option>
+                </select>
+              </div>
+              <div id="agent-execution-mode-field" class="field">
+                <label id="agent-execution-mode-label" for="agent-execution-mode">执行位置</label>
+                <select id="agent-execution-mode" class="select agent-execution-select" name="execution_mode">
+                  <option id="agent-execution-gateway-option" value="gateway">远端网关（默认）</option>
+                  <option id="agent-execution-local-option" value="local">本机 Local</option>
+                </select>
+              </div>
+              <div class="field">
+                <span class="field-label" data-i18n="drawer.status.label">运行状态</span>
+                <div class="switch-row">
+                  <div class="switch-copy"><strong id="enabled-label" data-i18n="agent.enabled">已启用</strong><span data-i18n="drawer.status.desc">允许该路由接收请求</span></div>
+                  <label class="switch">
+                    <input id="agent-enabled" name="enabled" type="checkbox" checked aria-labelledby="enabled-label">
+                    <span class="switch-track" aria-hidden="true"></span>
+                  </label>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="form-section" aria-labelledby="security-section-title">
+            <div class="form-section-head"><h3 id="security-section-title" data-i18n="drawer.security.title">签名与密钥</h3><p data-i18n="drawer.security.desc">已保存的密钥不会回显。编辑时保持空白即可沿用当前值。</p></div>
+            <div class="form-grid">
+              <div class="field span-2">
+                <label for="agent-signing-secret">Signing Secret <span id="secret-required-mark" class="required" aria-hidden="true">*</span></label>
+                <div class="input-group">
+                  <input id="agent-signing-secret" class="input mono" name="signing_secret" type="password" maxlength="512" autocomplete="new-password" autocapitalize="none" spellcheck="false" placeholder="至少 16 个字符" aria-describedby="secret-help" data-i18n-placeholder="drawer.secret.placeholder">
+                  <button id="toggle-secret-button" class="button ghost" type="button" aria-label="显示 Signing Secret" aria-pressed="false" data-i18n-aria="drawer.secret.toggle.label" data-i18n="drawer.secret.toggle">显示</button>
+                </div>
+                <p id="secret-help" class="field-help" data-i18n="drawer.secret.help.create">创建时必填。首尾空白会作为密钥内容原样保留；仅可复制当前输入或刚生成、尚未保存的 secret。</p>
+                <div class="secret-actions">
+                  <button id="generate-secret-button" class="button ghost compact" type="button" data-i18n="drawer.secret.generate">安全生成</button>
+                  <button id="copy-secret-button" class="button ghost compact" type="button" data-i18n="drawer.secret.copy">复制当前输入</button>
+                </div>
+              </div>
+              <div class="field">
+                <label for="agent-signature-encoding" data-i18n="drawer.encoding.label">签名编码</label>
+                <select id="agent-signature-encoding" class="select" name="signature_encoding">
+                  <option value="hex">hex</option>
+                  <option value="base64">base64</option>
+                </select>
+              </div>
+            </div>
+          </section>
+
+          <section class="form-section" aria-labelledby="runtime-section-title">
+            <div class="form-section-head"><h3 id="runtime-section-title" data-i18n="drawer.runtime.title">运行时配置</h3><p data-i18n="drawer.runtime.desc">设置提示词、工作区、模型与工具权限。</p></div>
+            <div class="form-grid">
+              <div class="field span-2">
+                <label for="agent-system-prompt">提示词（岗位）</label>
+                <select id="agent-system-prompt" class="select" name="system_prompt">
+                  <option value="fundamental_analyst">基本面分析师</option>
+                  <option value="technical_analyst">技术分析师</option>
+                  <option value="strategist">策略分析师</option>
+                  <option value="risk_manager">风控经理</option>
+                  <option value="execution_trader">执行交易员</option>
+                  <option value="portfolio_manager">组合经理</option>
+                  <option id="custom-prompt-option" value="" hidden>自定义（已保存）</option>
+                </select>
+                <p class="field-help">提示词由服务端预置（对齐评测 schema），仅可选择，不可编辑。</p>
+              </div>
+              <div class="field">
+                <label for="agent-workspace-path"><span data-i18n="drawer.workspace.label">工作区路径</span> <span class="required" aria-hidden="true">*</span></label>
+                <input id="agent-workspace-path" class="input mono" name="workspace_path" type="text" required maxlength="500" value="." placeholder=".">
+                <p class="field-help" data-i18n="drawer.workspace.help">使用工作区根目录内的相对路径，不允许父级跳转。</p>
+              </div>
+              <div class="field">
+                <label for="agent-claude-model" data-i18n="drawer.model.label">模型选择</label>
+                <select id="agent-claude-model" class="select" name="claude_model">
+                  <option value="">留空（服务端默认）</option>
+                  <optgroup label="Claude">
+                    <option value="claude-opus5">claude-opus5</option>
+                    <option value="claude-opus4.8">claude-opus4.8</option>
+                    <option value="claude-sonnet5">claude-sonnet5</option>
+                  </optgroup>
+                  <optgroup label="DeepSeek">
+                    <option value="deepseek-v4-pro">deepseek-v4-pro</option>
+                    <option value="deepseek-v4-flash">deepseek-v4-flash</option>
+                  </optgroup>
+                  <optgroup label="GLM">
+                    <option value="glm5.2">glm5.2</option>
+                    <option value="glm5.3">glm5.3</option>
+                  </optgroup>
+                  <optgroup label="GPT">
+                    <option value="gpt5.6-sol">gpt5.6-sol</option>
+                    <option value="gpt5.6-luna">gpt5.6-luna</option>
+                    <option value="gpt5.6-terra">gpt5.6-terra</option>
+                  </optgroup>
+                  <optgroup label="Kimi">
+                    <option value="kimi-k3">kimi-k3</option>
+                  </optgroup>
+                  <optgroup label="Qwen">
+                    <option value="qwen3.7-max">qwen3.7-max</option>
+                    <option value="qwen3.8-max">qwen3.8-max</option>
+                    <option value="qwen3.6-plus">qwen3.6-plus</option>
+                  </optgroup>
+                </select>
+                <p class="field-help">选择要使用的模型；留空使用服务端默认。</p>
+              </div>
+              <div class="field span-2">
+                <label for="agent-allowed-tools" data-i18n="drawer.tools.label">允许的工具</label>
+                <textarea id="agent-allowed-tools" class="textarea mono" name="allowed_tools" placeholder="每行一个工具名称，也可使用逗号分隔" data-i18n-placeholder="drawer.tools.placeholder"></textarea>
+                <p class="field-help" data-i18n="drawer.tools.help">最多 64 项；空白表示不额外指定工具列表。</p>
+              </div>
+              <div class="field">
+                <label for="agent-permission-mode" data-i18n="drawer.permission.label">权限模式</label>
+                <select id="agent-permission-mode" class="select" name="permission_mode">
+                  <option value="dontAsk">dontAsk</option>
+                  <option value="plan">plan</option>
+                  <option value="acceptEdits">acceptEdits</option>
+                  <option value="manual">manual</option>
+                </select>
+              </div>
+            </div>
+          </section>
+
+          <section class="form-section" aria-labelledby="capacity-section-title">
+            <div class="form-section-head"><h3 id="capacity-section-title" data-i18n="drawer.capacity.title">容量与超时</h3><p data-i18n="drawer.capacity.desc">用有界并发和队列保护执行节点。</p></div>
+            <div class="form-grid">
+              <div class="field">
+                <label for="agent-timeout-secs" data-i18n="drawer.timeout.label">超时秒数</label>
+                <input id="agent-timeout-secs" class="input mono" name="timeout_secs" type="number" required min="5" max="3600" step="1" value="600">
+              </div>
+              <div class="field">
+                <label for="agent-max-concurrency" data-i18n="drawer.concurrency.label">最大并发</label>
+                <input id="agent-max-concurrency" class="input mono" name="max_concurrency" type="number" required min="1" max="32" step="1" value="1">
+              </div>
+              <div class="field">
+                <label for="agent-queue-capacity" data-i18n="drawer.queue.label">队列容量</label>
+                <input id="agent-queue-capacity" class="input mono" name="queue_capacity" type="number" required min="0" max="1000" step="1" value="10">
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <footer class="form-footer">
+          <span class="form-footer-note" data-i18n="drawer.footer.note">保存后 revision 将由服务端更新</span>
+          <div class="form-footer-actions">
+            <button class="button ghost" type="button" data-close-drawer data-i18n="drawer.cancel">取消</button>
+            <button id="save-agent-button" class="button primary" type="submit" data-i18n="drawer.title.create">创建 Agent</button>
+          </div>
+        </footer>
+      </form>
+    </section>
+  </div>
+
+  <div id="delete-modal-layer" class="modal-layer" aria-hidden="true" hidden>
+    <div class="modal-backdrop" data-close-delete></div>
+    <section id="delete-modal" class="modal-card" role="dialog" aria-modal="true" aria-labelledby="delete-title" tabindex="-1">
+      <div class="danger-label" data-i18n="delete.label">Destructive operation</div>
+      <h2 id="delete-title" data-i18n="delete.title">确认删除 Agent</h2>
+      <p data-i18n="delete.desc">此操作无法在控制台中撤销。请核对目标并输入 slug 完成第二次确认。</p>
+      <div class="delete-target"><strong id="delete-agent-name"></strong><code id="delete-agent-slug"></code></div>
+      <form id="delete-form">
+        <div class="field">
+          <label for="delete-confirm-input" data-i18n-html="delete.confirm.html">输入 <code id="delete-confirm-label"></code> 以确认</label>
+          <input id="delete-confirm-input" class="input mono" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" required>
+        </div>
+        <div id="delete-error" class="form-error" role="alert" hidden></div>
+        <div class="modal-actions">
+          <button class="button ghost" type="button" data-close-delete data-i18n="delete.cancel">取消</button>
+          <button id="confirm-delete-button" class="button danger" type="submit" disabled data-i18n="delete.confirm.btn">永久删除</button>
+        </div>
+      </form>
+    </section>
+  </div>
+
+  <div id="run-payload-layer" class="modal-layer" aria-hidden="true" hidden>
+    <div class="modal-backdrop" data-close-run-payload></div>
+    <section id="run-payload-modal" class="modal-card payload-card" role="dialog" aria-modal="true" aria-labelledby="run-payload-title" tabindex="-1">
+      <div class="danger-label" id="run-payload-kind">Input</div>
+      <h2 id="run-payload-title" data-i18n="runPayload.title">运行详情</h2>
+      <pre id="run-payload-content" class="payload-json"></pre>
+      <div class="modal-actions">
+        <button id="copy-run-payload-button" class="button ghost" type="button">复制完整 JSON</button>
+        <button class="button ghost" type="button" data-close-run-payload data-i18n="delete.cancel">关闭</button>
+      </div>
+    </section>
+  </div>
+
+  <div id="toast-region" class="toast-region" aria-live="polite" aria-relevant="additions"></div>
+
+  <script>
+      (() => {
+      "use strict";
+
+      // ---------- i18n ----------
+      const I18N = {
+        zh: {"title.page": "MOTA智能体控制台", "skip.main": "跳到主要内容", "boot.checking": "正在确认管理会话", "login.hero.eyebrow": "安全运维工作区", "login.hero.h1a": "管理运行中的", "login.hero.h1b": "智能体网络。", "login.hero.desc": "在一个清晰、安全的控制面中配置路由、执行策略与容量边界，并持续掌握最近运行状态。", "login.metric.session": "HttpOnly 会话", "login.metric.csrf": "写操作保护", "login.metric.secrets": "只显示脱敏提示", "login.panel.eyebrow": "管理员访问", "login.title": "登录控制台", "login.intro": "使用管理员凭据继续。会话凭据仅由服务器 Cookie 管理。", "login.retry": "重新检查会话", "login.username": "用户名", "login.password": "密码", "login.submit": "安全登录", "login.meta": "凭据仅发送至同源管理服务，不写入本地存储", "sidebar.label": "控制台导航", "sidebar.brand.label": "返回控制台概览", "sidebar.nav.workspace": "工作区", "sidebar.nav.overview": "运行概览", "sidebar.nav.agents": "智能体管理", "sidebar.nav.runs": "最近运行", "sidebar.status.online": "服务连接可用", "sidebar.session": "会话有效", "sidebar.logout.label": "退出登录", "sidebar.logout": "退出", "topbar.title.sub": "管理控制台", "topbar.title": "智能体控制台", "topbar.sync.none": "尚未同步", "topbar.refresh": "刷新数据", "topbar.create": "创建智能体", "topbar.lang.label": "切换语言", "overview.eyebrow": "运行快照", "overview.title": "智能体运行概览", "overview.desc": "集中管理智能体路由、执行配置、并发容量与最近 50 条运行记录。", "overview.signal.label": "控制面状态", "overview.signal.title": "控制面", "overview.signal.auth": "会话已认证", "overview.stats.label": "关键指标", "overview.stat.total": "智能体总数", "overview.stat.total.foot": "已注册路由", "overview.stat.enabled": "已启用", "overview.stat.enabled.foot": "可接收请求", "overview.stat.running": "执行中", "overview.stat.running.foot": "最近运行窗口", "overview.stat.failed": "异常运行", "overview.stat.failed.foot": "最近 50 条记录", "agents.eyebrow": "注册表 / 路由", "agents.title": "智能体列表", "agents.desc": "路由与执行配置的当前发布版本。", "agents.reload": "重新加载", "agents.new": "新建配置", "runs.eyebrow": "最近活动", "runs.title": "最近运行", "runs.desc": "按创建时间倒序显示最近 50 条执行记录。", "runs.reload": "重新加载", "drawer.eyebrow": "创建配置", "drawer.title.create": "创建智能体", "drawer.close": "关闭", "drawer.close.label": "关闭智能体表单", "drawer.basic.title": "基础信息", "drawer.basic.desc": "定义稳定路由标识、展示信息与执行器类型。", "drawer.slug.help": "2–64 位小写字母、数字或单个连字符；创建后不可修改。", "drawer.name.label": "名称", "drawer.name.placeholder": "客户支持智能体", "drawer.desc.label": "描述", "drawer.desc.placeholder": "简要说明职责、输入与预期输出", "drawer.executor.label": "执行器", "drawer.status.label": "运行状态", "drawer.status.desc": "允许该路由接收请求", "drawer.security.title": "签名与密钥", "drawer.security.desc": "已保存的密钥不会回显。编辑时保持空白即可沿用当前值。", "drawer.secret.placeholder": "至少 16 个字符", "drawer.secret.toggle": "显示", "drawer.secret.toggle.label": "显示 Signing Secret", "drawer.secret.help.create": "创建时必填。首尾空白会作为密钥内容原样保留；仅可复制当前输入或刚生成、尚未保存的 secret。", "drawer.secret.generate": "安全生成", "drawer.secret.copy": "复制当前输入", "drawer.encoding.label": "签名编码", "drawer.runtime.title": "运行时配置", "drawer.runtime.desc": "设置提示词、工作区、模型与工具权限。", "drawer.prompt.placeholder": "输入该智能体的系统指令", "drawer.workspace.label": "工作区路径", "drawer.workspace.help": "使用工作区根目录内的相对路径，不允许父级跳转。", "drawer.model.label": "模型选择", "drawer.model.placeholder": "留空使用服务端默认", "drawer.tools.label": "允许的工具", "drawer.tools.placeholder": "每行一个工具名称，也可使用逗号分隔", "drawer.tools.help": "最多 64 项；空白表示不额外指定工具列表。", "drawer.permission.label": "权限模式", "drawer.capacity.title": "容量与超时", "drawer.capacity.desc": "用有界并发和队列保护执行节点。", "drawer.timeout.label": "超时秒数", "drawer.concurrency.label": "最大并发", "drawer.queue.label": "队列容量", "drawer.footer.note": "保存后 revision 将由服务端更新", "drawer.cancel": "取消", "delete.label": "破坏性操作", "delete.title": "确认删除智能体", "delete.desc": "此操作无法在控制台中撤销。请核对目标并输入 slug 完成第二次确认。", "delete.confirm.html": "输入 <code id=\"delete-confirm-label\"></code> 以确认", "delete.cancel": "取消", "delete.confirm.btn": "永久删除", "agent.unnamed": "未命名智能体", "err.invalidFormat": "接口返回的 {key} 数据格式无效", "err.network": "无法连接管理服务，请检查网络后重试", "err.invalidJson": "服务返回了无法解析的数据", "err.httpStatus": "请求失败（HTTP {status}）", "err.missingData": "服务响应缺少 data 字段", "err.invalidSession": "会话响应缺少必要字段", "auth.expired": "会话已失效，请重新登录。", "auth.expiredToast": "会话已过期，已返回登录页", "state.sessionActive": "会话有效", "state.expiresMin": "{minutes} 分钟后到期", "state.expiresHour": "{hours} 小时内到期", "state.online": "服务连接可用", "state.offline": "浏览器当前离线", "toast.success": "操作成功", "toast.error": "请求失败", "toast.info": "提示", "toast.close": "关闭", "toast.close.label": "关闭通知", "agents.loadError": "智能体列表加载失败", "runs.loadError": "运行记录加载失败", "retry": "重试", "sync.refreshed": "智能体与运行记录已刷新", "sync.recent": "最近同步 {time}", "agent.enabled": "已启用", "agent.disabled": "已停用", "agents.empty.title": "还没有智能体", "agents.empty.desc": "创建第一个智能体后，动态路由和执行配置会显示在这里。", "agents.empty.action": "创建智能体", "agents.caption": "智能体注册表，包含路由、状态、执行器、容量、版本和更新时间", "th.agent": "智能体", "th.public": "公开接口", "th.status": "状态", "th.executor": "执行器", "th.capacity": "容量", "th.revision": "版本 / 密钥", "th.updated": "最后更新", "th.execmode": "执行方式", "th.actions": "操作", "action.copyRoute": "复制路由 URL", "capacity.concurrent": "{n} 并发", "capacity.queue": "队列 {n}", "capacity.value": "{c} / {q}", "revision.label": "rev {n}", "revision.full": "rev {n} · {hint}", "secret.configured": "密钥已配置", "secret.configuredShort": "已配置", "action.edit": "编辑", "action.delete": "删除", "detail.capacity": "并发 / 队列", "detail.revision": "版本 / 密钥", "action.copyUrl": "复制 URL", "runs.empty.title": "暂无运行记录", "runs.empty.desc": "智能体接收并执行请求后，最近状态会显示在这里。", "runs.empty.action": "刷新记录", "runs.caption": "最近 50 条智能体运行记录", "runs.filtered.title": "智能体的运行记录", "runs.showAll": "返回全部", "runs.refresh": "刷新", "runs.filterType": "接口类型", "runs.filterAgent": "智能体", "runs.filterStatus": "状态", "runs.successRate": "成功率", "runs.filterAll": "全部", "runs.filterSuccess": "成功", "runs.filterFailed": "失败", "th.runId": "运行 ID", "th.version": "版本", "th.duration": "耗时", "th.errorCode": "错误码", "th.endpoint": "接口 URI", "th.responseCode": "响应码", "th.started": "开始时间", "th.finished": "完成时间", "th.input": "输入", "th.type": "接口类型", "th.output": "输出", "runs.viewPayload": "查看", "runs.runIdCopied": "运行 ID 已复制", "runPayload.title": "运行详情", "copy.empty": "没有可复制的内容", "copy.denied": "浏览器拒绝了复制操作", "agents.stale": "智能体数据已变化，请刷新后重试", "copy.routeOk": "路由 URL 已复制", "copy.failed": "复制失败，请手动选择 URL", "secret.help.edit": "当前密钥提示：{hint}。留空表示不修改；首尾空白会原样保留。", "secret.help.none": "已保存的密钥不会回显；留空表示不修改，首尾空白会原样保留。", "drawer.title.edit": "编辑 {name}", "drawer.save.update": "保存更改", "valid.slug": "Slug 必须为 2–64 位小写字母或数字，可用单个连字符分隔", "valid.workspace": "工作区必须是根目录内的相对路径，且不能包含父级跳转", "valid.secretRequired": "创建智能体时必须填写 Signing Secret", "valid.secretLength": "Signing Secret 必须为 16–512 字节", "valid.tools": "工具最多 64 项，且每项不能超过 200 字节", "save.updated": "智能体配置已更新", "save.created": "智能体已创建", "delete.ok": "智能体“{name}”已删除", "session.checkFailed": "无法确认现有会话：{msg}", "login.ok": "登录成功，控制台数据正在同步", "login.badCredentials": "用户名或密码不正确。", "logout.ok": "已安全退出管理会话", "logout.failed": "退出未完成：{msg}。当前会话仍保持登录，可再次尝试。", "rng.unsupported": "当前浏览器不支持安全随机数生成，请使用现代浏览器", "secret.generated": "已生成 256 位随机 secret，保存后将不再完整显示", "secret.toggle.show": "显示", "secret.toggle.hide": "隐藏", "secret.toggle.label": "{action} Signing Secret", "secret.empty": "当前输入为空；已保存的 secret 不会被读取或复制", "secret.copied": "当前未保存的 secret 已复制", "copy.failed2": "复制失败", "online.restored": "网络连接已恢复", "offline.now": "浏览器已离线，数据操作将暂时失败"},
+        en: {"title.page": "MOTA Agent Console", "skip.main": "Skip to main content", "boot.checking": "Confirming session…", "login.hero.eyebrow": "Secure operations workspace", "login.hero.h1a": "Manage your", "login.hero.h1b": "Agent network.", "login.hero.desc": "Configure routes, execution policies and capacity bounds in one clear, secure control plane, and keep an eye on recent run status.", "login.metric.session": "HttpOnly session", "login.metric.csrf": "Write-op protection", "login.metric.secrets": "Secrets masked", "login.panel.eyebrow": "Administrator access", "login.title": "Console login", "login.intro": "Continue with your admin credentials. Session credentials are managed by server cookies only.", "login.retry": "Re-check session", "login.username": "Username", "login.password": "Password", "login.submit": "Sign in securely", "login.meta": "Credentials are sent only to the same-origin admin service and never stored locally.", "sidebar.label": "Console navigation", "sidebar.brand.label": "Back to console overview", "sidebar.nav.workspace": "Workspace", "sidebar.nav.overview": "Overview", "sidebar.nav.agents": "Agents", "sidebar.nav.runs": "Recent runs", "sidebar.status.online": "Service reachable", "sidebar.session": "Session active", "sidebar.logout.label": "Log out", "sidebar.logout": "Log out", "topbar.title.sub": "Management plane", "topbar.title": "Agent Console", "topbar.sync.none": "Not synced", "topbar.refresh": "Refresh", "topbar.create": "New Agent", "topbar.lang.label": "Switch language", "overview.eyebrow": "Operations snapshot", "overview.title": "Agent overview", "overview.desc": "Manage agent routes, execution config, concurrency capacity and the latest 50 run records in one place.", "overview.signal.label": "Control plane status", "overview.signal.title": "Control plane", "overview.signal.auth": "Authenticated", "overview.stats.label": "Key metrics", "overview.stat.total": "Total agents", "overview.stat.total.foot": "Registered routes", "overview.stat.enabled": "Enabled", "overview.stat.enabled.foot": "Accepting requests", "overview.stat.running": "Running", "overview.stat.running.foot": "Recent run window", "overview.stat.failed": "Failed", "overview.stat.failed.foot": "Last 50 runs", "agents.eyebrow": "Registry / routes", "agents.title": "Agent List", "agents.desc": "Current published revision of routes and execution config.", "agents.reload": "Reload", "agents.new": "New config", "runs.eyebrow": "Recent activity", "runs.title": "Recent Runs", "runs.desc": "Latest 50 run records, newest first.", "runs.reload": "Reload", "drawer.eyebrow": "Create configuration", "drawer.title.create": "Create Agent", "drawer.close": "Close", "drawer.close.label": "Close agent form", "drawer.basic.title": "Basics", "drawer.basic.desc": "Define a stable route id, display information and executor type.", "drawer.slug.help": "2–64 lowercase letters, digits or a single hyphen; immutable after creation.", "drawer.name.label": "Name", "drawer.name.placeholder": "Customer support agent", "drawer.desc.label": "Description", "drawer.desc.placeholder": "Briefly describe duties, inputs and expected output.", "drawer.executor.label": "Executor", "drawer.status.label": "Runtime status", "drawer.status.desc": "Allow this route to accept requests", "drawer.security.title": "Signature & secrets", "drawer.security.desc": "Saved secrets are never echoed. Leave blank to keep the current value.", "drawer.secret.placeholder": "At least 16 characters", "drawer.secret.toggle": "Show", "drawer.secret.toggle.label": "Show Signing Secret", "drawer.secret.help.create": "Required on create. Leading/trailing whitespace is preserved as-is; only the current input or a freshly generated, unsaved secret can be copied.", "drawer.secret.generate": "Generate securely", "drawer.secret.copy": "Copy current input", "drawer.encoding.label": "Signature encoding", "drawer.runtime.title": "Runtime", "drawer.runtime.desc": "Set prompt, workspace, model and tool permissions.", "drawer.prompt.placeholder": "System instructions for this agent", "drawer.workspace.label": "Workspace path", "drawer.workspace.help": "Relative path inside the workspace root; parent traversal is not allowed.", "drawer.model.label": "Model selection", "drawer.model.placeholder": "Leave blank for server default", "drawer.tools.label": "Allowed tools", "drawer.tools.placeholder": "One tool per line, or comma-separated.", "drawer.tools.help": "Up to 64 items; blank means no extra tool list.", "drawer.permission.label": "Permission mode", "drawer.capacity.title": "Capacity & timeouts", "drawer.capacity.desc": "Bound concurrency and queue to protect executors.", "drawer.timeout.label": "Timeout (seconds)", "drawer.concurrency.label": "Max concurrency", "drawer.queue.label": "Queue capacity", "drawer.footer.note": "Revision will be updated by the server after saving.", "drawer.cancel": "Cancel", "delete.label": "Destructive operation", "delete.title": "Delete Agent?", "delete.desc": "This cannot be undone from the console. Review the target and type its slug to confirm.", "delete.confirm.html": "Type <code id=\"delete-confirm-label\"></code> to confirm", "delete.cancel": "Cancel", "delete.confirm.btn": "Delete permanently", "agent.unnamed": "Unnamed Agent", "err.invalidFormat": "Invalid data format for {key} in API response", "err.network": "Cannot reach the admin service. Check your network and retry.", "err.invalidJson": "Service returned unparsable data.", "err.httpStatus": "Request failed (HTTP {status})", "err.missingData": "Service response is missing the data field.", "err.invalidSession": "Session response is missing required fields.", "auth.expired": "Session expired. Please log in again.", "auth.expiredToast": "Session expired; returned to the login page.", "state.sessionActive": "Session active", "state.expiresMin": "expires in {minutes} min", "state.expiresHour": "expires in {hours} h", "state.online": "Service reachable", "state.offline": "Browser offline", "toast.success": "Success", "toast.error": "Request failed", "toast.info": "Info", "toast.close": "Close", "toast.close.label": "Dismiss notification", "agents.loadError": "Failed to load agents", "runs.loadError": "Failed to load runs", "retry": "Retry", "sync.refreshed": "Agents and runs refreshed", "sync.recent": "Synced {time}", "agent.enabled": "Enabled", "agent.disabled": "Disabled", "agents.empty.title": "No agents yet", "agents.empty.desc": "Dynamic routes and execution config will appear here after you create your first agent.", "agents.empty.action": "Create Agent", "agents.caption": "Agent registry with routes, status, executor, capacity, revision and update time.", "th.agent": "Agent", "th.public": "Public endpoint", "th.status": "Status", "th.executor": "Executor", "th.capacity": "Capacity", "th.revision": "Revision / key", "th.updated": "Updated", "th.execmode": "Execution mode", "th.actions": "Actions", "action.copyRoute": "Copy route URL", "capacity.concurrent": "{n} concurrent", "capacity.queue": "queue {n}", "capacity.value": "{c} / {q}", "revision.label": "rev {n}", "revision.full": "rev {n} · {hint}", "secret.configured": "key configured", "secret.configuredShort": "configured", "action.edit": "Edit", "action.delete": "Delete", "detail.capacity": "Concurrency / queue", "detail.revision": "Revision / key", "action.copyUrl": "Copy URL", "runs.empty.title": "No runs yet", "runs.empty.desc": "Recent status will appear here after agents receive and execute requests.", "runs.empty.action": "Refresh runs", "runs.caption": "Latest 50 agent run records.", "runs.filtered.title": "Agent run records", "runs.showAll": "Show all runs", "runs.refresh": "Refresh", "runs.filterType": "Interface type", "runs.filterAgent": "Agent", "runs.filterStatus": "Status", "runs.successRate": "Success rate", "runs.filterAll": "All", "runs.filterSuccess": "Success", "runs.filterFailed": "Failed", "th.runId": "Run ID", "th.version": "Rev", "th.duration": "Duration", "th.errorCode": "Error code", "th.endpoint": "Endpoint", "th.responseCode": "Response code", "th.started": "Started", "th.finished": "Finished", "th.input": "Input", "th.type": "Interface type", "th.output": "Output", "runs.viewPayload": "View", "runs.runIdCopied": "Run ID copied", "runPayload.title": "Run details", "copy.empty": "Nothing to copy.", "copy.denied": "The browser denied the copy operation.", "agents.stale": "Agent data changed; refresh and retry.", "copy.routeOk": "Route URL copied.", "copy.failed": "Copy failed; select the URL manually.", "secret.help.edit": "Current key hint: {hint}. Leave blank to keep unchanged; leading/trailing whitespace is preserved.", "secret.help.none": "Saved secrets are never echoed; leave blank to keep unchanged. Leading/trailing whitespace is preserved.", "drawer.title.edit": "Edit {name}", "drawer.save.update": "Save changes", "valid.slug": "Slug must be 2–64 lowercase letters or digits, optionally separated by single hyphens.", "valid.workspace": "Workspace must be a relative path inside the root, without parent traversal.", "valid.secretRequired": "Signing Secret is required when creating an agent.", "valid.secretLength": "Signing Secret must be 16–512 bytes.", "valid.tools": "At most 64 tools, each up to 200 bytes.", "save.updated": "Agent configuration updated.", "save.created": "Agent created.", "delete.ok": "Agent “{name}” deleted.", "session.checkFailed": "Cannot confirm session: {msg}", "login.ok": "Logged in; syncing console data.", "login.badCredentials": "Incorrect username or password.", "logout.ok": "Securely logged out.", "logout.failed": "Logout incomplete: {msg}. The session is still active; try again.", "rng.unsupported": "This browser lacks secure random generation; use a modern browser.", "secret.generated": "Generated a 256-bit random secret; it will be masked after saving.", "secret.toggle.show": "Show", "secret.toggle.hide": "Hide", "secret.toggle.label": "{action} Signing Secret", "secret.empty": "Input is empty; the saved secret was not read or copied.", "secret.copied": "Unsaved secret copied.", "copy.failed2": "Copy failed.", "online.restored": "Network restored.", "offline.now": "Browser is offline; data operations will fail temporarily."}
+      };
+      let lang = "zh";
+      try { lang = localStorage.getItem("mota.admin.locale") || "zh"; } catch (e) {}
+      if (lang !== "zh" && lang !== "en") lang = "zh";
+      function t(key) {
+        const d = I18N[lang];
+        return d && d[key] !== undefined ? d[key] : key;
+      }
+      function fmt(key, params) {
+        let s = t(key);
+        if (params) for (const k of Object.keys(params)) s = s.split("{" + k + "}").join(String(params[k]));
+        return s;
+      }
+      function applyI18n() {
+        const d = I18N[lang] || I18N.zh;
+        document.querySelectorAll("[data-i18n]").forEach((el) => {
+          const k = el.getAttribute("data-i18n");
+          if (d[k] !== undefined) el.textContent = d[k];
+        });
+        document.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {
+          const k = el.getAttribute("data-i18n-placeholder");
+          if (d[k] !== undefined) el.setAttribute("placeholder", d[k]);
+        });
+        document.querySelectorAll("[data-i18n-aria]").forEach((el) => {
+          const k = el.getAttribute("data-i18n-aria");
+          if (d[k] !== undefined) el.setAttribute("aria-label", d[k]);
+        });
+        document.querySelectorAll("[data-i18n-title]").forEach((el) => {
+          const k = el.getAttribute("data-i18n-title");
+          if (d[k] !== undefined) el.setAttribute("title", d[k]);
+        });
+        document.querySelectorAll("[data-i18n-html]").forEach((el) => {
+          const k = el.getAttribute("data-i18n-html");
+          if (d[k] !== undefined) el.innerHTML = d[k];
+        });
+        if (d["title.page"] !== undefined) document.title = d["title.page"];
+      }
+      function setupLangToggle() {
+        const btn = document.getElementById("lang-toggle");
+        if (!btn) return;
+        btn.textContent = lang === "zh" ? "EN" : "中文";
+        btn.setAttribute("aria-label", lang === "zh" ? "English" : "中文");
+        btn.addEventListener("click", () => {
+          const next = lang === "zh" ? "en" : "zh";
+          try { localStorage.setItem("mota.admin.locale", next); } catch (e) {}
+          location.reload();
+        });
+      }
+
+
+      const API = Object.freeze({
+        session: "/api/admin/session",
+        login: "/api/admin/login",
+        logout: "/api/admin/logout",
+        agents: "/api/admin/agents",
+        runs: "/api/admin/runs?limit=50",
+        channelEvents: "/api/admin/channel-events?limit=200"
+      });
+
+      class ApiError extends Error {
+        constructor(message, status = 0, code = "REQUEST_FAILED") {
+          super(message);
+          this.name = "ApiError";
+          this.status = status;
+          this.code = code;
+        }
+      }
+
+      const state = {
+        session: null,
+        authEpoch: 0,
+        agents: [],
+        runs: [],
+        callbacks: [],
+        heartbeats: [],
+        runsRoleFilter: "",
+        runsFilter: null,
+        runsTypeFilter: "",
+        runsStatusFilter: "",
+        runsPage: 1,
+        runsPageSize: 10,
+        agentsRoleFilter: "",
+        agentsExecutorFilter: "",
+        agentsPage: 1,
+        agentsPageSize: 30,
+        agentsStatus: "idle",
+        runsStatus: "idle",
+        lastSync: null,
+        formMode: "create",
+        editingSlug: null,
+        deletingAgent: null,
+        drawerOpen: false,
+        deleteOpen: false,
+        runPayloadOpen: false,
+        formSubmitting: false,
+        deleteSubmitting: false,
+        logoutSubmitting: false,
+        authRedirecting: false,
+        sessionTimer: null,
+        lastFocus: null
+      };
+
+      const $ = (selector, root = document) => root.querySelector(selector);
+      const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
+      const bootView = $("#boot-view");
+      const loginView = $("#login-view");
+      const appView = $("#app-view");
+      const loginForm = $("#login-form");
+      const loginButton = $("#login-button");
+      const loginStatus = $("#login-status");
+      const loginStatusText = $("#login-status-text");
+      const retrySessionButton = $("#retry-session-button");
+      const refreshButton = $("#refresh-button");
+      const logoutButton = $("#logout-button");
+      const mobileLogoutButton = $("#mobile-logout-button");
+      const logoutButtons = [logoutButton, mobileLogoutButton];
+      const agentsPanel = $("#agents-panel");
+      const runsPanel = $("#runs-panel");
+      const drawerLayer = $("#agent-drawer-layer");
+      const drawer = $("#agent-drawer");
+      const agentForm = $("#agent-form");
+      const agentFormError = $("#agent-form-error");
+      const saveAgentButton = $("#save-agent-button");
+      const secretInput = $("#agent-signing-secret");
+      const deleteLayer = $("#delete-modal-layer");
+      const deleteModal = $("#delete-modal");
+      const deleteForm = $("#delete-form");
+      const deleteInput = $("#delete-confirm-input");
+      const deleteError = $("#delete-error");
+      const confirmDeleteButton = $("#confirm-delete-button");
+      const runPayloadLayer = $("#run-payload-layer");
+      const runPayloadModal = $("#run-payload-modal");
+      const toastRegion = $("#toast-region");
+      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+      function makeElement(tag, className, text) {
+        const element = document.createElement(tag);
+        if (className) element.className = className;
+        if (text !== undefined && text !== null) element.textContent = String(text);
+        return element;
+      }
+
+      function setBusy(button, busy) {
+        button.disabled = busy;
+        button.classList.toggle("busy", busy);
+        button.setAttribute("aria-busy", String(busy));
+      }
+
+      function showLoginError(message, canRetrySession = false) {
+        loginStatusText.textContent = message;
+        loginStatus.hidden = false;
+        retrySessionButton.hidden = !canRetrySession;
+      }
+
+      function clearLoginError() {
+        loginStatus.hidden = true;
+        loginStatusText.textContent = "";
+        retrySessionButton.hidden = true;
+      }
+
+      function safeString(value, fallback = "") {
+        return typeof value === "string" ? value : fallback;
+      }
+
+      function safeNumber(value, fallback = 0) {
+        const number = Number(value);
+        return Number.isFinite(number) ? number : fallback;
+      }
+
+      function parseDate(value) {
+        if (value === null || value === undefined || value === "") return null;
+        if (typeof value === "number" || /^\d+$/.test(String(value))) {
+          const raw = Number(value);
+          const millis = raw < 1e12 ? raw * 1000 : raw;
+          const numericDate = new Date(millis);
+          return Number.isNaN(numericDate.getTime()) ? null : numericDate;
+        }
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? null : date;
+      }
+
+      const dateFormatter = new Intl.DateTimeFormat("zh-CN", {
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false
+      });
+
+      function formatDate(value) {
+        const date = parseDate(value);
+        return date ? dateFormatter.format(date) : "—";
+      }
+
+      function formatDuration(value) {
+        if (value === null || value === undefined || value === "") return "—";
+        const milliseconds = safeNumber(value, -1);
+        if (milliseconds < 0) return "—";
+        if (milliseconds < 1000) return `${Math.round(milliseconds)} ms`;
+        if (milliseconds < 60000) return `${(milliseconds / 1000).toFixed(milliseconds < 10000 ? 1 : 0)} s`;
+        return `${(milliseconds / 60000).toFixed(1)} min`;
+      }
+
+      function normalizeAgent(raw) {
+        const slug = safeString(raw && raw.slug);
+        const endpoint = safeString(raw && raw.endpoint) || (slug ? `/agent/${encodeURIComponent(slug)}` : "—");
+        return Object.freeze({
+          slug,
+          name: safeString(raw && raw.name, slug || t("agent.unnamed")),
+          description: safeString(raw && raw.description),
+          enabled: Boolean(raw && raw.enabled),
+          executor_kind: safeString(raw && raw.executor_kind, "pi"),
+          execution_mode: safeString(raw && raw.execution_mode, "gateway"),
+          signature_encoding: safeString(raw && raw.signature_encoding, "hex"),
+          signing_secret_hint: safeString(raw && raw.signing_secret_hint),
+          endpoint,
+          system_prompt: safeString(raw && raw.system_prompt),
+          workspace_path: safeString(raw && raw.workspace_path, "."),
+          claude_model: typeof (raw && raw.claude_model) === "string" ? raw.claude_model : null,
+          allowed_tools: Array.isArray(raw && raw.allowed_tools) ? raw.allowed_tools.filter((item) => typeof item === "string").slice(0, 64) : [],
+          permission_mode: safeString(raw && raw.permission_mode, "dontAsk"),
+          timeout_secs: safeNumber(raw && raw.timeout_secs, 600),
+          max_concurrency: safeNumber(raw && raw.max_concurrency, 1),
+          queue_capacity: safeNumber(raw && raw.queue_capacity, 10),
+          revision: safeNumber(raw && raw.revision, 0),
+          updated_at: raw && raw.updated_at
+        });
+      }
+
+      function normalizeRun(raw) {
+        return Object.freeze({
+          run_id: safeString(raw && raw.run_id),
+          agent_slug: safeString(raw && raw.agent_slug),
+          agent_revision: safeNumber(raw && raw.agent_revision, 0),
+          executor_kind: safeString(raw && raw.executor_kind),
+          execution_mode: safeString(raw && raw.execution_mode),
+          status: safeString(raw && raw.status, "unknown"),
+          duration_ms: raw && raw.duration_ms,
+          error_code: typeof (raw && raw.error_code) === "string" ? raw.error_code : null,
+          response_code: raw && raw.response_code != null ? safeNumber(raw.response_code, null) : null,
+          input: safeString(raw && raw.input),
+          executor_output: safeString(raw && (raw.executor_output ?? raw.executorOutput)),
+          output: safeString(raw && raw.output),
+          created_at: raw && raw.created_at,
+          completed_at: raw && raw.completed_at
+        });
+      }
+
+      function collectionFromData(data, key) {
+        if (Array.isArray(data)) return data;
+        if (data && Array.isArray(data[key])) return data[key];
+        throw new ApiError(fmt("err.invalidFormat", { key }), 0, "INVALID_RESPONSE");
+      }
+
+      async function apiRequest(path, options = {}) {
+        const method = (options.method || "GET").toUpperCase();
+        const headers = new Headers({ Accept: "application/json" });
+        if (options.body !== undefined) headers.set("Content-Type", "application/json");
+        if (["POST", "PUT", "DELETE"].includes(method) && path !== API.login) {
+          headers.set("X-CSRF-Token", state.session ? state.session.csrfToken : "");
+        }
+
+        let response;
+        try {
+          response = await fetch(path, {
+            method,
+            headers,
+            credentials: "same-origin",
+            cache: "no-store",
+            body: options.body === undefined ? undefined : JSON.stringify(options.body)
+          });
+        } catch (_error) {
+          throw new ApiError(t("err.network"), 0, "NETWORK_ERROR");
+        }
+
+        let payload = null;
+        const contentType = response.headers.get("content-type") || "";
+        if (contentType.includes("application/json")) {
+          try {
+            payload = await response.json();
+          } catch (_error) {
+            throw new ApiError(t("err.invalidJson"), response.status, "INVALID_JSON");
+          }
+        }
+
+        if (response.status === 401 && path !== API.login && options.authRedirect !== false) {
+          handleUnauthorized();
+        }
+
+        if (!response.ok || (payload && payload.error)) {
+          const errorPayload = payload && payload.error;
+          const message = safeString(errorPayload && errorPayload.message) || fmt("err.httpStatus", { status: response.status });
+          const code = safeString(errorPayload && errorPayload.code, `HTTP_${response.status}`);
+          throw new ApiError(message, response.status, code);
+        }
+
+        if (!payload || !Object.prototype.hasOwnProperty.call(payload, "data")) {
+          throw new ApiError(t("err.missingData"), response.status, "INVALID_RESPONSE");
+        }
+        return payload.data;
+      }
+
+      function acceptSession(data) {
+        const username = safeString(data && data.username);
+        const csrfToken = safeString(data && data.csrfToken);
+        if (!username || !csrfToken) {
+          throw new ApiError(t("err.invalidSession"), 0, "INVALID_SESSION");
+        }
+        state.authEpoch += 1;
+        state.session = Object.freeze({ username, csrfToken, expiresAt: data.expiresAt });
+        state.authRedirecting = false;
+      }
+
+      function showView(name) {
+        bootView.hidden = name !== "boot";
+        loginView.hidden = name !== "login";
+        appView.hidden = name !== "app";
+        $("#skip-link").hidden = name !== "app";
+        bootView.setAttribute("aria-busy", String(name === "boot"));
+      }
+
+      function enterDashboard() {
+        showView("app");
+        clearLoginError();
+        loginForm.reset();
+        const username = state.session.username;
+        $("#sidebar-username").textContent = username;
+        $("#user-avatar").textContent = Array.from(username)[0] ? Array.from(username)[0].toUpperCase() : "A";
+        updateSessionClock();
+        window.clearInterval(state.sessionTimer);
+        state.sessionTimer = window.setInterval(updateSessionClock, 30000);
+        updateNetworkStatus();
+        switchSection("agents-section");
+      }
+
+      function clearSensitiveInputs() {
+        $("#login-password").value = "";
+        secretInput.value = "";
+        secretInput.type = "password";
+        $("#toggle-secret-button").textContent = t("secret.toggle.show");
+        $("#toggle-secret-button").setAttribute("aria-pressed", "false");
+        $("#toggle-secret-button").setAttribute("aria-label", t("secret.toggle.label"));
+      }
+
+      function resetAuthenticatedState() {
+        state.authEpoch += 1;
+        state.session = null;
+        state.agents = [];
+        state.runs = [];
+        state.agentsStatus = "idle";
+        state.runsStatus = "idle";
+        state.lastSync = null;
+        state.logoutSubmitting = false;
+        state.authRedirecting = false;
+        window.clearInterval(state.sessionTimer);
+        state.sessionTimer = null;
+        clearSensitiveInputs();
+        closeAgentDrawer(true);
+        closeDeleteModal(true);
+        closeRunPayload(true);
+        updateSummary();
+      }
+
+      function enterLoggedOut(message = "", options = {}) {
+        resetAuthenticatedState();
+        showView("login");
+        if (message) showLoginError(message, Boolean(options.canRetrySession));
+        else clearLoginError();
+        window.setTimeout(() => $("#login-username").focus(), 0);
+      }
+
+      function handleUnauthorized() {
+        if (state.authRedirecting) return;
+        state.authRedirecting = true;
+        enterLoggedOut(t("auth.expired"), { canRetrySession: false });
+        state.authRedirecting = true;
+        showToast(t("auth.expiredToast"), "error");
+      }
+
+      function updateSessionClock() {
+        if (!state.session) return;
+        const expiry = parseDate(state.session.expiresAt);
+        if (!expiry) return;
+        const remaining = expiry.getTime() - Date.now();
+        if (remaining <= 0) {
+          handleUnauthorized();
+          return;
+        }
+      }
+
+      function updateNetworkStatus() {
+        const online = navigator.onLine;
+        $("#network-dot").classList.toggle("offline", !online);
+        $("#network-label").textContent = online ? t("state.online") : t("state.offline");
+      }
+
+      function showToast(message, type = "info") {
+        const toast = makeElement("div", `toast ${type}`);
+        toast.setAttribute("role", type === "error" ? "alert" : "status");
+        const bar = makeElement("span", "toast-bar");
+        bar.setAttribute("aria-hidden", "true");
+        const copy = makeElement("div", "toast-copy");
+        const titles = { success: t("toast.success"), error: t("toast.error"), info: t("toast.info") };
+        copy.append(makeElement("strong", "", titles[type] || titles.info), makeElement("p", "", message));
+        const close = makeElement("button", "toast-close", t("toast.close"));
+        close.type = "button";
+        close.setAttribute("aria-label", t("toast.close.label"));
+        toast.append(bar, copy, close);
+        toastRegion.prepend(toast);
+
+        while (toastRegion.children.length > 4) toastRegion.lastElementChild.remove();
+        let timer = window.setTimeout(remove, type === "error" ? 6500 : 4500);
+        close.addEventListener("click", remove);
+        toast.addEventListener("mouseenter", () => window.clearTimeout(timer));
+        toast.addEventListener("mouseleave", () => { timer = window.setTimeout(remove, 1800); });
+
+        function remove() {
+          window.clearTimeout(timer);
+          if (!toast.isConnected) return;
+          toast.classList.add("leaving");
+          window.setTimeout(() => toast.remove(), reducedMotion.matches ? 0 : 170);
+        }
+      }
+
+      function renderSkeleton(panel, rows = 5) {
+        panel.replaceChildren();
+        panel.setAttribute("aria-busy", "true");
+        const wrap = makeElement("div", "skeleton-wrap");
+        for (let index = 0; index < rows; index += 1) {
+          const row = makeElement("div", "skeleton-row");
+          for (let column = 0; column < 5; column += 1) row.append(makeElement("span", "skeleton-line"));
+          wrap.append(row);
+        }
+        panel.append(wrap);
+      }
+
+      function renderPanelState(panel, kind, title, message, actionText, action) {
+        panel.replaceChildren();
+        panel.setAttribute("aria-busy", "false");
+        const outer = makeElement("div", `panel-state ${kind}`);
+        const inner = makeElement("div", "state-inner");
+        inner.append(makeElement("h3", "", title), makeElement("p", "", message));
+        if (actionText && action) {
+          const button = makeElement("button", "button ghost", actionText);
+          button.type = "button";
+          button.addEventListener("click", action);
+          inner.append(button);
+        }
+        outer.append(inner);
+        panel.append(outer);
+      }
+
+      async function loadAgents() {
+        const epoch = state.authEpoch;
+        state.agentsStatus = "loading";
+        renderSkeleton(agentsPanel, 5);
+        try {
+          const data = await apiRequest(API.agents);
+          if (epoch !== state.authEpoch || !state.session) return false;
+          state.agents = collectionFromData(data, "agents").map(normalizeAgent);
+          populateRunsRoleFilter();
+          syncRunsAgentFilter();
+          state.agentsStatus = "ready";
+          state.lastSync = new Date();
+          renderAgents();
+          updateSummary();
+          updateSyncMeta();
+          return true;
+        } catch (error) {
+          if (epoch !== state.authEpoch || !state.session) return false;
+          state.agentsStatus = "error";
+          renderPanelState(agentsPanel, "error", t("agents.loadError"), error.message, t("retry"), loadAgents);
+          updateSummary();
+          return false;
+        }
+      }
+
+      async function loadRuns(slug) {
+        // 无指定 Agent 时默认选中当前岗位的第一个智能体。
+        if (!slug && state.agents.length) {
+          slug = runAgentsForSelectedRole()[0]?.slug || null;
+          state.runsFilter = slug;
+        }
+        const epoch = state.authEpoch;
+        state.runsStatus = "loading";
+        renderSkeleton(runsPanel, 5);
+        try {
+          const url = slug ? `${API.runs}&slug=${encodeURIComponent(slug)}` : API.runs;
+          const [runsResult, cbResult, hbResult] = await Promise.allSettled([
+            apiRequest(url),
+            apiRequest(`${API.channelEvents}&type=callback${slug ? `&slug=${encodeURIComponent(slug)}` : ""}`),
+            apiRequest(`${API.channelEvents}&type=heartbeat${slug ? `&slug=${encodeURIComponent(slug)}` : ""}`)
+          ]);
+          if (epoch !== state.authEpoch || !state.session) return false;
+          state.runs = runsResult.status === "fulfilled" ? collectionFromData(runsResult.value, "runs").map(normalizeRun) : [];
+          state.callbacks = cbResult.status === "fulfilled" ? collectionFromData(cbResult.value, "data") : [];
+          state.heartbeats = hbResult.status === "fulfilled" ? collectionFromData(hbResult.value, "data") : [];
+          state.runsStatus = "ready";
+          state.lastSync = new Date();
+          renderRuns();
+          updateSummary();
+          updateSyncMeta();
+          return true;
+        } catch (error) {
+          if (epoch !== state.authEpoch || !state.session) return false;
+          state.runsStatus = "error";
+          renderPanelState(runsPanel, "error", t("runs.loadError"), error.message, t("retry"), () => loadRuns(state.runsFilter));
+          updateSummary();
+          return false;
+        }
+      }
+
+      async function refreshAll(options = {}) {
+        if (!state.session) return;
+        setBusy(refreshButton, true);
+        const agentsLoaded = await loadAgents();
+        const runsLoaded = await loadRuns(state.runsFilter);
+        setBusy(refreshButton, false);
+        const failed = !agentsLoaded || !runsLoaded;
+        if (!options.silent && !failed && state.session) showToast(t("sync.refreshed"), "success");
+      }
+
+      function updateSyncMeta() {
+        const text = state.lastSync ? fmt("sync.recent", { time: dateFormatter.format(state.lastSync) }) : t("topbar.sync.none");
+        const overview = $("#sync-meta");
+        if (overview) overview.textContent = text;
+        const agents = $("#agents-sync-meta");
+        if (agents) agents.textContent = text;
+      }
+
+      function updateSummary() {
+        const agentsReady = state.agentsStatus === "ready";
+        const runsReady = state.runsStatus === "ready";
+        $("#stat-total").textContent = agentsReady ? String(state.agents.length) : "—";
+        $("#stat-enabled").textContent = agentsReady ? String(state.agents.filter((agent) => agent.enabled).length) : "—";
+        $("#stat-running").textContent = runsReady ? String(state.runs.filter((run) => ["running", "queued"].includes(run.status.toLowerCase())).length) : "—";
+        $("#stat-failed").textContent = runsReady ? String(state.runs.filter((run) => ["failed", "error", "cancelled"].includes(run.status.toLowerCase())).length) : "—";
+      }
+
+      function statusPill(agent) {
+        const pill = makeElement("span", `status-pill${agent.enabled ? "" : " disabled"}`);
+        const dot = makeElement("i", "status-dot");
+        dot.setAttribute("aria-hidden", "true");
+        pill.append(dot, document.createTextNode(agent.enabled ? t("agent.enabled") : t("agent.disabled")));
+        return pill;
+      }
+
+      function actionButton(label, action, slug, variant = "ghost") {
+        const button = makeElement("button", `button ${variant} compact`, label);
+        button.type = "button";
+        button.dataset.agentAction = action;
+        button.dataset.slug = slug;
+        return button;
+      }
+
+      function executorLabel(kind) {
+        const labels = {
+          rust: "Rust",
+          claude_code: "Claude Code",
+          codex: "Codex",
+          reasonix: "Reasonix",
+          pi: "Pi",
+          deepseek_harness: "DeepSeek Harness",
+          goose: "Goose"
+        };
+        return labels[kind] || kind || (lang === "zh" ? "未配置" : "Not configured");
+      }
+
+      function executionModeLetter(mode) {
+        return mode === "local" ? "L" : "G";
+      }
+
+      function agentExecutorElement(agent) {
+        const mode = agent.execution_mode === "local" ? "local" : "gateway";
+        const wrapper = makeElement("span", "execution-agent");
+        const kind = makeElement("span", "kind-pill", executorLabel(agent.executor_kind));
+        const badge = makeElement("span", `execution-mode-badge ${mode}`, executionModeLetter(mode));
+        badge.title = mode === "local" ? "Local" : "Gateway";
+        badge.setAttribute("aria-label", mode === "local" ? "Local" : "Gateway");
+        wrapper.title = `${executorLabel(agent.executor_kind)} · ${mode === "local" ? "Local" : "Gateway"}`;
+        wrapper.append(kind, badge);
+        return wrapper;
+      }
+
+      function populateAgentFilters() {
+        const roleSelect = $("#agents-role-filter");
+        const executorSelect = $("#agents-executor-filter");
+        if (!roleSelect || !executorSelect) return;
+        $("#agents-role-filter-label").textContent = lang === "zh" ? "岗位" : "Role";
+        $("#agents-executor-filter-label").textContent = lang === "zh" ? "执行器" : "Executor";
+        const allLabel = lang === "zh" ? "全部" : "All";
+        const roleOptions = [...new Set(state.agents.map((agent) => agent.system_prompt || "__unconfigured__"))]
+          .map((value) => ({
+            value,
+            label: value === "__unconfigured__"
+              ? (lang === "zh" ? "未配置" : "Not configured")
+              : roleLabel(value)
+          }))
+          .sort((a, b) => a.label.localeCompare(b.label, lang === "zh" ? "zh-CN" : "en"));
+        const executorOptions = [...new Set(state.agents.map((agent) => agent.executor_kind).filter(Boolean))]
+          .sort((a, b) => executorLabel(a).localeCompare(executorLabel(b), lang === "zh" ? "zh-CN" : "en"));
+        if (state.agentsRoleFilter && !roleOptions.some((option) => option.value === state.agentsRoleFilter)) {
+          state.agentsRoleFilter = "";
+        }
+        if (state.agentsExecutorFilter && !executorOptions.includes(state.agentsExecutorFilter)) {
+          state.agentsExecutorFilter = "";
+        }
+        const roleAll = makeElement("option", "", allLabel);
+        roleAll.value = "";
+        roleSelect.replaceChildren(roleAll);
+        roleOptions.forEach(({ value, label }) => {
+          const option = makeElement("option", "", label);
+          option.value = value;
+          roleSelect.append(option);
+        });
+        roleSelect.value = state.agentsRoleFilter;
+        const executorAll = makeElement("option", "", allLabel);
+        executorAll.value = "";
+        executorSelect.replaceChildren(executorAll);
+        executorOptions.forEach((value) => {
+          const option = makeElement("option", "", executorLabel(value));
+          option.value = value;
+          executorSelect.append(option);
+        });
+        executorSelect.value = state.agentsExecutorFilter;
+      }
+
+      function filteredAgents() {
+        return state.agents.filter((agent) => {
+          const role = agent.system_prompt || "__unconfigured__";
+          return (!state.agentsRoleFilter || role === state.agentsRoleFilter)
+            && (!state.agentsExecutorFilter || agent.executor_kind === state.agentsExecutorFilter);
+        });
+      }
+
+      function clearAgentFilters() {
+        state.agentsRoleFilter = "";
+        state.agentsExecutorFilter = "";
+        state.agentsPage = 1;
+        renderAgents();
+      }
+
+      function renderAgentsPagination(totalEntries) {
+        const totalPages = Math.max(1, Math.ceil(totalEntries / state.agentsPageSize));
+        state.agentsPage = Math.min(Math.max(1, state.agentsPage), totalPages);
+        const pagination = makeElement("div", "runs-pagination");
+        const start = totalEntries ? (state.agentsPage - 1) * state.agentsPageSize + 1 : 0;
+        const end = Math.min(totalEntries, state.agentsPage * state.agentsPageSize);
+        const summary = makeElement(
+          "div",
+          "runs-page-summary",
+          lang === "zh"
+            ? `共 ${totalEntries} 个智能体 · 每页 30 条 · 第 ${state.agentsPage}/${totalPages} 页 · 当前 ${start}-${end}`
+            : `${totalEntries} agents · 30 per page · Page ${state.agentsPage}/${totalPages} · ${start}-${end}`
+        );
+        const controls = makeElement("div", "runs-page-controls");
+        const previous = makeElement("button", "runs-page-button", lang === "zh" ? "上一页" : "Prev");
+        previous.type = "button";
+        previous.disabled = state.agentsPage <= 1;
+        previous.dataset.agentsPage = String(state.agentsPage - 1);
+        controls.append(previous);
+
+        let lastPage = 0;
+        visiblePageNumbers(state.agentsPage, totalPages).forEach((page) => {
+          if (lastPage && page - lastPage > 1) controls.append(makeElement("span", "runs-page-summary", "…"));
+          const button = makeElement("button", `runs-page-button${page === state.agentsPage ? " active" : ""}`, page);
+          button.type = "button";
+          button.dataset.agentsPage = String(page);
+          button.setAttribute("aria-label", lang === "zh" ? `智能体列表第 ${page} 页` : `Agent list page ${page}`);
+          if (page === state.agentsPage) button.setAttribute("aria-current", "page");
+          controls.append(button);
+          lastPage = page;
+        });
+
+        const next = makeElement("button", "runs-page-button", lang === "zh" ? "下一页" : "Next");
+        next.type = "button";
+        next.disabled = state.agentsPage >= totalPages;
+        next.dataset.agentsPage = String(state.agentsPage + 1);
+        controls.append(next);
+        pagination.append(summary, controls);
+        return pagination;
+      }
+
+      function renderAgents() {
+        agentsPanel.setAttribute("aria-busy", "false");
+        populateAgentFilters();
+        if (!state.agents.length) {
+          renderPanelState(agentsPanel, "empty", t("agents.empty.title"), t("agents.empty.desc"), t("agents.empty.action"), openCreateDrawer);
+          return;
+        }
+        const visibleAgents = filteredAgents();
+        if (!visibleAgents.length) {
+          renderPanelState(
+            agentsPanel,
+            "empty",
+            lang === "zh" ? "没有符合条件的智能体" : "No matching agents",
+            lang === "zh" ? "请调整岗位或执行器筛选条件。" : "Change the role or executor filters.",
+            lang === "zh" ? "清除筛选" : "Clear filters",
+            clearAgentFilters
+          );
+          return;
+        }
+        const totalPages = Math.max(1, Math.ceil(visibleAgents.length / state.agentsPageSize));
+        state.agentsPage = Math.min(Math.max(1, state.agentsPage), totalPages);
+        const pageStart = (state.agentsPage - 1) * state.agentsPageSize;
+        const pageAgents = visibleAgents.slice(pageStart, pageStart + state.agentsPageSize);
+        agentsPanel.replaceChildren();
+
+        const desktop = makeElement("div", "table-scroll desktop-only");
+        const table = makeElement("table", "agents-table");
+        const caption = makeElement("caption", "sr-only", t("agents.caption"));
+        const head = document.createElement("thead");
+        const headRow = document.createElement("tr");
+        [t("th.agent"), t("th.public"), t("th.status"), t("th.executor"), t("th.capacity"), t("th.revision"), t("th.updated"), t("th.actions")].forEach((label) => headRow.append(makeElement("th", "", label)));
+        head.append(headRow);
+        const body = document.createElement("tbody");
+
+        pageAgents.forEach((agent) => {
+          const row = document.createElement("tr");
+          row.dataset.agentRuns = agent.slug;
+          row.classList.add("agent-runs-row");
+          const primaryCell = document.createElement("td");
+          const primary = makeElement("div", "agent-primary");
+          const promptLabel = makeElement("span", "agent-role", roleLabel(agent.system_prompt));
+          promptLabel.title = agent.system_prompt || "";
+          primary.append(makeElement("strong", "", agent.name), promptLabel);
+          primaryCell.append(primary);
+
+          // 公开接口列(第二列,往左紧贴 Agent 列)。
+          const endpointCell = makeElement("td", "endpoint-cell");
+          const endpoint = makeElement("code", "endpoint", agent.endpoint);
+          endpoint.title = agent.endpoint;
+          const endpointActions = makeElement("div", "inline-actions");
+          const copyRoute = makeElement("button", "text-action", t("action.copyRoute"));
+          copyRoute.type = "button";
+          copyRoute.dataset.agentAction = "copy";
+          copyRoute.dataset.slug = agent.slug;
+          endpointActions.append(copyRoute);
+          endpointCell.append(endpoint, endpointActions);
+
+          const statusCell = document.createElement("td");
+          statusCell.append(statusPill(agent));
+          const kindCell = document.createElement("td");
+          kindCell.append(agentExecutorElement(agent));
+          const capacityCell = document.createElement("td");
+          const capacity = makeElement("div", "capacity", fmt("capacity.concurrent", { n: agent.max_concurrency }));
+          capacity.append(makeElement("span", "", fmt("capacity.queue", { n: agent.queue_capacity })));
+          capacityCell.append(capacity);
+          const revisionCell = document.createElement("td");
+          revisionCell.append(makeElement("span", "revision", fmt("revision.label", { n: agent.revision })), makeElement("span", "secret-hint", agent.signing_secret_hint || t("secret.configured")));
+          const updatedCell = makeElement("td", "date-cell", formatDate(agent.updated_at));
+          const actionsCell = document.createElement("td");
+          const actions = makeElement("div", "row-actions");
+          actions.append(actionButton(t("action.edit"), "edit", agent.slug), actionButton(t("action.delete"), "delete", agent.slug, "danger"));
+          actionsCell.append(actions);
+          row.append(primaryCell, endpointCell, statusCell, kindCell, capacityCell, revisionCell, updatedCell, actionsCell);
+          body.append(row);
+        });
+        table.append(caption, head, body);
+        desktop.append(table);
+
+        const cards = makeElement("div", "agent-cards");
+        pageAgents.forEach((agent) => {
+          const card = makeElement("article", "agent-card");
+          card.dataset.agentRuns = agent.slug;
+          card.classList.add("agent-runs-card");
+          const cardHead = makeElement("div", "agent-card-head");
+          const identity = makeElement("div", "");
+          const cardRole = makeElement("span", "agent-role", roleLabel(agent.system_prompt));
+          cardRole.title = agent.system_prompt || "";
+          identity.append(makeElement("strong", "", agent.name), cardRole);
+          cardHead.append(identity, statusPill(agent));
+          const route = makeElement("div", "agent-card-route");
+          const routeCode = makeElement("code", "", agent.endpoint);
+          routeCode.title = agent.endpoint;
+          route.append(routeCode);
+          const grid = makeElement("div", "agent-card-grid");
+          [
+            [t("th.executor"), `${executorLabel(agent.executor_kind)} · ${executionModeLetter(agent.execution_mode)}`],
+            [t("detail.capacity"), fmt("capacity.value", { c: agent.max_concurrency, q: agent.queue_capacity })],
+            [t("detail.revision"), fmt("revision.full", { n: agent.revision, hint: agent.signing_secret_hint || t("secret.configuredShort") })],
+            [t("th.updated"), formatDate(agent.updated_at)]
+          ].forEach(([label, value]) => {
+            const meta = makeElement("div", "agent-card-meta");
+            meta.append(makeElement("span", "", label), makeElement("b", "", value));
+            grid.append(meta);
+          });
+          const actions = makeElement("div", "agent-card-actions");
+          actions.append(actionButton(t("action.copyUrl"), "copy", agent.slug), actionButton(t("action.edit"), "edit", agent.slug), actionButton(t("action.delete"), "delete", agent.slug, "danger"));
+          card.append(cardHead, route, grid, actions);
+          cards.append(card);
+        });
+        agentsPanel.append(desktop, cards, renderAgentsPagination(visibleAgents.length));
+      }
+
+      function roleLabel(prompt) {
+        const roles = {
+          fundamental_analyst: ["基本面分析师", "Fundamental Analyst"],
+          technical_analyst: ["技术分析师", "Technical Analyst"],
+          strategist: ["策略分析师", "Strategist"],
+          portfolio_manager: ["投资组合经理", "Portfolio Manager"],
+          risk_manager: ["风控经理", "Risk Manager"],
+          execution_trader: ["执行交易员", "Execution Trader"]
+        };
+        return roles[prompt]
+          ? roles[prompt][lang === "zh" ? 0 : 1]
+          : prompt || (lang === "zh" ? "未配置" : "Not configured");
+      }
+
+      function shortRunId(runId) {
+        if (!runId || runId.length <= 16) return runId || "—";
+        return `${runId.slice(0, 8)}...${runId.slice(-4)}`;
+      }
+
+      function runRoleValue(agent) {
+        return agent.system_prompt || "__unconfigured__";
+      }
+
+      function runAgentsForSelectedRole() {
+        return state.agents.filter((agent) => !state.runsRoleFilter || runRoleValue(agent) === state.runsRoleFilter);
+      }
+
+      function populateRunsRoleFilter() {
+        const select = $("#runs-role-filter");
+        if (!select) return;
+        $("#runs-role-filter-label").textContent = lang === "zh" ? "岗位" : "Role";
+        const roleOptions = [...new Set(state.agents.map(runRoleValue))]
+          .map((value) => ({
+            value,
+            label: value === "__unconfigured__"
+              ? (lang === "zh" ? "未配置" : "Not configured")
+              : roleLabel(value)
+          }))
+          .sort((a, b) => a.label.localeCompare(b.label, lang === "zh" ? "zh-CN" : "en"));
+        if (state.runsRoleFilter && !roleOptions.some((option) => option.value === state.runsRoleFilter)) {
+          state.runsRoleFilter = "";
+        }
+        const all = makeElement("option", "", lang === "zh" ? "全部" : "All");
+        all.value = "";
+        select.replaceChildren(all);
+        roleOptions.forEach(({ value, label }) => {
+          const option = makeElement("option", "", label);
+          option.value = value;
+          select.append(option);
+        });
+        select.value = state.runsRoleFilter;
+      }
+
+      function syncRunsAgentFilter() {
+        const select = $("#runs-agent-filter");
+        if (!select) return null;
+        const agents = runAgentsForSelectedRole();
+        if (!agents.some((agent) => agent.slug === state.runsFilter)) {
+          state.runsFilter = agents[0]?.slug || null;
+        }
+        select.replaceChildren();
+        agents.forEach((agent) => {
+          const option = makeElement("option", "", agent.slug);
+          option.value = agent.slug;
+          select.append(option);
+        });
+        select.disabled = agents.length === 0;
+        select.value = state.runsFilter || "";
+        return state.runsFilter;
+      }
+
+      function populateAgentFilter() {
+        syncRunsAgentFilter();
+      }
+
+      function baseRunEntries() {
+        const pushTasks = state.runs.map((run) => ({
+          type: "task",
+          runId: run.run_id || "",
+          agentSlug: run.agent_slug || "—",
+          executorKind: run.executor_kind || "",
+          executionMode: run.execution_mode || "",
+          status: run.status || "—",
+          duration: formatDuration(run.duration_ms),
+          responseCode: run.response_code != null ? String(run.response_code) : "",
+          input: run.input || "",
+          executorOutput: run.executor_output || "",
+          output: run.output || "",
+          createdAt: run.created_at,
+          completedAt: run.completed_at
+        }));
+        const callbacks = state.callbacks.map((cb) => ({
+          type: "callback",
+          runId: cb.runId || cb.run_id || "",
+          agentSlug: cb.agentSlug || cb.agent_slug || "—",
+          executorKind: "",
+          executionMode: "",
+          status: cb.accepted ? "accepted" : "rejected",
+          duration: cb.latencyMs != null ? formatDuration(cb.latencyMs) : "—",
+          responseCode: cb.statusCode != null ? String(cb.statusCode) : "",
+          input: cb.input || "",
+          executorOutput: "",
+          output: cb.output || "",
+          createdAt: cb.createdAt || cb.created_at,
+          completedAt: cb.createdAt || cb.created_at
+        }));
+        const heartbeats = state.heartbeats.map((hb) => ({
+          type: "heartbeat",
+          runId: "",
+          agentSlug: hb.agentSlug || hb.agent_slug || "—",
+          executorKind: "",
+          executionMode: "",
+          status: hb.pass ? "ok" : (hb.pass === false ? "fail" : "ok"),
+          duration: hb.latencyMs != null ? formatDuration(hb.latencyMs) : "—",
+          responseCode: hb.statusCode != null ? String(hb.statusCode) : "",
+          input: hb.input || "",
+          executorOutput: "",
+          output: hb.output || "",
+          createdAt: hb.createdAt || hb.created_at,
+          completedAt: hb.createdAt || hb.created_at
+        }));
+        return [...pushTasks, ...callbacks, ...heartbeats].sort((a, b) =>
+          String(b.createdAt || "").localeCompare(String(a.createdAt || ""))
+        );
+      }
+
+      function mergedRunEntries() {
+        let entries = baseRunEntries();
+        if (state.runsTypeFilter) {
+          entries = entries.filter((entry) => entry.type === state.runsTypeFilter);
+        }
+        if (state.runsStatusFilter === "success") {
+          entries = entries.filter(isSuccessfulEntry);
+        }
+        if (state.runsStatusFilter === "failed") {
+          entries = entries.filter(isFailedEntry);
+        }
+        return entries;
+      }
+
+      // 成功率:按当前「岗位 / 智能体 / 接口类型」范围统计;状态筛选只影响列表
+      // 显示,不改变成功率的分母。分母包含状态未知的历史记录。
+      function renderSuccessRate() {
+        const target = document.getElementById("runs-success-rate");
+        if (!target) return;
+        let entries = baseRunEntries();
+        if (state.runsTypeFilter) {
+          entries = entries.filter((entry) => entry.type === state.runsTypeFilter);
+        }
+        if (!entries.length) {
+          target.textContent = "—";
+          target.className = "runs-success-rate";
+          target.removeAttribute("title");
+          return;
+        }
+        const succeeded = entries.filter(isSuccessfulEntry).length;
+        const rate = (succeeded / entries.length) * 100;
+        target.textContent = `${rate.toFixed(1)}% · ${succeeded}/${entries.length}`;
+        target.className = `runs-success-rate ${rate >= 90 ? "good" : rate >= 70 ? "warn" : "bad"}`;
+        target.title = lang === "zh"
+          ? `当前筛选范围内成功 ${succeeded} / 共 ${entries.length} 条（最近 200 条窗口）`
+          : `${succeeded} of ${entries.length} succeeded in the current filter scope (last 200 records)`;
+      }
+
+      // 成功/失败判定与状态筛选同口径:task=completed/failed,
+      // callback=accepted/rejected,heartbeat=ok/fail;未知状态不归入任何一侧。
+      function isSuccessfulEntry(entry) {
+        const status = String(entry.status).toLowerCase();
+        if (entry.type === "task") return status === "completed";
+        if (entry.type === "callback") return status === "accepted";
+        return status === "ok";
+      }
+
+      function isFailedEntry(entry) {
+        const status = String(entry.status).toLowerCase();
+        if (entry.type === "task") return status === "failed";
+        if (entry.type === "callback") return status === "rejected";
+        return status === "fail";
+      }
+
+      function executionAgentCell(entry) {
+        const cell = document.createElement("td");
+        if (entry.type !== "task") {
+          const channel = makeElement("span", "execution-agent-unknown", lang === "zh" ? "通道事件" : "Channel event");
+          channel.title = lang === "zh" ? "Callback / Heartbeat 不会启动 Agent 执行器" : "Callback / Heartbeat does not start an Agent executor";
+          cell.append(channel);
+          return cell;
+        }
+        if (!entry.executorKind || !entry.executionMode) {
+          const unknown = makeElement("span", "execution-agent-unknown", lang === "zh" ? "历史未知" : "Unknown (legacy)");
+          unknown.title = lang === "zh" ? "该记录创建时尚未保存执行器快照" : "This run predates executor snapshots";
+          cell.append(unknown);
+          return cell;
+        }
+        const names = {
+          rust: "Rust",
+          claude_code: "Claude",
+          codex: "Codex",
+          reasonix: "Reasonix",
+          pi: "Pi",
+          deepseek_harness: "DeepSeek",
+          goose: "Goose"
+        };
+        const mode = entry.executionMode === "local" ? "local" : "gateway";
+        const wrapper = makeElement("span", "execution-agent");
+        const name = makeElement("span", "execution-agent-name", names[entry.executorKind] || entry.executorKind);
+        const badge = makeElement("span", `execution-mode-badge ${mode}`, mode === "local" ? "L" : "G");
+        badge.title = mode === "local" ? "Local" : "Gateway";
+        badge.setAttribute("aria-label", mode === "local" ? "Local" : "Gateway");
+        wrapper.title = `${names[entry.executorKind] || entry.executorKind} · ${mode === "local" ? "Local" : "Gateway"}`;
+        wrapper.append(name, badge);
+        cell.append(wrapper);
+        return cell;
+      }
+
+      function payloadCell(raw, runId, kind, collapsedLabel) {
+        const cell = document.createElement("td");
+        if (!raw) {
+          cell.append(makeElement("span", "payload-empty", lang === "zh" ? "暂无数据" : "No data"));
+          return cell;
+        }
+        const fallbackLabel = kind === "input"
+          ? (lang === "zh" ? "查看输入 JSON" : "View input JSON")
+          : kind === "executor"
+            ? (lang === "zh" ? "查看节点结果" : "View executor result")
+            : kind === "output"
+              ? (lang === "zh" ? "查看输出 JSON" : "View output JSON")
+              : (lang === "zh" ? "查看响应码" : "View response code");
+        const link = makeElement("button", "run-payload-link", collapsedLabel || fallbackLabel);
+        link.type = "button";
+        link.title = lang === "zh" ? "点击查看完整 JSON" : "Click to view complete JSON";
+        link.dataset.runPayload = kind;
+        link.dataset.runId = runId || "";
+        link.dataset.runRaw = raw;
+        cell.append(link);
+        return cell;
+      }
+
+      function showRunPayload(runId, kind, raw) {
+        if (!raw) {
+          const run = state.runs.find((item) => item.run_id === runId);
+          if (!run) return;
+          if (kind === "input") raw = run.input;
+          else if (kind === "executor") raw = run.executor_output;
+          else if (kind === "output") raw = run.output;
+          else if (run.response_code != null) raw = JSON.stringify({ responseCode: run.response_code });
+        }
+        if (!raw) return;
+        let formatted = raw;
+        try {
+          formatted = JSON.stringify(JSON.parse(raw), null, 2);
+        } catch (error) {
+          // 非 JSON(如原始文本)原样展示
+        }
+        const kindLabel = $("#run-payload-kind");
+        if (kindLabel) {
+          kindLabel.textContent = kind === "input"
+            ? t("th.input")
+            : kind === "executor"
+              ? (lang === "zh" ? "执行节点结果" : "Executor result")
+              : kind === "output"
+                ? t("th.output")
+                : t("th.responseCode");
+        }
+        const title = $("#run-payload-title");
+        if (title) title.textContent = `${t("runPayload.title")} · ${shortRunId(runId)}`;
+        const content = $("#run-payload-content");
+        if (content) {
+          content.textContent = formatted;
+          content.dataset.copyText = formatted;
+        }
+        state.lastFocus = document.activeElement;
+        state.runPayloadOpen = true;
+        runPayloadLayer.hidden = false;
+        runPayloadLayer.setAttribute("aria-hidden", "false");
+        appView.inert = true;
+        document.body.classList.add("overlay-open");
+        window.requestAnimationFrame(() => runPayloadLayer.classList.add("open"));
+        window.setTimeout(() => runPayloadModal.focus(), reducedMotion.matches ? 0 : 190);
+      }
+
+      function closeRunPayload(immediate = false) {
+        if (!state.runPayloadOpen && runPayloadLayer.hidden) return;
+        state.runPayloadOpen = false;
+        runPayloadLayer.classList.remove("open");
+        const content = $("#run-payload-content");
+        if (content) {
+          content.textContent = "";
+          delete content.dataset.copyText;
+        }
+        const finish = () => {
+          runPayloadLayer.hidden = true;
+          runPayloadLayer.setAttribute("aria-hidden", "true");
+          if (!state.drawerOpen && !state.deleteOpen) {
+            appView.inert = false;
+            document.body.classList.remove("overlay-open");
+          }
+          if (!immediate && state.lastFocus && document.contains(state.lastFocus)) {
+            state.lastFocus.focus();
+          }
+        };
+        window.setTimeout(finish, immediate || reducedMotion.matches ? 0 : 190);
+      }
+
+      function visiblePageNumbers(current, total) {
+        if (total <= 7) return Array.from({ length: total }, (_, index) => index + 1);
+        const pages = new Set([1, total]);
+        for (let page = Math.max(2, current - 2); page <= Math.min(total - 1, current + 2); page += 1) {
+          pages.add(page);
+        }
+        return [...pages].sort((a, b) => a - b);
+      }
+
+      function renderRunsPagination(totalEntries) {
+        const totalPages = Math.max(1, Math.ceil(totalEntries / state.runsPageSize));
+        state.runsPage = Math.min(Math.max(1, state.runsPage), totalPages);
+        const pagination = makeElement("div", "runs-pagination");
+        const start = totalEntries ? (state.runsPage - 1) * state.runsPageSize + 1 : 0;
+        const end = Math.min(totalEntries, state.runsPage * state.runsPageSize);
+        const summary = makeElement(
+          "div",
+          "runs-page-summary",
+          lang === "zh"
+            ? `共 ${totalEntries} 条 · 第 ${state.runsPage}/${totalPages} 页 · 当前 ${start}-${end}`
+            : `${totalEntries} records · Page ${state.runsPage}/${totalPages} · ${start}-${end}`
+        );
+        const controls = makeElement("div", "runs-page-controls");
+        const previous = makeElement("button", "runs-page-button", lang === "zh" ? "上一页" : "Prev");
+        previous.type = "button";
+        previous.disabled = state.runsPage <= 1;
+        previous.dataset.runsPage = String(state.runsPage - 1);
+        controls.append(previous);
+
+        let lastPage = 0;
+        visiblePageNumbers(state.runsPage, totalPages).forEach((page) => {
+          if (lastPage && page - lastPage > 1) controls.append(makeElement("span", "runs-page-summary", "…"));
+          const button = makeElement("button", `runs-page-button${page === state.runsPage ? " active" : ""}`, page);
+          button.type = "button";
+          button.dataset.runsPage = String(page);
+          button.setAttribute("aria-label", lang === "zh" ? `第 ${page} 页` : `Page ${page}`);
+          if (page === state.runsPage) button.setAttribute("aria-current", "page");
+          controls.append(button);
+          lastPage = page;
+        });
+
+        const next = makeElement("button", "runs-page-button", lang === "zh" ? "下一页" : "Next");
+        next.type = "button";
+        next.disabled = state.runsPage >= totalPages;
+        next.dataset.runsPage = String(state.runsPage + 1);
+        const pageSize = makeElement("select", "runs-page-size");
+        pageSize.setAttribute("aria-label", lang === "zh" ? "每页条数" : "Rows per page");
+        [10, 20, 50].forEach((size) => {
+          const option = makeElement("option", "", lang === "zh" ? `${size} 条/页` : `${size} / page`);
+          option.value = String(size);
+          option.selected = size === state.runsPageSize;
+          pageSize.append(option);
+        });
+        pageSize.dataset.runsPageSize = "true";
+        controls.append(next, pageSize);
+        pagination.append(summary, controls);
+        return pagination;
+      }
+
+      function renderRuns() {
+        runsPanel.setAttribute("aria-busy", "false");
+        populateRunsRoleFilter();
+        renderSuccessRate();
+        const entries = mergedRunEntries();
+        if (!entries.length) {
+          renderPanelState(runsPanel, "empty", t("runs.empty.title"), t("runs.empty.desc"), t("runs.empty.action"), () => loadRuns(state.runsFilter));
+          return;
+        }
+        runsPanel.replaceChildren();
+        const scroll = makeElement("div", "table-scroll");
+        const table = makeElement("table", "runs-table");
+        const caption = makeElement("caption", "sr-only", t("runs.caption"));
+        const head = document.createElement("thead");
+        const headRow = document.createElement("tr");
+        [t("th.runId"), t("th.type"), lang === "zh" ? "执行 Agent" : "Execution Agent", t("th.status"), t("th.duration"), t("th.responseCode"), t("th.input"), lang === "zh" ? "执行节点结果" : "Executor result", t("th.output"), t("th.started"), t("th.finished")].forEach((label) => headRow.append(makeElement("th", "", label)));
+        head.append(headRow);
+        const body = document.createElement("tbody");
+        populateAgentFilter();
+        const totalPages = Math.max(1, Math.ceil(entries.length / state.runsPageSize));
+        state.runsPage = Math.min(Math.max(1, state.runsPage), totalPages);
+        const pageStart = (state.runsPage - 1) * state.runsPageSize;
+        entries.slice(pageStart, pageStart + state.runsPageSize).forEach((entry) => {
+          const row = document.createElement("tr");
+          const statusClass = String(entry.status).toLowerCase().replace(/[^a-z0-9_-]/g, "");
+          // 运行 ID:短显示 xxx...xxx,title 完整,点击复制。
+          const runIdCell = makeElement("td", "run-id", shortRunId(entry.runId));
+          runIdCell.title = entry.runId || "";
+          if (entry.runId) runIdCell.dataset.copyRunId = entry.runId;
+          row.append(
+            runIdCell,
+            makeElement("td", "mono type-pill", entry.type),
+            executionAgentCell(entry)
+          );
+          const statusCell = document.createElement("td");
+          statusCell.append(makeElement("span", `run-pill ${statusClass}`, entry.status));
+          const inputCell = payloadCell(entry.input, entry.runId, "input");
+          const executorOutputCell = payloadCell(entry.executorOutput, entry.runId, "executor");
+          const outputCell = payloadCell(entry.output, entry.runId, "output");
+          const responseRaw = entry.responseCode
+            ? JSON.stringify({ responseCode: Number(entry.responseCode) || entry.responseCode })
+            : "";
+          const responseCell = payloadCell(
+            responseRaw,
+            entry.runId,
+            "response",
+            entry.responseCode ? `HTTP ${entry.responseCode}` : null
+          );
+          row.append(
+            statusCell,
+            makeElement("td", "mono", entry.duration),
+            responseCell,
+            inputCell,
+            executorOutputCell,
+            outputCell,
+            makeElement("td", "date-cell", formatDate(entry.createdAt)),
+            makeElement("td", "date-cell", formatDate(entry.completedAt))
+          );
+          body.append(row);
+        });
+        table.append(caption, head, body);
+        scroll.append(table);
+        runsPanel.append(scroll, renderRunsPagination(entries.length));
+      }
+
+      async function copyText(text) {
+        if (!text) throw new Error(t("copy.empty"));
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(text);
+          return;
+        }
+        const area = document.createElement("textarea");
+        area.value = text;
+        area.setAttribute("readonly", "");
+        area.style.position = "fixed";
+        area.style.opacity = "0";
+        area.style.pointerEvents = "none";
+        document.body.append(area);
+        area.select();
+        const copied = document.execCommand("copy");
+        area.remove();
+        if (!copied) throw new Error(t("copy.denied"));
+      }
+
+      function findAgent(slug) {
+        return state.agents.find((agent) => agent.slug === slug) || null;
+      }
+
+      async function handleAgentAction(event) {
+        const button = event.target.closest("[data-agent-action]");
+        if (!button || !agentsPanel.contains(button)) return;
+        const agent = findAgent(button.dataset.slug);
+        if (!agent) {
+          showToast(t("agents.stale"), "error");
+          return;
+        }
+        const action = button.dataset.agentAction;
+        if (action === "edit") openEditDrawer(agent);
+        if (action === "delete") openDeleteModal(agent);
+        if (action === "copy") {
+          try {
+            await copyText(agent.endpoint);
+            showToast(t("copy.routeOk"), "success");
+          } catch (error) {
+            showToast(error.message || t("copy.failed"), "error");
+          }
+        }
+      }
+
+      function setFormValue(name, value) {
+        const control = agentForm.elements.namedItem(name);
+        if (!control) return;
+        if (control.type === "checkbox") control.checked = Boolean(value);
+        else control.value = value === null || value === undefined ? "" : String(value);
+      }
+
+      // 提示词下拉:预置岗位只能选;已保存的非预置提示词(历史数据)回显到自定义项。
+      function syncPromptSelect(value) {
+        const select = $("#agent-system-prompt");
+        const custom = $("#custom-prompt-option");
+        const preset = Array.from(select.options).some((o) => o !== custom && o.value === value);
+        if (preset) {
+          custom.hidden = true;
+          select.value = value;
+        } else if (value) {
+          custom.value = value;
+          custom.textContent = "自定义（已保存）";
+          custom.hidden = false;
+          select.value = value;
+        } else {
+          custom.hidden = true;
+          select.value = "fundamental_analyst";
+        }
+      }
+
+      const LOCAL_EXECUTORS = new Set(["pi", "reasonix", "codex", "claude_code"]);
+
+      function ensureLegacyExecutorOption(executorKind) {
+        const select = $("#agent-executor-kind");
+        select.querySelector("[data-legacy-executor]")?.remove();
+        if (!executorKind || Array.from(select.options).some((option) => option.value === executorKind)) return;
+        const option = makeElement("option", "", executorLabel(executorKind));
+        option.value = executorKind;
+        option.dataset.legacyExecutor = "true";
+        option.hidden = true;
+        select.append(option);
+      }
+
+      function syncExecutionModeControl(resetToRemote = false) {
+        const executor = $("#agent-executor-kind").value;
+        const mode = $("#agent-execution-mode");
+        const gatewayOption = $("#agent-execution-gateway-option");
+        const localOption = $("#agent-execution-local-option");
+        const label = $("#agent-execution-mode-label");
+        const supportsLocal = LOCAL_EXECUTORS.has(executor);
+
+        if (resetToRemote || !supportsLocal) mode.value = "gateway";
+        mode.disabled = !supportsLocal;
+        localOption.hidden = !supportsLocal;
+        label.textContent = lang === "zh" ? "执行位置" : "Execution location";
+
+        gatewayOption.textContent = lang === "zh" ? "远端网关（默认）" : "Remote gateway (default)";
+        if (!supportsLocal) return;
+
+        const executorName = executor === "reasonix"
+          ? "Reasonix"
+          : executor === "pi"
+            ? "Pi"
+            : executor === "claude_code"
+              ? "Claude Code"
+              : "Codex";
+        localOption.textContent = lang === "zh"
+          ? `本机 Local（启动 ${executorName} CLI）`
+          : `Local (${executorName} CLI)`;
+      }
+
+      function resetAgentForm() {
+        ensureLegacyExecutorOption("");
+        agentForm.reset();
+        setFormValue("workspace_path", ".");
+        setFormValue("timeout_secs", 600);
+        setFormValue("max_concurrency", 1);
+        setFormValue("queue_capacity", 10);
+        setFormValue("enabled", true);
+        $("#enabled-label").textContent = t("agent.enabled");
+        setFormValue("executor_kind", "pi");
+        setFormValue("execution_mode", "gateway");
+        syncExecutionModeControl(false);
+        setFormValue("claude_model", "deepseek-v4-flash");
+        setFormValue("signature_encoding", "hex");
+        setFormValue("permission_mode", "dontAsk");
+        setFormValue("system_prompt", "fundamental_analyst");
+        $("#agent-slug").readOnly = false;
+        secretInput.required = true;
+        secretInput.value = "";
+        secretInput.type = "password";
+        $("#secret-required-mark").hidden = false;
+        $("#toggle-secret-button").textContent = t("secret.toggle.show");
+        $("#toggle-secret-button").setAttribute("aria-pressed", "false");
+        $("#toggle-secret-button").setAttribute("aria-label", t("secret.toggle.label"));
+        $("#secret-help").textContent = t("drawer.secret.help.create");
+        agentFormError.hidden = true;
+        agentFormError.textContent = "";
+        Array.from(agentForm.elements).forEach((control) => {
+          if (typeof control.setCustomValidity === "function") control.setCustomValidity("");
+        });
+      }
+
+      function openCreateDrawer() {
+        state.formMode = "create";
+        state.editingSlug = null;
+        resetAgentForm();
+        $("#drawer-title").textContent = t("drawer.title.create");
+        saveAgentButton.textContent = t("drawer.title.create");
+        showDrawer();
+        window.setTimeout(() => $("#agent-slug").focus(), reducedMotion.matches ? 0 : 230);
+      }
+
+      function openEditDrawer(agent) {
+        state.formMode = "edit";
+        state.editingSlug = agent.slug;
+        resetAgentForm();
+        setFormValue("slug", agent.slug);
+        setFormValue("name", agent.name);
+        setFormValue("description", agent.description);
+        setFormValue("enabled", agent.enabled);
+        $("#enabled-label").textContent = agent.enabled ? t("agent.enabled") : t("agent.disabled");
+        ensureLegacyExecutorOption(agent.executor_kind);
+        setFormValue("executor_kind", agent.executor_kind);
+        setFormValue("execution_mode", agent.execution_mode || "gateway");
+        syncExecutionModeControl(false);
+        setFormValue("signature_encoding", agent.signature_encoding);
+        syncPromptSelect(agent.system_prompt);
+        setFormValue("workspace_path", agent.workspace_path);
+        setFormValue("claude_model", agent.claude_model);
+        setFormValue("allowed_tools", agent.allowed_tools.join("\n"));
+        setFormValue("permission_mode", agent.permission_mode);
+        setFormValue("timeout_secs", agent.timeout_secs);
+        setFormValue("max_concurrency", agent.max_concurrency);
+        setFormValue("queue_capacity", agent.queue_capacity);
+        $("#agent-slug").readOnly = true;
+        secretInput.required = false;
+        $("#secret-required-mark").hidden = true;
+        $("#secret-help").textContent = agent.signing_secret_hint ? fmt("secret.help.edit", { hint: agent.signing_secret_hint }) : t("secret.help.none");
+        $("#drawer-title").textContent = fmt("drawer.title.edit", { name: agent.name });
+        saveAgentButton.textContent = t("drawer.save.update");
+        showDrawer();
+        window.setTimeout(() => $("#agent-name").focus(), reducedMotion.matches ? 0 : 230);
+      }
+
+      function showDrawer() {
+        state.lastFocus = document.activeElement;
+        state.drawerOpen = true;
+        drawerLayer.hidden = false;
+        drawerLayer.setAttribute("aria-hidden", "false");
+        appView.inert = true;
+        document.body.classList.add("overlay-open");
+        window.requestAnimationFrame(() => drawerLayer.classList.add("open"));
+      }
+
+      function closeAgentDrawer(immediate = false) {
+        if (!state.drawerOpen && drawerLayer.hidden) return;
+        state.drawerOpen = false;
+        drawerLayer.classList.remove("open");
+        secretInput.value = "";
+        const finish = () => {
+          drawerLayer.hidden = true;
+          drawerLayer.setAttribute("aria-hidden", "true");
+          if (!state.deleteOpen) {
+            appView.inert = false;
+            document.body.classList.remove("overlay-open");
+          }
+          if (!immediate && state.lastFocus && document.contains(state.lastFocus)) state.lastFocus.focus();
+        };
+        window.setTimeout(finish, immediate || reducedMotion.matches ? 0 : 230);
+      }
+
+      function parseTools(value) {
+        return value.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean);
+      }
+
+      function validateAgentForm() {
+        agentFormError.hidden = true;
+        agentFormError.textContent = "";
+        const slugInput = $("#agent-slug");
+        const workspaceInput = $("#agent-workspace-path");
+        const toolsInput = $("#agent-allowed-tools");
+        slugInput.setCustomValidity("");
+        workspaceInput.setCustomValidity("");
+        secretInput.setCustomValidity("");
+        toolsInput.setCustomValidity("");
+
+        const slug = slugInput.value.trim().toLowerCase();
+        slugInput.value = slug;
+        const slugValid = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(slug) && slug.length >= 2 && slug.length <= 64 && !slug.includes("--");
+        if (!slugValid) slugInput.setCustomValidity(t("valid.slug"));
+        const workspace = workspaceInput.value.trim();
+        if (workspace.startsWith("/") || workspace.startsWith("\\") || workspace.split(/[\\/]+/).includes("..") || /^[a-zA-Z]:/.test(workspace)) {
+          workspaceInput.setCustomValidity(t("valid.workspace"));
+        }
+        const secret = secretInput.value;
+        if (state.formMode === "create" && !secret) secretInput.setCustomValidity(t("valid.secretRequired"));
+        if (secret) {
+          const length = new TextEncoder().encode(secret).length;
+          if (length < 16 || length > 512) secretInput.setCustomValidity(t("valid.secretLength"));
+        }
+        const tools = parseTools(toolsInput.value);
+        if (tools.length > 64 || tools.some((tool) => new TextEncoder().encode(tool).length > 200)) toolsInput.setCustomValidity(t("valid.tools"));
+
+        if (!agentForm.checkValidity()) {
+          agentForm.reportValidity();
+          return false;
+        }
+        return true;
+      }
+
+      function buildAgentPayload() {
+        const get = (name) => agentForm.elements.namedItem(name);
+        const secret = get("signing_secret").value;
+        return {
+          slug: state.formMode === "edit" ? state.editingSlug : get("slug").value.trim().toLowerCase(),
+          name: get("name").value.trim(),
+          description: get("description").value.trim(),
+          enabled: get("enabled").checked,
+          executor_kind: get("executor_kind").value,
+          execution_mode: get("execution_mode").value,
+          signing_secret: secret || null,
+          signature_encoding: get("signature_encoding").value,
+          system_prompt: get("system_prompt").value.trim(),
+          workspace_path: get("workspace_path").value.trim(),
+          claude_model: get("claude_model").value.trim() || null,
+          allowed_tools: parseTools(get("allowed_tools").value),
+          permission_mode: get("permission_mode").value,
+          timeout_secs: Number(get("timeout_secs").value),
+          max_concurrency: Number(get("max_concurrency").value),
+          queue_capacity: Number(get("queue_capacity").value)
+        };
+      }
+
+      async function submitAgentForm(event) {
+        event.preventDefault();
+        if (state.formSubmitting || !validateAgentForm()) return;
+        const payload = buildAgentPayload();
+        const editing = state.formMode === "edit";
+        const path = editing ? `${API.agents}/${encodeURIComponent(state.editingSlug)}` : API.agents;
+        state.formSubmitting = true;
+        setBusy(saveAgentButton, true);
+        agentFormError.hidden = true;
+        try {
+          await apiRequest(path, { method: editing ? "PUT" : "POST", body: payload });
+          secretInput.value = "";
+          closeAgentDrawer();
+          showToast(editing ? t("save.updated") : t("save.created"), "success");
+          await loadAgents();
+        } catch (error) {
+          if (!state.session) return;
+          agentFormError.textContent = error.message;
+          agentFormError.hidden = false;
+          $(".form-scroll", drawer).scrollTo({ top: 0, behavior: reducedMotion.matches ? "auto" : "smooth" });
+        } finally {
+          state.formSubmitting = false;
+          setBusy(saveAgentButton, false);
+        }
+      }
+
+      function openDeleteModal(agent) {
+        state.lastFocus = document.activeElement;
+        state.deletingAgent = agent;
+        state.deleteOpen = true;
+        deleteInput.value = "";
+        deleteError.hidden = true;
+        deleteError.textContent = "";
+        confirmDeleteButton.disabled = true;
+        $("#delete-agent-name").textContent = agent.name;
+        $("#delete-agent-slug").textContent = agent.slug;
+        $("#delete-confirm-label").textContent = agent.slug;
+        deleteLayer.hidden = false;
+        deleteLayer.setAttribute("aria-hidden", "false");
+        appView.inert = true;
+        document.body.classList.add("overlay-open");
+        window.requestAnimationFrame(() => deleteLayer.classList.add("open"));
+        window.setTimeout(() => deleteInput.focus(), reducedMotion.matches ? 0 : 190);
+      }
+
+      function closeDeleteModal(immediate = false) {
+        if (!state.deleteOpen && deleteLayer.hidden) return;
+        state.deleteOpen = false;
+        state.deletingAgent = null;
+        deleteInput.value = "";
+        deleteLayer.classList.remove("open");
+        const finish = () => {
+          deleteLayer.hidden = true;
+          deleteLayer.setAttribute("aria-hidden", "true");
+          if (!state.drawerOpen) {
+            appView.inert = false;
+            document.body.classList.remove("overlay-open");
+          }
+          if (!immediate && state.lastFocus && document.contains(state.lastFocus)) state.lastFocus.focus();
+        };
+        window.setTimeout(finish, immediate || reducedMotion.matches ? 0 : 190);
+      }
+
+      async function submitDelete(event) {
+        event.preventDefault();
+        const agent = state.deletingAgent;
+        if (!agent || state.deleteSubmitting || deleteInput.value !== agent.slug) return;
+        state.deleteSubmitting = true;
+        setBusy(confirmDeleteButton, true);
+        deleteError.hidden = true;
+        try {
+          await apiRequest(`${API.agents}/${encodeURIComponent(agent.slug)}`, { method: "DELETE" });
+          closeDeleteModal();
+          showToast(fmt("delete.ok", { name: agent.name }), "success");
+          await loadAgents();
+        } catch (error) {
+          if (!state.session) return;
+          deleteError.textContent = error.message;
+          deleteError.hidden = false;
+        } finally {
+          state.deleteSubmitting = false;
+          setBusy(confirmDeleteButton, false);
+          if (state.deleteOpen) confirmDeleteButton.disabled = deleteInput.value !== (state.deletingAgent && state.deletingAgent.slug);
+        }
+      }
+
+      function focusableElements(container) {
+        return $$("a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])", container).filter((element) => !element.hidden && element.offsetParent !== null);
+      }
+
+      function trapFocus(event, container) {
+        if (event.key !== "Tab") return;
+        const focusable = focusableElements(container);
+        if (!focusable.length) {
+          event.preventDefault();
+          container.focus();
+          return;
+        }
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+
+      function switchSection(target) {
+        if (appView.hidden) return;
+        const agentsSection = $("#agents-section");
+        const runsSection = $("#runs-section");
+        if (agentsSection) agentsSection.hidden = target !== "agents-section";
+        if (runsSection) runsSection.hidden = target !== "runs-section";
+        $$("[data-nav-target]").forEach((link) => link.classList.toggle("active", link.dataset.navTarget === target));
+      }
+
+      async function showAgentRuns(slug) {
+        const agent = findAgent(slug);
+        if (!agent) return;
+        state.runsRoleFilter = runRoleValue(agent);
+        state.runsFilter = slug;
+        populateRunsRoleFilter();
+        syncRunsAgentFilter();
+        state.runsPage = 1;
+        const title = $("#runs-title");
+        if (title) title.textContent = fmt("runs.filtered.title", { slug: agent.name || agent.slug });
+        switchSection("runs-section");
+        await loadRuns(slug);
+      }
+
+
+      async function bootstrap() {
+        showView("boot");
+        try {
+          const data = await apiRequest(API.session, { authRedirect: false });
+          acceptSession(data);
+          enterDashboard();
+          await refreshAll({ silent: true });
+        } catch (error) {
+          if (error instanceof ApiError && error.status === 401) {
+            enterLoggedOut();
+          } else {
+            enterLoggedOut(fmt("session.checkFailed", { msg: error.message }), { canRetrySession: true });
+          }
+        }
+      }
+
+      loginForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (!loginForm.reportValidity()) return;
+        clearLoginError();
+        setBusy(loginButton, true);
+        const username = $("#login-username").value.trim();
+        const passwordInput = $("#login-password");
+        const password = passwordInput.value;
+        try {
+          const data = await apiRequest(API.login, { method: "POST", body: { username, password } });
+          passwordInput.value = "";
+          acceptSession(data);
+          enterDashboard();
+          showToast(t("login.ok"), "success");
+          await refreshAll({ silent: true });
+        } catch (error) {
+          passwordInput.value = "";
+          showLoginError(error.status === 401 ? t("login.badCredentials") : error.message);
+          passwordInput.focus();
+        } finally {
+          setBusy(loginButton, false);
+        }
+      });
+
+      retrySessionButton.addEventListener("click", bootstrap);
+      refreshButton.addEventListener("click", () => refreshAll());
+      $("#create-agent-button").addEventListener("click", openCreateDrawer);
+      $("#agents-filters").addEventListener("change", (event) => {
+        if (event.target.id === "agents-role-filter") {
+          state.agentsRoleFilter = event.target.value;
+          state.agentsPage = 1;
+          renderAgents();
+        }
+        if (event.target.id === "agents-executor-filter") {
+          state.agentsExecutorFilter = event.target.value;
+          state.agentsPage = 1;
+          renderAgents();
+        }
+      });
+      agentsPanel.addEventListener("click", handleAgentAction);
+      agentForm.addEventListener("submit", submitAgentForm);
+      deleteForm.addEventListener("submit", submitDelete);
+      // 切换到任一外部 LLM 执行器时,若未选模型则默认填网关模型 deepseek-v4-flash,
+      // 避免留空后回退到默认模型名导致网关 404/超时。
+      $("#agent-executor-kind").addEventListener("change", (event) => {
+        syncExecutionModeControl(true);
+        if (event.target.value !== "rust") {
+          const modelInput = $("#agent-claude-model");
+          if (!modelInput.value.trim()) modelInput.value = "deepseek-v4-flash";
+        }
+      });
+
+      async function performLogout() {
+        if (!state.session || state.logoutSubmitting) return;
+        state.logoutSubmitting = true;
+        logoutButtons.forEach((button) => setBusy(button, true));
+        try {
+          await apiRequest(API.logout, { method: "POST" });
+          enterLoggedOut();
+          showToast(t("logout.ok"), "success");
+        } catch (error) {
+          if (state.session) {
+            showToast(fmt("logout.failed", { msg: error.message }), "error");
+          }
+        } finally {
+          state.logoutSubmitting = false;
+          logoutButtons.forEach((button) => setBusy(button, false));
+        }
+      }
+
+      logoutButtons.forEach((button) => button.addEventListener("click", performLogout));
+
+      $("#generate-secret-button").addEventListener("click", () => {
+        if (!window.crypto || typeof window.crypto.getRandomValues !== "function") {
+          showToast(t("rng.unsupported"), "error");
+          return;
+        }
+        const bytes = new Uint8Array(32);
+        window.crypto.getRandomValues(bytes);
+        let binary = "";
+        bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
+        secretInput.value = window.btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+        secretInput.dispatchEvent(new Event("input", { bubbles: true }));
+        secretInput.focus();
+        showToast(t("secret.generated"), "success");
+      });
+
+      $("#toggle-secret-button").addEventListener("click", (event) => {
+        const visible = secretInput.type === "text";
+        secretInput.type = visible ? "password" : "text";
+        event.currentTarget.textContent = t(visible ? "secret.toggle.show" : "secret.toggle.hide");
+        event.currentTarget.setAttribute("aria-pressed", String(!visible));
+        event.currentTarget.setAttribute("aria-label", fmt("secret.toggle.label", { action: t(visible ? "secret.toggle.show" : "secret.toggle.hide") }));
+        secretInput.focus();
+      });
+
+      $("#copy-secret-button").addEventListener("click", async () => {
+        const draftSecret = secretInput.value;
+        if (!draftSecret) {
+          showToast(t("secret.empty"), "info");
+          return;
+        }
+        try {
+          await copyText(draftSecret);
+          showToast(t("secret.copied"), "success");
+        } catch (error) {
+          showToast(error.message || t("copy.failed2"), "error");
+        }
+      });
+
+      $("#agent-enabled").addEventListener("change", (event) => {
+        $("#enabled-label").textContent = event.currentTarget.checked ? t("agent.enabled") : t("agent.disabled");
+      });
+
+      deleteInput.addEventListener("input", () => {
+        confirmDeleteButton.disabled = !state.deletingAgent || deleteInput.value !== state.deletingAgent.slug || state.deleteSubmitting;
+      });
+
+      $$('[data-close-drawer]').forEach((element) => element.addEventListener("click", () => {
+        if (!state.formSubmitting) closeAgentDrawer();
+      }));
+      $$('[data-close-delete]').forEach((element) => element.addEventListener("click", () => {
+        if (!state.deleteSubmitting) closeDeleteModal();
+      }));
+
+      document.addEventListener("keydown", (event) => {
+        if (state.runPayloadOpen) {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            closeRunPayload();
+            return;
+          }
+          trapFocus(event, runPayloadModal);
+          return;
+        }
+        if (state.deleteOpen) {
+          if (event.key === "Escape" && !state.deleteSubmitting) {
+            event.preventDefault();
+            closeDeleteModal();
+            return;
+          }
+          trapFocus(event, deleteModal);
+          return;
+        }
+        if (state.drawerOpen) {
+          if (event.key === "Escape" && !state.formSubmitting) {
+            event.preventDefault();
+            closeAgentDrawer();
+            return;
+          }
+          trapFocus(event, drawer);
+        }
+      });
+
+      window.addEventListener("online", () => {
+        updateNetworkStatus();
+        if (!appView.hidden) showToast(t("online.restored"), "success");
+      });
+      window.addEventListener("offline", () => {
+        updateNetworkStatus();
+        if (!appView.hidden) showToast(t("offline.now"), "error");
+      });
+      $$("[data-nav-target]").forEach((link) => link.addEventListener("click", (event) => {
+        event.preventDefault();
+        switchSection(link.dataset.navTarget);
+      }));
+      agentsPanel.addEventListener("click", (event) => {
+        const pageButton = event.target.closest("[data-agents-page]");
+        if (pageButton && !pageButton.disabled) {
+          state.agentsPage = Number(pageButton.dataset.agentsPage) || 1;
+          renderAgents();
+          agentsPanel.scrollIntoView({ behavior: reducedMotion.matches ? "auto" : "smooth", block: "start" });
+          return;
+        }
+        const row = event.target.closest("[data-agent-runs]");
+        if (row && !event.target.closest("[data-agent-action]")) {
+          showAgentRuns(row.dataset.agentRuns);
+        }
+      });
+
+      runsPanel.addEventListener("click", (event) => {
+        const pageButton = event.target.closest("[data-runs-page]");
+        if (pageButton && !pageButton.disabled) {
+          state.runsPage = Number(pageButton.dataset.runsPage) || 1;
+          renderRuns();
+          runsPanel.scrollIntoView({ behavior: reducedMotion.matches ? "auto" : "smooth", block: "start" });
+          return;
+        }
+        const copyId = event.target.closest("[data-copy-run-id]");
+        if (copyId) {
+          copyText(copyId.dataset.copyRunId)
+            .then(() => showToast(t("runs.runIdCopied"), "success"))
+            .catch((error) => showToast(error.message || t("copy.failed2"), "error"));
+          return;
+        }
+        const payloadLink = event.target.closest("[data-run-payload]");
+        if (payloadLink) {
+          showRunPayload(payloadLink.dataset.runId, payloadLink.dataset.runPayload, payloadLink.dataset.runRaw);
+        }
+      });
+      runsPanel.addEventListener("change", (event) => {
+        if (!event.target.matches("[data-runs-page-size]")) return;
+        state.runsPageSize = Number(event.target.value) || 10;
+        state.runsPage = 1;
+        renderRuns();
+      });
+      $$("[data-close-run-payload]").forEach((button) => button.addEventListener("click", closeRunPayload));
+      $("#copy-run-payload-button").addEventListener("click", () => {
+        const content = $("#run-payload-content");
+        copyText(content && content.dataset.copyText)
+          .then(() => showToast(lang === "zh" ? "完整 JSON 已复制" : "Complete JSON copied", "success"))
+          .catch((error) => showToast(error.message || t("copy.failed2"), "error"));
+      });
+      $("#runs-refresh-button").addEventListener("click", () => loadRuns(state.runsFilter));
+      $("#runs-role-filter").addEventListener("change", (event) => {
+        state.runsRoleFilter = event.target.value;
+        state.runsFilter = null;
+        const slug = syncRunsAgentFilter();
+        state.runsPage = 1;
+        loadRuns(slug);
+      });
+      $("#runs-agent-filter").addEventListener("change", (event) => {
+        const slug = event.target.value;
+        state.runsFilter = slug || null;
+        state.runsPage = 1;
+        loadRuns(state.runsFilter);
+      });
+      $$("#runs-type-filter button").forEach((button) => button.addEventListener("click", () => {
+        state.runsTypeFilter = button.dataset.type;
+        state.runsPage = 1;
+        $$("#runs-type-filter button").forEach((b) => b.classList.toggle("active", b === button));
+        renderRuns();
+      }));
+      $$("#runs-status-filter button").forEach((button) => button.addEventListener("click", () => {
+        state.runsStatusFilter = button.dataset.status;
+        state.runsPage = 1;
+        $$("#runs-status-filter button").forEach((b) => b.classList.toggle("active", b === button));
+        renderRuns();
+      }));
+
+      bootstrap();
+    })();
+      // 应用语言并初始化语言切换按钮
+      applyI18n();
+      setupLangToggle();
+
+  </script>
+</body>
+</html>

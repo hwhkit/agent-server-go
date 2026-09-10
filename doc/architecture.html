@@ -1,0 +1,988 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#07110f">
+  <meta name="description" content="MOTA 多 Agent 管理与本机执行平台目标架构图">
+  <title>MOTA Agent Fabric · 目标架构</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #07110f;
+      --bg-soft: #0b1714;
+      --panel: rgba(14, 30, 26, 0.88);
+      --panel-strong: #10231e;
+      --panel-muted: rgba(13, 26, 23, 0.72);
+      --text: #eef8f2;
+      --text-soft: #bfd0c7;
+      --muted: #7f998e;
+      --line: rgba(158, 197, 178, 0.17);
+      --line-strong: rgba(158, 197, 178, 0.34);
+      --mint: #8cf5c7;
+      --mint-strong: #4fe5a6;
+      --cyan: #77dff2;
+      --violet: #b9a4ff;
+      --amber: #f4c97a;
+      --danger: #ff8d91;
+      --shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 12% -4%, rgba(79, 229, 166, 0.15), transparent 32rem),
+        radial-gradient(circle at 92% 16%, rgba(119, 223, 242, 0.10), transparent 28rem),
+        var(--bg);
+      font: 15px/1.65 var(--sans);
+      overflow-x: hidden;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      pointer-events: none;
+      opacity: 0.42;
+      background-image:
+        linear-gradient(rgba(156, 203, 181, 0.042) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(156, 203, 181, 0.042) 1px, transparent 1px);
+      background-size: 48px 48px;
+      mask-image: linear-gradient(to bottom, #000 0, transparent 84%);
+    }
+    button, a { font: inherit; }
+    button { color: inherit; }
+    a { color: inherit; }
+    .skip-link {
+      position: fixed;
+      z-index: 100;
+      top: 10px;
+      left: 10px;
+      padding: 9px 12px;
+      color: #07110f;
+      background: var(--mint);
+      border-radius: 7px;
+      transform: translateY(-160%);
+      transition: transform 160ms ease;
+    }
+    .skip-link:focus { transform: translateY(0); }
+    .wrap { width: min(1240px, calc(100% - 40px)); margin-inline: auto; }
+    .mono { font-family: var(--mono); }
+    .eyebrow {
+      color: var(--mint);
+      font: 700 11px/1.2 var(--mono);
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }
+    .muted { color: var(--muted); }
+
+    .topbar {
+      position: sticky;
+      z-index: 20;
+      top: 0;
+      border-bottom: 1px solid var(--line);
+      background: rgba(7, 17, 15, 0.78);
+      backdrop-filter: blur(18px);
+    }
+    .topbar-inner {
+      min-height: 62px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 28px;
+    }
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font: 800 12px/1 var(--mono);
+      letter-spacing: 0.09em;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    .brand-mark {
+      width: 12px;
+      height: 12px;
+      border: 2px solid var(--mint);
+      border-radius: 3px;
+      box-shadow: 0 0 18px rgba(140, 245, 199, 0.56);
+      transform: rotate(45deg);
+    }
+    .nav-links { display: flex; align-items: center; gap: 22px; }
+    .nav-links a {
+      color: var(--muted);
+      font-size: 12px;
+      text-decoration: none;
+      transition: color 140ms ease;
+    }
+    .nav-links a:hover { color: var(--mint); }
+    .nav-links .back-link {
+      padding-left: 20px;
+      border-left: 1px solid var(--line);
+      color: var(--text-soft);
+    }
+
+    .hero { padding: 92px 0 62px; border-bottom: 1px solid var(--line); }
+    .hero-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.18fr) minmax(360px, 0.82fr);
+      gap: 64px;
+      align-items: center;
+    }
+    .hero h1 {
+      max-width: 790px;
+      margin: 15px 0 22px;
+      font-size: clamp(46px, 6.7vw, 82px);
+      line-height: 0.98;
+      letter-spacing: -0.067em;
+    }
+    .hero h1 span { color: var(--mint); }
+    .hero-lede {
+      max-width: 690px;
+      margin: 0;
+      color: var(--text-soft);
+      font-size: 17px;
+    }
+    .hero-actions { display: flex; flex-wrap: wrap; gap: 11px; margin-top: 30px; }
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 42px;
+      padding: 0 16px;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      color: var(--text-soft);
+      background: rgba(13, 29, 25, 0.58);
+      font: 700 12px/1 var(--mono);
+      text-decoration: none;
+      transition: transform 140ms ease, border-color 140ms ease, color 140ms ease;
+    }
+    .button:hover { transform: translateY(-1px); border-color: var(--mint); color: var(--mint); }
+    .button.primary {
+      border-color: var(--mint);
+      color: #07110f;
+      background: var(--mint);
+      box-shadow: 0 12px 38px rgba(79, 229, 166, 0.17);
+    }
+
+    .resolver {
+      position: relative;
+      overflow: hidden;
+      border: 1px solid var(--line-strong);
+      border-radius: 16px;
+      background: linear-gradient(145deg, rgba(20, 46, 38, 0.94), rgba(8, 21, 18, 0.94));
+      box-shadow: var(--shadow);
+    }
+    .resolver::after {
+      content: "";
+      position: absolute;
+      right: -80px;
+      bottom: -95px;
+      width: 240px;
+      height: 240px;
+      border-radius: 50%;
+      background: rgba(79, 229, 166, 0.09);
+      filter: blur(12px);
+    }
+    .resolver-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 15px 18px;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font: 10px/1 var(--mono);
+      letter-spacing: 0.11em;
+      text-transform: uppercase;
+    }
+    .live {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--mint);
+    }
+    .live::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--mint-strong);
+      box-shadow: 0 0 13px var(--mint-strong);
+    }
+    .route-line {
+      position: relative;
+      z-index: 1;
+      margin: 18px;
+      padding: 14px;
+      border: 1px solid rgba(119, 223, 242, 0.22);
+      border-radius: 9px;
+      background: rgba(2, 12, 10, 0.55);
+      font: 12px/1.7 var(--mono);
+      overflow-wrap: anywhere;
+    }
+    .method { color: var(--amber); }
+    .host { color: var(--muted); }
+    .path { color: var(--cyan); }
+    .resolver-grid {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      margin: 0 18px 18px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      overflow: hidden;
+    }
+    .resolver-item { padding: 13px 14px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+    .resolver-item:nth-child(2n) { border-right: 0; }
+    .resolver-item:nth-last-child(-n + 2) { border-bottom: 0; }
+    .resolver-item span { display: block; color: var(--muted); font: 9px/1 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; }
+    .resolver-item b { display: block; margin-top: 7px; color: var(--text-soft); font: 700 12px/1 var(--mono); }
+    .resolver-item b.ok { color: var(--mint); }
+
+    .facts { padding: 22px 0; border-bottom: 1px solid var(--line); }
+    .fact-grid { display: grid; grid-template-columns: repeat(4, 1fr); }
+    .fact { padding: 4px 24px; border-right: 1px solid var(--line); }
+    .fact:first-child { padding-left: 0; }
+    .fact:last-child { border-right: 0; }
+    .fact b { display: block; color: var(--mint); font: 750 19px/1.1 var(--mono); }
+    .fact span { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; }
+
+    main { padding: 74px 0 96px; }
+    section { margin-bottom: 88px; scroll-margin-top: 90px; }
+    .section-head {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 36px;
+      margin-bottom: 26px;
+    }
+    .section-head h2 {
+      margin: 7px 0 0;
+      font-size: clamp(28px, 3.5vw, 42px);
+      line-height: 1.08;
+      letter-spacing: -0.045em;
+    }
+    .section-head > p { max-width: 480px; margin: 0; color: var(--muted); font-size: 13px; }
+
+    .diagram-shell {
+      border: 1px solid var(--line-strong);
+      border-radius: 16px;
+      background: rgba(7, 18, 15, 0.72);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .diagram-toolbar {
+      min-height: 58px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 10px 14px 10px 20px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(15, 33, 28, 0.7);
+    }
+    .diagram-toolbar strong { font: 700 11px/1 var(--mono); letter-spacing: 0.1em; }
+    .flow-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+    .flow-tab {
+      min-height: 32px;
+      padding: 0 11px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      color: var(--muted);
+      background: transparent;
+      font: 700 10px/1 var(--mono);
+      cursor: pointer;
+    }
+    .flow-tab:hover { color: var(--text); }
+    .flow-tab[aria-pressed="true"] {
+      border-color: rgba(140, 245, 199, 0.30);
+      color: var(--mint);
+      background: rgba(79, 229, 166, 0.09);
+    }
+    .diagram-scroll { overflow-x: auto; scrollbar-color: rgba(140, 245, 199, 0.3) transparent; }
+    .diagram { min-width: 1210px; padding: 24px; }
+    .plane {
+      display: grid;
+      grid-template-columns: 150px 46px 170px 46px 190px 46px 190px 46px 190px;
+      align-items: stretch;
+      margin-bottom: 16px;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(15, 31, 27, 0.50);
+    }
+    .plane:last-of-type { margin-bottom: 18px; }
+    .plane-meta {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+      color: var(--muted);
+      font: 10px/1 var(--mono);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .plane-meta b { color: var(--text-soft); }
+    .node {
+      position: relative;
+      min-width: 0;
+      min-height: 124px;
+      padding: 15px;
+      border: 1px solid var(--line-strong);
+      border-radius: 10px;
+      color: var(--text);
+      background: linear-gradient(155deg, rgba(26, 52, 44, 0.88), rgba(12, 27, 23, 0.88));
+      text-align: left;
+      cursor: pointer;
+      transition: opacity 180ms ease, transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+    }
+    .node:hover, .node:focus-visible {
+      z-index: 2;
+      outline: none;
+      border-color: var(--mint);
+      transform: translateY(-2px);
+      box-shadow: 0 13px 30px rgba(0, 0, 0, 0.24);
+    }
+    .node.is-selected { border-color: var(--mint); box-shadow: inset 0 0 0 1px rgba(140, 245, 199, 0.10), 0 0 28px rgba(79, 229, 166, 0.08); }
+    .node-code { color: var(--mint); font: 700 9px/1 var(--mono); letter-spacing: 0.11em; text-transform: uppercase; }
+    .node h3 { margin: 10px 0 6px; font-size: 15px; line-height: 1.15; letter-spacing: -0.025em; }
+    .node p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+    .node small {
+      position: absolute;
+      right: 11px;
+      bottom: 10px;
+      color: rgba(140, 245, 199, 0.52);
+      font: 9px/1 var(--mono);
+    }
+    .node.actor { background: linear-gradient(155deg, rgba(35, 43, 47, 0.84), rgba(16, 25, 26, 0.84)); }
+    .node.control { border-color: rgba(185, 164, 255, 0.34); }
+    .node.control .node-code { color: var(--violet); }
+    .node.data { border-color: rgba(119, 223, 242, 0.34); }
+    .node.data .node-code { color: var(--cyan); }
+    .connector {
+      position: relative;
+      align-self: center;
+      height: 1px;
+      margin-inline: 8px;
+      background: linear-gradient(90deg, rgba(140, 245, 199, 0.22), var(--mint));
+      transition: opacity 180ms ease;
+    }
+    .connector::after {
+      content: "";
+      position: absolute;
+      right: -2px;
+      top: -4px;
+      border: 4px solid transparent;
+      border-left-color: var(--mint);
+    }
+    .connector::before {
+      content: attr(data-label);
+      position: absolute;
+      top: -20px;
+      left: 50%;
+      color: var(--muted);
+      font: 8px/1 var(--mono);
+      white-space: nowrap;
+      transform: translateX(-50%);
+    }
+    .is-muted { opacity: 0.18 !important; }
+
+    .resource-grid { display: grid; grid-template-columns: 1.05fr 1fr 1fr 0.95fr; gap: 12px; }
+    .resource {
+      min-height: 168px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: rgba(12, 26, 22, 0.76);
+      transition: opacity 180ms ease, border-color 160ms ease;
+    }
+    .resource:hover { border-color: var(--line-strong); }
+    .resource-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .resource-head b { font: 700 10px/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; }
+    .resource-head span { color: var(--muted); font: 9px/1 var(--mono); }
+    .mini-stack { display: grid; gap: 7px; margin-top: 14px; }
+    .mini-node {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 43px;
+      padding: 9px 11px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      color: var(--text-soft);
+      background: rgba(4, 14, 11, 0.42);
+      font-size: 11px;
+    }
+    .mini-node code { color: var(--mint); font: 9px var(--mono); }
+    .diagram-footer {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 360px;
+      border-top: 1px solid var(--line);
+    }
+    .legend { display: flex; flex-wrap: wrap; align-content: center; gap: 16px; padding: 18px 20px; color: var(--muted); font-size: 10px; }
+    .legend span { display: inline-flex; align-items: center; gap: 7px; }
+    .legend i { width: 8px; height: 8px; border-radius: 2px; background: var(--mint); }
+    .legend .control-key { background: var(--violet); }
+    .legend .data-key { background: var(--cyan); }
+    .legend .state-key { background: var(--amber); }
+    .inspector {
+      min-height: 126px;
+      padding: 17px 19px;
+      border-left: 1px solid var(--line);
+      background: rgba(18, 37, 32, 0.58);
+    }
+    .inspector-label { color: var(--mint); font: 700 9px/1 var(--mono); letter-spacing: 0.11em; text-transform: uppercase; }
+    .inspector h3 { margin: 9px 0 5px; font-size: 15px; }
+    .inspector p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+    .inspector-meta { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
+    .inspector-meta span { padding: 3px 6px; border: 1px solid var(--line); border-radius: 4px; color: var(--text-soft); font: 9px/1 var(--mono); }
+
+    .flow-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; }
+    .flow-card {
+      position: relative;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      background: var(--panel-muted);
+    }
+    .flow-card::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 2px; background: var(--mint); }
+    .flow-card:nth-child(2)::before { background: var(--cyan); }
+    .flow-card:nth-child(3)::before { background: var(--violet); }
+    .flow-card-head { padding: 20px 20px 15px; border-bottom: 1px solid var(--line); }
+    .flow-card-head span { color: var(--mint); font: 700 10px/1 var(--mono); }
+    .flow-card:nth-child(2) .flow-card-head span { color: var(--cyan); }
+    .flow-card:nth-child(3) .flow-card-head span { color: var(--violet); }
+    .flow-card h3 { margin: 9px 0 5px; font-size: 18px; letter-spacing: -0.025em; }
+    .flow-card-head p { margin: 0; color: var(--muted); font-size: 11px; }
+    .steps { margin: 0; padding: 8px 20px 15px; list-style: none; counter-reset: flow-step; }
+    .steps li {
+      position: relative;
+      min-height: 58px;
+      padding: 14px 0 13px 39px;
+      border-bottom: 1px solid var(--line);
+      color: var(--text-soft);
+      font-size: 12px;
+      counter-increment: flow-step;
+    }
+    .steps li:last-child { border-bottom: 0; }
+    .steps li::before {
+      content: counter(flow-step, decimal-leading-zero);
+      position: absolute;
+      left: 0;
+      top: 15px;
+      color: var(--muted);
+      font: 700 9px/1 var(--mono);
+    }
+    .steps code { color: var(--mint); font: 10px var(--mono); }
+
+    .agent-table-wrap { overflow-x: auto; border: 1px solid var(--line-strong); border-radius: 13px; background: var(--panel-muted); }
+    .agent-table { width: 100%; min-width: 820px; border-collapse: collapse; }
+    .agent-table th, .agent-table td { padding: 15px 18px; border-bottom: 1px solid var(--line); text-align: left; }
+    .agent-table th { color: var(--muted); background: rgba(18, 38, 32, 0.65); font: 700 9px/1 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; }
+    .agent-table td { color: var(--text-soft); font-size: 12px; }
+    .agent-table tr:last-child td { border-bottom: 0; }
+    .agent-table code { color: var(--cyan); font: 11px var(--mono); }
+    .agent-name { display: flex; align-items: center; gap: 9px; color: var(--text); font-weight: 700; }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--mint-strong); box-shadow: 0 0 10px rgba(79, 229, 166, 0.56); }
+    .status-dot.paused { background: var(--amber); box-shadow: none; }
+    .executor-badge { display: inline-flex; padding: 4px 7px; border: 1px solid var(--line-strong); border-radius: 5px; font: 9px/1 var(--mono); }
+    .copy-route {
+      min-width: 58px;
+      padding: 6px 8px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      color: var(--muted);
+      background: transparent;
+      font: 9px/1 var(--mono);
+      cursor: pointer;
+    }
+    .copy-route:hover { border-color: var(--mint); color: var(--mint); }
+
+    .principles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+    .principle {
+      display: grid;
+      grid-template-columns: 44px 1fr;
+      gap: 15px;
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--panel-muted);
+    }
+    .principle-index {
+      width: 44px;
+      height: 44px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--line-strong);
+      border-radius: 9px;
+      color: var(--mint);
+      background: rgba(79, 229, 166, 0.06);
+      font: 700 10px/1 var(--mono);
+    }
+    .principle h3 { margin: 1px 0 6px; font-size: 15px; }
+    .principle p { margin: 0; color: var(--muted); font-size: 12px; }
+    .principle code { color: var(--cyan); font: 10px var(--mono); }
+
+    .decision-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 28px;
+      padding: 24px;
+      border: 1px solid rgba(244, 201, 122, 0.27);
+      border-radius: 13px;
+      background: linear-gradient(90deg, rgba(86, 62, 22, 0.22), rgba(17, 30, 26, 0.65));
+    }
+    .decision-bar strong { display: block; color: var(--amber); font: 700 10px/1 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; }
+    .decision-bar h3 { margin: 8px 0 4px; font-size: 17px; }
+    .decision-bar p { margin: 0; color: var(--muted); font-size: 12px; }
+    .decision-options { display: flex; flex-wrap: wrap; gap: 7px; }
+    .decision-options span { padding: 7px 9px; border: 1px solid rgba(244, 201, 122, 0.24); border-radius: 6px; color: #e8cf9f; font: 10px/1 var(--mono); white-space: nowrap; }
+
+    footer { padding: 30px 0; border-top: 1px solid var(--line); color: var(--muted); font: 10px/1.7 var(--mono); }
+    .footer-inner { display: flex; justify-content: space-between; gap: 24px; }
+
+    :focus-visible { outline: 2px solid var(--mint); outline-offset: 3px; }
+    @media (max-width: 900px) {
+      .hero-grid { grid-template-columns: 1fr; gap: 42px; }
+      .resolver { max-width: 620px; }
+      .flow-cards { grid-template-columns: 1fr; }
+      .principles { grid-template-columns: 1fr; }
+      .diagram-footer { grid-template-columns: 1fr; }
+      .inspector { border-top: 1px solid var(--line); border-left: 0; }
+      .decision-bar { align-items: flex-start; flex-direction: column; }
+    }
+    @media (max-width: 680px) {
+      .wrap { width: min(100% - 28px, 1240px); }
+      .nav-links a:not(.back-link) { display: none; }
+      .nav-links .back-link { padding-left: 0; border-left: 0; }
+      .hero { padding: 62px 0 46px; }
+      .hero-grid { gap: 34px; }
+      .hero h1 { font-size: clamp(43px, 14vw, 64px); }
+      .hero-lede { font-size: 15px; }
+      .fact-grid { grid-template-columns: repeat(2, 1fr); }
+      .fact { padding: 12px 15px; }
+      .fact:first-child { padding-left: 15px; }
+      .fact:nth-child(2) { border-right: 0; }
+      .fact:nth-child(-n + 2) { border-bottom: 1px solid var(--line); }
+      main { padding-top: 58px; }
+      section { margin-bottom: 68px; }
+      .section-head { display: block; }
+      .section-head > p { margin-top: 12px; }
+      .diagram-toolbar { align-items: flex-start; flex-direction: column; padding: 15px; }
+      .diagram { padding: 14px; }
+      .legend { padding: 15px; }
+      .principle { grid-template-columns: 36px 1fr; padding: 17px; }
+      .principle-index { width: 36px; height: 36px; }
+      .footer-inner { flex-direction: column; gap: 8px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到主要内容</a>
+
+  <nav class="topbar" aria-label="主导航">
+    <div class="wrap topbar-inner">
+      <a class="brand" href="#top"><span class="brand-mark" aria-hidden="true"></span>MOTA / AGENT FABRIC</a>
+      <div class="nav-links">
+        <a href="#architecture">架构图</a>
+        <a href="#flows">关键流程</a>
+        <a href="#agents">Agent 路由</a>
+        <a href="#principles">设计原则</a>
+        <a class="back-link" href="index.html">现有运行时</a>
+      </div>
+    </div>
+  </nav>
+
+  <header class="hero" id="top">
+    <div class="wrap hero-grid">
+      <div>
+        <div class="eyebrow">Target architecture · multi-agent control &amp; execution plane</div>
+        <h1>一个入口，管理<br><span>所有 Agent。</span></h1>
+        <p class="hero-lede">在现有 Rust Bridge 之上增加管理控制面、动态 Agent Registry 和可插拔执行器。创建一个 slug，即刻获得一条隔离、可观测、可限流的 Agent 接口。</p>
+        <div class="hero-actions">
+          <a class="button primary" href="#architecture">查看交互式架构图</a>
+          <a class="button" href="#agents">查看 URL 映射</a>
+        </div>
+      </div>
+
+      <aside class="resolver" aria-label="Agent 路由解析示例">
+        <div class="resolver-head"><span>runtime / route resolver</span><span class="live">registry online</span></div>
+        <div class="route-line"><span class="method">POST</span> <span class="host">https://infoman.ai</span><span class="path">/agent/server1</span></div>
+        <div class="resolver-grid">
+          <div class="resolver-item"><span>slug</span><b>server1</b></div>
+          <div class="resolver-item"><span>executor</span><b>claude_code</b></div>
+          <div class="resolver-item"><span>revision</span><b>rev_018</b></div>
+          <div class="resolver-item"><span>status</span><b class="ok">enabled</b></div>
+        </div>
+      </aside>
+    </div>
+  </header>
+
+  <div class="facts">
+    <div class="wrap fact-grid">
+      <div class="fact"><b>/agent/{slug}</b><span>固定动态入口，无需重建 Router</span></div>
+      <div class="fact"><b>2 planes</b><span>管理控制面与任务执行面隔离</span></div>
+      <div class="fact"><b>2 executors</b><span>Claude Code 与 Rust Agent</span></div>
+      <div class="fact"><b>atomic swap</b><span>配置验证通过后原子热更新</span></div>
+    </div>
+  </div>
+
+  <main class="wrap" id="main">
+    <section id="architecture">
+      <div class="section-head">
+        <div><div class="eyebrow">01 / Interactive system map</div><h2>目标系统架构</h2></div>
+        <p>切换数据流可以聚焦管理、Push 或 Pull 链路；点击组件可查看职责和边界。架构图横向展示，在窄屏上可左右滚动。</p>
+      </div>
+
+      <div class="diagram-shell">
+        <div class="diagram-toolbar">
+          <strong>INFOMAN.AGENT / LOGICAL TOPOLOGY</strong>
+          <div class="flow-tabs" role="group" aria-label="选择架构数据流">
+            <button class="flow-tab" type="button" data-flow="all" aria-pressed="true">全部组件</button>
+            <button class="flow-tab" type="button" data-flow="control" aria-pressed="false">管理配置流</button>
+            <button class="flow-tab" type="button" data-flow="request" aria-pressed="false">Push 执行流</button>
+            <button class="flow-tab" type="button" data-flow="pull" aria-pressed="false">Pull / 回调流</button>
+          </div>
+        </div>
+
+        <div class="diagram-scroll" tabindex="0" aria-label="可横向滚动的架构图">
+          <div class="diagram">
+            <div class="plane" aria-label="管理控制面">
+              <div class="plane-meta"><b>CONTROL PLANE / 管理控制面</b><span>配置变更不阻塞正在执行的任务</span></div>
+
+              <button class="node actor" type="button" data-detail="admin" data-flows="control">
+                <span class="node-code">Actor</span><h3>管理员</h3><p>登录管理端，创建、测试、启停和审计 Agent。</p><small>01</small>
+              </button>
+              <span class="connector" data-label="HTTPS" data-flows="control" aria-hidden="true"></span>
+              <button class="node" type="button" data-detail="edge" data-flows="control request pull">
+                <span class="node-code">Edge</span><h3>HTTPS 入口</h3><p>DNS、TLS、请求体限制、基础限流与反向代理。</p><small>02</small>
+              </button>
+              <span class="connector" data-label="session" data-flows="control" aria-hidden="true"></span>
+              <button class="node control" type="button" data-detail="admin-surface" data-flows="control">
+                <span class="node-code">Management</span><h3>Admin UI + API</h3><p>Argon2 登录、Secure Cookie、CSRF 与管理接口。</p><small>03</small>
+              </button>
+              <span class="connector" data-label="validated DTO" data-flows="control" aria-hidden="true"></span>
+              <button class="node control" type="button" data-detail="config-service" data-flows="control">
+                <span class="node-code">Domain service</span><h3>Agent Config Service</h3><p>校验 slug、Schema、密钥引用、执行策略和版本。</p><small>04</small>
+              </button>
+              <span class="connector" data-label="atomic swap" data-flows="control" aria-hidden="true"></span>
+              <button class="node control is-selected" type="button" data-detail="registry" data-flows="control request pull">
+                <span class="node-code">Runtime index</span><h3>Agent Registry</h3><p>slug → 不可变 AgentRuntime 快照，支持无重启热更新。</p><small>05</small>
+              </button>
+            </div>
+
+            <div class="plane" aria-label="任务执行面">
+              <div class="plane-meta"><b>DATA PLANE / 任务执行面</b><span>每个 Agent 独立鉴权、并发、超时和输出契约</span></div>
+
+              <button class="node actor" type="button" data-detail="caller" data-flows="request pull">
+                <span class="node-code">Actor</span><h3>调用方 / MoTA</h3><p>Push 请求、Pull 队列任务或异步 Callback 消费方。</p><small>06</small>
+              </button>
+              <span class="connector" data-label="signed JSON" data-flows="request pull" aria-hidden="true"></span>
+              <button class="node data" type="button" data-detail="gateway" data-flows="request">
+                <span class="node-code">Dynamic route</span><h3>Agent Gateway</h3><p><span class="mono">POST /agent/{slug}</span>，解析 Agent 并完成入口防护。</p><small>07</small>
+              </button>
+              <span class="connector" data-label="AgentRuntime" data-flows="request pull" aria-hidden="true"></span>
+              <button class="node data" type="button" data-detail="adapter" data-flows="request pull">
+                <span class="node-code">Protocol</span><h3>协议适配器</h3><p>MoTA Push/Pull 与通用 JSON 统一映射为 AgentContext。</p><small>08</small>
+              </button>
+              <span class="connector" data-label="task context" data-flows="request pull" aria-hidden="true"></span>
+              <button class="node data" type="button" data-detail="orchestrator" data-flows="request pull">
+                <span class="node-code">Orchestration</span><h3>Run Orchestrator</h3><p>Schema、幂等、运行记录、超时取消与错误脱敏。</p><small>09</small>
+              </button>
+              <span class="connector" data-label="bounded job" data-flows="request pull" aria-hidden="true"></span>
+              <button class="node data" type="button" data-detail="scheduler" data-flows="request pull">
+                <span class="node-code">Capacity</span><h3>Scheduler + Router</h3><p>有界队列、全局/per-Agent Semaphore 与执行器分派。</p><small>10</small>
+              </button>
+            </div>
+
+            <div class="resource-grid" aria-label="执行器和基础设施">
+              <article class="resource" data-flows="request pull">
+                <div class="resource-head"><b>Execution targets</b><span>AgentExecutor</span></div>
+                <div class="mini-stack">
+                  <div class="mini-node"><span>Claude Code Executor</span><code>process</code></div>
+                  <div class="mini-node"><span>Rust Agent Executor</span><code>in-process</code></div>
+                  <div class="mini-node"><span>结果 Schema 适配</span><code>output</code></div>
+                </div>
+              </article>
+              <article class="resource" data-flows="control request pull">
+                <div class="resource-head"><b>Persistent state</b><span>PostgreSQL shared pool</span></div>
+                <div class="mini-stack">
+                  <div class="mini-node"><span>agents / revisions</span><code>config</code></div>
+                  <div class="mini-node"><span>runs / idempotency</span><code>runtime</code></div>
+                  <div class="mini-node"><span>sessions / audit</span><code>control</code></div>
+                </div>
+              </article>
+              <article class="resource" data-flows="control pull">
+                <div class="resource-head"><b>Background services</b><span>supervised</span></div>
+                <div class="mini-stack">
+                  <div class="mini-node"><span>Worker Supervisor</span><code>pull</code></div>
+                  <div class="mini-node"><span>Heartbeat / renew</span><code>lease</code></div>
+                  <div class="mini-node"><span>Callback Outbox</span><code>retry</code></div>
+                </div>
+              </article>
+              <article class="resource" data-flows="control request pull">
+                <div class="resource-head"><b>Local boundary</b><span>least privilege</span></div>
+                <div class="mini-stack">
+                  <div class="mini-node"><span>Agent workspaces</span><code>cwd</code></div>
+                  <div class="mini-node"><span>Secret references</span><code>redacted</code></div>
+                  <div class="mini-node"><span>metrics / traces</span><code>ops</code></div>
+                </div>
+              </article>
+            </div>
+          </div>
+        </div>
+
+        <div class="diagram-footer">
+          <div class="legend" aria-label="图例">
+            <span><i></i>共享基础设施</span>
+            <span><i class="control-key"></i>管理控制面</span>
+            <span><i class="data-key"></i>任务执行面</span>
+            <span><i class="state-key"></i>持久状态与本机边界</span>
+          </div>
+          <aside class="inspector" aria-live="polite">
+            <div class="inspector-label">Component inspector</div>
+            <h3 id="inspector-title">Agent Registry</h3>
+            <p id="inspector-copy">按 slug 提供不可变运行时快照。配置先完整验证并构建，再一次性替换，避免请求读取到半更新状态。</p>
+            <div class="inspector-meta" id="inspector-meta"><span>ArcSwap / RwLock</span><span>revision-aware</span><span>hot reload</span></div>
+          </aside>
+        </div>
+      </div>
+    </section>
+
+    <section id="flows">
+      <div class="section-head">
+        <div><div class="eyebrow">02 / Critical flows</div><h2>三条关键数据流</h2></div>
+        <p>控制面只负责生成可信的运行时快照；执行面消费快照，不直接读取或拼装管理表单中的原始配置。</p>
+      </div>
+      <div class="flow-cards">
+        <article class="flow-card">
+          <div class="flow-card-head"><span>FLOW A / CONTROL</span><h3>创建或更新 Agent</h3><p>配置变更即时生效，但不影响绑定旧 revision 的在途任务。</p></div>
+          <ol class="steps">
+            <li>管理员通过独立认证进入 <code>/admin</code>。</li>
+            <li>提交 slug、执行器、Schema、并发和密钥引用。</li>
+            <li>服务端严格校验并在事务中写入新 revision。</li>
+            <li>构建不可变 AgentRuntime，原子替换 Registry。</li>
+          </ol>
+        </article>
+        <article class="flow-card">
+          <div class="flow-card-head"><span>FLOW B / PUSH</span><h3>执行 Agent 请求</h3><p>同一动态路由承载全部 Agent，每个 slug 使用自己的策略。</p></div>
+          <ol class="steps">
+            <li><code>POST /agent/server1</code> 到达 Agent Gateway。</li>
+            <li>按 slug 读取 runtime，并执行签名与输入 Schema 校验。</li>
+            <li>幂等登记后进入有界队列，执行全局和 Agent 限流。</li>
+            <li>Claude Code 或 Rust Agent 产出结果并完成契约校验。</li>
+          </ol>
+        </article>
+        <article class="flow-card">
+          <div class="flow-card-head"><span>FLOW C / ASYNC</span><h3>Pull 与可靠回传</h3><p>后台任务由 Supervisor 管理，结果通过持久 Outbox 交付。</p></div>
+          <ol class="steps">
+            <li>Registry 变更触发对应 Pull Worker 启停或滚动重建。</li>
+            <li>Worker claim 任务并在执行期间 renew 租约。</li>
+            <li>执行结果与回调事件在本地事务中持久化。</li>
+            <li>Outbox 按退避策略重试 callback / complete。</li>
+          </ol>
+        </article>
+      </div>
+    </section>
+
+    <section id="agents">
+      <div class="section-head">
+        <div><div class="eyebrow">03 / Dynamic route registry</div><h2>Agent 与 URL 一一映射</h2></div>
+        <p>创建记录后不动态注册新的 Axum route，而是在固定的 <code>/agent/{slug}</code> handler 中查找对应运行时配置。</p>
+      </div>
+      <div class="agent-table-wrap">
+        <table class="agent-table">
+          <thead><tr><th>Agent</th><th>执行器</th><th>公开接口</th><th>并发</th><th>版本</th><th>操作</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><span class="agent-name"><i class="status-dot"></i>server1</span></td>
+              <td><span class="executor-badge">claude_code</span></td>
+              <td><code>https://infoman.ai/agent/server1</code></td>
+              <td>2 / queue 20</td><td>rev_018</td>
+              <td><button class="copy-route" type="button" data-copy="https://infoman.ai/agent/server1">复制 URL</button></td>
+            </tr>
+            <tr>
+              <td><span class="agent-name"><i class="status-dot"></i>server2</span></td>
+              <td><span class="executor-badge">rust_agent</span></td>
+              <td><code>https://infoman.ai/agent/server2</code></td>
+              <td>8 / queue 100</td><td>rev_006</td>
+              <td><button class="copy-route" type="button" data-copy="https://infoman.ai/agent/server2">复制 URL</button></td>
+            </tr>
+            <tr>
+              <td><span class="agent-name"><i class="status-dot"></i>server3</span></td>
+              <td><span class="executor-badge">claude_code</span></td>
+              <td><code>https://infoman.ai/agent/server3</code></td>
+              <td>1 / queue 10</td><td>rev_003</td>
+              <td><button class="copy-route" type="button" data-copy="https://infoman.ai/agent/server3">复制 URL</button></td>
+            </tr>
+            <tr>
+              <td><span class="agent-name"><i class="status-dot paused"></i>xxxx</span></td>
+              <td><span class="executor-badge">rust_agent</span></td>
+              <td><code>https://infoman.ai/agent/xxxx</code></td>
+              <td>paused</td><td>rev_001</td>
+              <td><button class="copy-route" type="button" data-copy="https://infoman.ai/agent/xxxx">复制 URL</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="principles">
+      <div class="section-head">
+        <div><div class="eyebrow">04 / Architecture boundaries</div><h2>关键设计原则</h2></div>
+        <p>Claude Code 属于本机高权限执行边界，因此容量、安全、取消和审计必须在第一版就成为架构组成，而不是后续补丁。</p>
+      </div>
+      <div class="principles">
+        <article class="principle"><div class="principle-index">P-01</div><div><h3>静态启动配置与动态 Agent 配置分离</h3><p>管理密码哈希、DATABASE_URL 和主密钥属于环境变量；Agent 业务配置由管理端写入 PostgreSQL 并保留 revision。</p></div></article>
+        <article class="principle"><div class="principle-index">P-02</div><div><h3>禁止 shell 字符串拼接</h3><p>Claude Code 使用 <code>tokio::process::Command</code> 参数数组，限制 executable、cwd、env、运行时长和输出大小。</p></div></article>
+        <article class="principle"><div class="principle-index">P-03</div><div><h3>双层容量保护</h3><p>全局并发限制保护主机，每 Agent Semaphore 保证租户隔离；队列必须有界，过载明确返回 429 或 503。</p></div></article>
+        <article class="principle"><div class="principle-index">P-04</div><div><h3>可靠状态而非内存承诺</h3><p>幂等键以 <code>(agent_id, key)</code> 隔离，并记录请求 hash；异步回调通过持久 Outbox 重试，进程重启不丢失。</p></div></article>
+      </div>
+
+      <div class="decision-bar" style="margin-top: 16px">
+        <div><strong>Open design decision</strong><h3>输出契约需要在实现前确认</h3><p>所有 Agent 继续使用统一 MoTA Payload，还是允许每个 Agent 配置独立 JSON Schema？</p></div>
+        <div class="decision-options"><span>统一 MoTA Envelope</span><span>Per-Agent JSON Schema</span><span>两者均支持</span></div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap footer-inner">
+      <span>MOTA AGENT FABRIC / TARGET ARCHITECTURE</span>
+      <span>STATIC DOCUMENT · <span id="year">2026</span></span>
+    </div>
+  </footer>
+
+  <script>
+    const componentDetails = {
+      admin: {
+        title: "管理员",
+        copy: "只通过管理面操作 Agent。管理身份与任务调用身份完全分离，所有配置修改写入审计记录。",
+        meta: ["admin session", "audit actor", "least privilege"]
+      },
+      edge: {
+        title: "HTTPS 入口",
+        copy: "由 Caddy、Nginx 或云负载均衡器终止 TLS，统一转发到 Axum；承担基础速率限制和请求体上限。",
+        meta: ["infoman.ai", "TLS", "reverse proxy"]
+      },
+      "admin-surface": {
+        title: "Admin UI + API",
+        copy: "提供登录、Agent CRUD、测试执行、运行记录和健康状态。密码只保存 Argon2 哈希，会话使用 Secure/HttpOnly Cookie。",
+        meta: ["/admin", "/api/admin/*", "CSRF"]
+      },
+      "config-service": {
+        title: "Agent Config Service",
+        copy: "执行 slug 规范化、密钥引用检查、Schema 编译和执行器配置验证。只有完整有效的 revision 才能发布。",
+        meta: ["transaction", "validation", "revision"]
+      },
+      registry: {
+        title: "Agent Registry",
+        copy: "按 slug 提供不可变运行时快照。配置先完整验证并构建，再一次性替换，避免请求读取到半更新状态。",
+        meta: ["ArcSwap / RwLock", "revision-aware", "hot reload"]
+      },
+      caller: {
+        title: "调用方 / MoTA 平台",
+        copy: "调用方可以通过动态 Push URL 请求 Agent；MoTA Pull worker 也复用同一编排和执行能力。",
+        meta: ["Push", "Pull", "async callback"]
+      },
+      gateway: {
+        title: "Agent Gateway",
+        copy: "只注册一条 /agent/{slug} 路由。handler 查找 runtime 后按 Agent 配置执行签名、限流和协议选择。",
+        meta: ["Axum", "dynamic slug", "request guard"]
+      },
+      adapter: {
+        title: "协议适配器",
+        copy: "把现有 MoTA BoundTask、旧 Push 请求和通用 JSON 转换为统一 AgentContext，并在返回时恢复目标协议信封。",
+        meta: ["MOTA Push", "MOTA Pull", "generic JSON"]
+      },
+      orchestrator: {
+        title: "Run Orchestrator",
+        copy: "创建运行记录，执行输入 Schema、幂等和 deadline 检查，并把内部错误转换为稳定且脱敏的外部状态。",
+        meta: ["run lifecycle", "idempotency", "cancellation"]
+      },
+      scheduler: {
+        title: "Scheduler + Executor Router",
+        copy: "先获得全局和 Agent 两层容量配额，再依据 executor kind 分派到 Claude Code 或 Rust Agent。队列不会无限增长。",
+        meta: ["bounded queue", "Semaphore", "backpressure"]
+      }
+    };
+
+    const inspectorTitle = document.getElementById("inspector-title");
+    const inspectorCopy = document.getElementById("inspector-copy");
+    const inspectorMeta = document.getElementById("inspector-meta");
+    const nodes = document.querySelectorAll("[data-detail]");
+
+    nodes.forEach((node) => {
+      node.addEventListener("click", () => {
+        const detail = componentDetails[node.dataset.detail];
+        if (!detail) return;
+        nodes.forEach((item) => item.classList.remove("is-selected"));
+        node.classList.add("is-selected");
+        inspectorTitle.textContent = detail.title;
+        inspectorCopy.textContent = detail.copy;
+        inspectorMeta.replaceChildren(...detail.meta.map((value) => {
+          const tag = document.createElement("span");
+          tag.textContent = value;
+          return tag;
+        }));
+      });
+    });
+
+    const flowTabs = document.querySelectorAll("[data-flow]");
+    const flowElements = document.querySelectorAll("[data-flows]");
+    flowTabs.forEach((tab) => {
+      tab.addEventListener("click", () => {
+        const selectedFlow = tab.dataset.flow;
+        flowTabs.forEach((item) => item.setAttribute("aria-pressed", String(item === tab)));
+        flowElements.forEach((element) => {
+          const flows = element.dataset.flows.split(/\s+/);
+          element.classList.toggle("is-muted", selectedFlow !== "all" && !flows.includes(selectedFlow));
+        });
+      });
+    });
+
+    async function copyText(value) {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(value);
+        return;
+      }
+      const input = document.createElement("textarea");
+      input.value = value;
+      input.style.position = "fixed";
+      input.style.opacity = "0";
+      document.body.appendChild(input);
+      input.select();
+      document.execCommand("copy");
+      input.remove();
+    }
+
+    document.querySelectorAll("[data-copy]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const original = button.textContent;
+        try {
+          await copyText(button.dataset.copy);
+          button.textContent = "已复制";
+        } catch (_) {
+          button.textContent = "复制失败";
+        }
+        window.setTimeout(() => { button.textContent = original; }, 1400);
+      });
+    });
+
+    document.getElementById("year").textContent = String(new Date().getFullYear());
+  </script>
+</body>
+</html>
