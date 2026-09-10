@@ -31,6 +31,8 @@ type App struct {
 	// AgentDispatcher(与 Pull worker/Push 心跳共用同一套准入闸与执行闸);
 	// 平台关闭时回落到嵌入模式的进程内 Processor。
 	execution *mota.TaskExecutionBackend
+	// a2aConfig 是 A2A 接入配置;nil 或 Enabled=false 时不挂载 A2A 路由。
+	a2aConfig *mota.A2AConfig
 }
 
 func (a App) BuildRouter(
@@ -67,6 +69,19 @@ func (a App) BuildRouter(
 		r.Handle("/admin", admin)
 		r.Handle("/admin/*", admin)
 		r.Handle("/api/admin/*", admin)
+
+		if a.a2aConfig != nil && a.a2aConfig.Enabled {
+			a2aState, err := mota.NewA2aStateFromPlatform(a.platform, a.a2aConfig)
+			if err != nil {
+				return nil, fmt.Errorf("build A2A state: %w", err)
+			}
+			slog.Info("A2A v1.0 endpoint enabled",
+				"route", a.a2aConfig.BasePath+"/{slug}", "card", "/.well-known/agent-card.json")
+			r.Mount("/", mota.A2ARouter(a2aState))
+		}
+	} else if a.a2aConfig != nil && a.a2aConfig.Enabled {
+		// A2A 依赖 Registry 与执行器,两者都由平台提供。
+		slog.Warn("A2A endpoint requires platform.enabled=true; A2A stays disabled")
 	}
 	return r, nil
 }
@@ -173,8 +188,18 @@ func main() {
 		heartbeatStore = platform.Store
 	}
 
+	// A2A 接入配置。启动期加载一次,配置错误立即失败而不是等到首个请求。
+	a2aConfig, err := mota.LoadA2AConfig()
+	if err != nil {
+		slog.Error("a2a config failed", "err", err)
+		os.Exit(1)
+	}
+	if platform != nil {
+		a2aConfig.ResolveDefaultCardSlug(motaCfg.DefaultAgentSlug)
+	}
+
 	built, err := hwhkit.Run(context.Background(),
-		App{processor: processor, config: motaCfg, platform: platform, execution: execution},
+		App{processor: processor, config: motaCfg, platform: platform, execution: execution, a2aConfig: a2aConfig},
 		config.DefaultBootstrap())
 	if err != nil {
 		slog.Error("bootstrap failed", "err", err)

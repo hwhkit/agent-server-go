@@ -32,12 +32,13 @@
 | 9 | Gateway HTTP + callback 模块 | ✅ 完成 |
 | 10 | Admin + Web(argon2 口令) | ✅ 完成 |
 | 11 | **MOTA 协议层**(`idempotency.go` / `push.go` / `worker.go` / `Dispatcher()` 访问器) | ✅ 完成 |
-| 12 | 装配(main.go/app.go 依赖注入、两个 HTTP 客户端、heartbeat store、路由挂载顺序) | ✅ 完成(A2A 除外,见 §7.4) |
-| 13 | 移植 rs `tests/` 6 个集成测试(含 `protocol_dispatch_test.rs` 的 push/pull 双路径分发) | ✅ 完成(A2A 相关 2 个文件除外,见 §7.4) |
+| 12 | 装配(main.go/app.go 依赖注入、两个 HTTP 客户端、heartbeat store、路由挂载顺序) | ✅ 完成 |
+| 13 | 移植 rs `tests/` 6 个集成测试(含 `protocol_dispatch_test.rs` 的 push/pull 双路径分发) | ✅ 完成 |
+| 14 | A2A(Agent2Agent Protocol v1.0)接入,见 §9 | ✅ 完成 |
 
-全量测试现状(#13 全部完成后一次性验证的快照,精确数字见下方「验证记录」):
-**954 PASS / 0 FAIL / 0 SKIP**,`-race` 干净,`go vet` 干净,`gofmt` 无差异。
-1-13 号任务(除 A2A)现已**全部完成**。
+全量测试现状(#14 全部完成后一次性验证的快照,精确数字见下方「验证记录」):
+**1029 PASS / 0 FAIL / 0 SKIP**,`-race` 干净,`go vet` 干净,`gofmt` 无差异。
+1-14 号任务**全部完成**,没有已知的剩余差距。
 
 ## 2. #11 MOTA 协议层:已完成的部分
 
@@ -489,7 +490,7 @@ cfg, processor, deps)`(传空 `PlatformDependencies{}`,验证过两者行为
 但连续跑几次就会偶发。修法:把「等 2 条心跳」换成「等 2 条 channel_events
 记录」,`token.Cancel()` 挪到确认记录已经落库之后。
 
-### 7.4 已知缺口:A2A 接入未实现(需要用户决策)
+### 7.4 已知缺口(历史记录):A2A 接入未实现,已在 §9 补齐
 
 rs 侧有完整的 A2A(Agent-to-Agent)模块,`src/a2a/` 目录下 10 个文件
 (`auth.rs`/`card.rs`/`config.rs`/`handler.rs`/`jsonrpc.rs`/`mapping.rs`/
@@ -511,10 +512,87 @@ agent-card.json` 与 `{base_path}/{slug}` 两个路径,依赖平台的 Registry 
 
 ### Step C —— #13 移植 rs `tests/` 集成测试(已完成,记录见 §7.3)
 
-## 9. 遗留事项(唯一未完成项)
+## 9. #14 A2A(Agent2Agent Protocol v1.0)接入(已完成)
 
-**A2A 接入**(rs `src/a2a/` 10 个文件,`tests/a2a_card_test.rs` +
-`tests/a2a_rpc_test.rs`)——详见 §7.4。这是本次任务范围之外发现的缺口,
-需要用户明确是否要作为新任务(#14)启动,启动前不会主动开工。除此之外,
-1~13 号任务已全部完成并通过全量验证(build/vet/test/race/gofmt 五项)。
+§7.4 记录的缺口已经补上。rs `src/a2a/` 10 个文件全部按 1:1 语义移植到 Go
+(新增 9 个 `mota/a2a_*.go` 源文件,约 2400 行):
+
+| rs 文件 | Go 文件 | 内容 |
+|---|---|---|
+| `types.rs` | `a2a_types.go` | TaskState/Role/Part/Message/Artifact/Task/AgentCard 等全部数据模型,camelCase JSON、SCREAMING_SNAKE_CASE 枚举、oneof 靠成员存在性判别 |
+| `jsonrpc.rs` | `a2a_jsonrpc.go` | JSON-RPC 2.0 信封 + `A2AErrorKind`(14 种错误码,-32700~-32009)+ ProtoJSON `google.rpc.ErrorInfo` 包装 |
+| `auth.rs` | `a2a_auth.go` | Bearer token 派生(`a2a_` + HMAC-SHA256(signing_secret, "a2a-bearer-v1\n{slug}"))+ 定长比较校验 |
+| `skills.rs` | `a2a_skills.go` | 6 个预置岗位 -> `A2AAgentSkill` 静态映射表,tags 必填非空 |
+| `card.rs` | `a2a_card.go` | Agent Card 构造:`supportedInterfaces` 有序数组、`provider.organization`、`capabilities.extendedAgentCard` |
+| `store.rs` | `a2a_store.go` | `A2ATaskStore` 内存 + PostgreSQL 双后端,复用 `agent_runs` 表(`Task.ID = run_id`),不新建任务表 |
+| `mapping.rs` | `a2a_mapping.go` | `A2AMessage` <-> `TaskContext`/`ProcessedOutput` 双向映射:DataPart 直通 + TextPart 降级两条通道 |
+| `handler.rs` | `a2a_handler.go` | JSON-RPC 方法分派:`SendMessage`/`GetTask` 已实现,`SendStreamingMessage`/`SubscribeToTask`/`CancelTask`/`ListTasks` 声明但返回 `UnsupportedOperation` |
+| `config.rs` | `a2a_config.go` | 独立 `[a2a]` 配置段(不挂到 `mota.Config`,理由与 rs 一致:避免打断既有测试的结构体字面量) |
+| `mod.rs` | `a2a_router.go` | 路由组装:`/.well-known/agent-card.json` + 别名 `/.well-known/agent.json`、`{base_path}/{slug}/agent-card.json`、`{base_path}/{slug}` |
+
+**装配到 `main.go`**:`App` 新增 `a2aConfig` 字段;`main()` 启动期
+`LoadA2AConfig()` 失败即退出(配置错误立即失败而不是等到首个请求);
+`BuildRouter` 里平台开启且 `a2aConfig.Enabled` 时挂载 `A2ARouter`,平台关闭
+但 A2A 声称开启时只 warn 不启动(A2A 依赖 Registry 与执行器,两者都由平台
+提供,与 rs 语义一致)。`config/default.toml` 补了 `[a2a]` 段,默认
+`enabled = false`(A2A 能触发本机 CLI 子进程,必须显式开启)。
+
+**Go 侧复用了已有基建**,没有重新发明:`RoleDescriptor` 加了
+`RequiredFields` 字段并新增 `ResolveRoleDescriptor` 导出函数(原来只有
+`resolveRoleContract` 私有版本);`AgentStore` 加了 `GetRun`(按主键单读,
+`ListRuns` 是面向管理台的倒序列表,定位不到具体一条);`randomToken`/
+`AgentDispatcher`/`AgentRegistry` 直接复用,一行都没改。
+
+**测试**(全部新增,rs 侧原有测试逐个核对后 1:1 搬运,只做 Go 语言层面的
+表达调整,行为断言未删减):
+
+- `a2a_config_test.go` — 7 个(禁用默认值、base_path 尾斜杠/绝对路径校验、
+  provider 字段配对、default_card_slug 回退、`config/default.toml` 可加载、
+  disabled 时跳过校验)。
+- `a2a_auth_test.go` — 5 个(token 不含明文密钥、绑定 slug+secret、大小写
+  不敏感、缺失/错误方案报 Missing、错误 token 报 Invalid)。
+- `a2a_skills_test.go` — 5 个(6 个预置岗位都有 profile、tags 必填、空
+  prompt 回落基本面、自定义 prompt 走 custom skill、description 永不为空)。
+- `a2a_card_test.go` — 5 个(interface 携带 url/binding/version、v0.3 字段
+  不出现、Bearer scheme 用 oneof 成员名、description 回落、鉴权可关闭时
+  不声明安全字段)。
+- `a2a_store_test.go` — 6 个(内存后端:运行中报 Working、完成态往返
+  artifacts、重复 task id 判冲突、重复 finish 报错、未知任务返回 nil、
+  损坏快照优雅降级)。
+- `a2a_mapping_test.go` — 10 个(DataPart 直通解析、positionType 岗位回落、
+  纯文本降级、文本并入已有 brief 不覆盖、失败路径关键词检测、多文本块拼接、
+  非对象 data 降级到文本通道、自定义 prompt 不设 positionType、artifact
+  两段式结构、空摘要省略)。
+- `a2a_router_test.go` — 11 个(HTTP 层 card 端点:v1.0 interface 结构、
+  v0.3 字段缺失、skills 映射、Bearer scheme、两个 well-known 路径、无默认
+  Agent 时 404、停用 Agent 404、未知 slug 404、slug 大小写不敏感、自定义
+  base_path、Card 反序列化回强类型)。
+- `a2a_rpc_test.go` — 24 个(HTTP 层 JSON-RPC 端到端,走真实本机 Pi CLI:
+  SendMessage 完整产出、历史回显、DataPart 驱动岗位契约、GetTask 读取/
+  historyLength=0/未知 id、执行失败态、停用 Agent 404、未知方法、4 个
+  声明未实现方法、JSON 解析错误、jsonrpc 版本错误、message/parts 字段级
+  校验 3 项、推送通知拒绝、returnImmediately 拒绝、多轮会话复用 contextId、
+  A2A-Version 协商、4 个鉴权场景)。
+- `a2a_postgres_test.go` — 1 个(需要 `TEST_DATABASE_URL`:`GetRun` 单读、
+  A2A task 生命周期在真实 `agent_runs` 表里的完整往返,对应 rs
+  `postgres_store_test.rs::get_run_reads_single_record_and_a2a_task_snapshot`)。
+
+共 **74 个新测试**,全部一次性通过,没有出现需要回头修的实现 bug(A2A 是
+在 #1~13 的基础设施——`AgentRegistry`/`AgentDispatcher`/`AgentExecutor`/
+`ProcessedOutput`——已经就位之后做的薄协议适配层,复用面很大)。
+
+**验证**(2026-09-10,A2A 完成后):
+
+```
+gofmt: 无差异(mota/ main.go)
+go build ./...: 通过;go build -o /tmp/... .: 可执行文件真的能链接
+go vet ./...: 通过
+go test ./... -count=1: ok
+go test ./mota/ -count=1 -v: 1029 --- PASS,0 FAIL,0 SKIP(#13 完成时是 954,
+  A2A 新增 74 个 + 1 个既有基建测试因加了 GetRun 之类的辅助改动)
+go test -race ./... -count=1: ok
+```
+
+至此 rs `mota-agent-server-rs` 的功能已**全部**复刻到 Go 侧,包括当初记录
+为缺口的 A2A 模块。没有已知的剩余差距。
 

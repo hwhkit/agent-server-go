@@ -625,6 +625,30 @@ func (s *AgentStore) FinalizeRun(ctx context.Context, finalization RunFinalizati
 	return tx.Commit(ctx)
 }
 
+// GetRun 按主键读取单次运行记录。A2A 的 GetTask 需要它:ListRuns 是面向管理台
+// 的倒序列表,无法定位具体 run。不存在时返回 (nil, nil)。
+func (s *AgentStore) GetRun(ctx context.Context, agentSlug, runID string) (*RunView, error) {
+	const selectRun = `SELECT run_id, agent_slug, agent_revision, executor_kind, execution_mode, ` +
+		`status, duration_ms, error_code, response_code, request_json, result_json, ` +
+		`executor_result_json, created_at, completed_at FROM agent_runs ` +
+		`WHERE agent_slug = $1 AND run_id = $2`
+
+	var view RunView
+	err := s.pool.QueryRow(ctx, selectRun, agentSlug, runID).Scan(
+		&view.RunID, &view.AgentSlug, &view.AgentRevision, &view.ExecutorKind,
+		&view.ExecutionMode, &view.Status, &view.DurationMs, &view.ErrorCode,
+		&view.ResponseCode, &view.Input, &view.Output, &view.ExecutorOutput,
+		&view.CreatedAt, &view.CompletedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &view, nil
+}
+
 // ListRuns 按时间倒序列出运行记录。slug 非空时只列该 Agent。limit 收敛到 1..200。
 func (s *AgentStore) ListRuns(ctx context.Context, limit int, slug string) ([]RunView, error) {
 	limit = clampInt(limit, 1, 200)

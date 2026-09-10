@@ -128,3 +128,27 @@ allowed_env = [
   "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
   "LITELLM_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY"
 ]
+
+# --- A2A(Agent2Agent Protocol v1.0)接入 ---
+# 只实现 v1.0。Agent Card 同时挂在 /.well-known/agent-card.json(v1.0 路径)与
+# /.well-known/agent.json(pre-1.0 SDK 别名);每个 Agent 另有独立 card
+# {base_path}/{slug}/agent-card.json 与 JSON-RPC 端点 {base_path}/{slug}。
+#
+# 默认关闭:A2A 入口能触发本机 CLI 子进程执行,开启前必须先确认
+# require_bearer_auth 的令牌签发已到位。环境变量前缀 A2A__*。
+[a2a]
+enabled = false
+base_path = "/a2a"
+# 声明并提供 SendStreamingMessage / SubscribeToTask。
+stream_enabled = true
+# 强制 Authorization: Bearer;仅在受信内网且已有其他鉴权时才可关闭。
+require_bearer_auth = true
+# 对外 card 的 version 字段(Agent 自身版本，不是协议版本)；留空取内置版本号。
+# agent_version = "1.0.0"
+# provider 是可选对象，但一旦声明，organization 与 url 必须同时给出。
+# provider_organization = "MOTA"
+# provider_url = "https://infoman.ai"
+# documentation_url = "https://infoman.ai/docs/a2a"
+max_request_body_bytes = 1048576
+# root well-known card 指向的 Agent;留空则回落 [mota].default_agent_slug。
+default_card_slug = ""

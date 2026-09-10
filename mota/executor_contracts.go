@@ -58,15 +58,40 @@ type RoleDescriptor struct {
 	ID string
 	// Label 是岗位中文名。
 	Label string
+	// RequiredFields 是岗位输出契约的必填主字段(非 final 形态)。
+	RequiredFields []string
 }
 
 // RoleDescriptors 返回全部预置岗位的公开元数据。
 func RoleDescriptors() []RoleDescriptor {
 	descriptors := make([]RoleDescriptor, 0, len(roleContracts))
 	for _, role := range roleContracts {
-		descriptors = append(descriptors, RoleDescriptor{ID: role.id, Label: role.label})
+		descriptors = append(descriptors, descriptorOf(role))
 	}
 	return descriptors
+}
+
+// ResolveRoleDescriptor 把 system_prompt 解析为预置岗位描述,语义与
+// resolveRoleContract 一致:命中预置标识 → 该岗位;空 → 默认基本面;
+// 其余(自定义提示词)→ 第二个返回值为 false。
+func ResolveRoleDescriptor(systemPrompt string) (RoleDescriptor, bool) {
+	trimmed := strings.TrimSpace(systemPrompt)
+	if trimmed == "" {
+		return descriptorOf(roleContracts[0]), true
+	}
+	for _, role := range roleContracts {
+		if trimmed == role.id {
+			return descriptorOf(role), true
+		}
+	}
+	return RoleDescriptor{}, false
+}
+
+func descriptorOf(role roleContract) RoleDescriptor {
+	return RoleDescriptor{
+		ID: role.id, Label: role.label,
+		RequiredFields: requiredForRole(role.id, false),
+	}
 }
 
 // buildPrompt 组装交给模型的完整提示词:岗位契约 + 任务输入 + 输出约束 + 语言硬约束。
