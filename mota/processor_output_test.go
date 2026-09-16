@@ -19,7 +19,7 @@ func TestToTransportPayloadUsesPayloadResultWhenPresent(t *testing.T) {
 		Extensions:    []any{},
 		PayloadResult: map[string]any{"gate": "PASS", "checks": []any{}},
 	}
-	payload := out.ToTransportPayload(nil, false)
+	payload := out.ToTransportPayload(nil)
 	result, ok := payload.PayloadResult.(map[string]any)
 	if !ok {
 		t.Fatalf("payload_result should be an object, got %T", payload.PayloadResult)
@@ -52,7 +52,7 @@ func TestToTransportPayloadSynthesizesFromLegacyFields(t *testing.T) {
 				Extensions:    []any{},
 				PayloadResult: payloadResult,
 			}
-			result, ok := out.ToTransportPayload(nil, false).PayloadResult.(map[string]any)
+			result, ok := out.ToTransportPayload(nil).PayloadResult.(map[string]any)
 			if !ok {
 				t.Fatalf("payload_result should be an object")
 			}
@@ -76,7 +76,7 @@ func TestToTransportPayloadIncludesEvidenceRefsWhenPresent(t *testing.T) {
 		Extensions:   []any{},
 		EvidenceRefs: []any{map[string]any{"sourceType": "TASK_INPUT", "sourceId": "task"}},
 	}
-	result, ok := out.ToTransportPayload(nil, false).PayloadResult.(map[string]any)
+	result, ok := out.ToTransportPayload(nil).PayloadResult.(map[string]any)
 	if !ok {
 		t.Fatal("payload_result should be an object")
 	}
@@ -86,30 +86,34 @@ func TestToTransportPayloadIncludesEvidenceRefsWhenPresent(t *testing.T) {
 	}
 }
 
-// usage 只在受信 Host 显式要求时才出现。
-func TestToTransportPayloadGatesUsageBehindTrustedFlag(t *testing.T) {
+// 信封必须总是携带 usage(RULE-BND-001):有真实计量用真实值,没有则兜底零值。
+func TestToTransportPayloadAlwaysReportsUsage(t *testing.T) {
 	usage := FinalReportedUsage(10, nil, 4, nil, 1)
 	out := &ProcessedOutput{Assessments: []any{}, Summary: "s", Extensions: []any{}, Usage: usage}
 
-	if payload := out.ToTransportPayload(nil, false); payload.Usage != nil {
-		t.Error("usage must be suppressed when include_usage is false")
+	if payload := out.ToTransportPayload(nil); payload.Usage != usage {
+		t.Error("a reported usage must be forwarded verbatim")
 	}
-	if payload := out.ToTransportPayload(nil, true); payload.Usage == nil {
-		t.Error("usage must be forwarded when include_usage is true")
-	}
-	// 没有可靠用量时,即使受信也不能凭空造。
+	// 没有可靠计量时兜底最小合规 FINAL usage(平台要求 totalTokens > 0),
+	// 而不是省略字段(后端会拒收)或零值(判 RUNTIME_USAGE_INVALID)。
 	out.Usage = nil
-	if payload := out.ToTransportPayload(nil, true); payload.Usage != nil {
-		t.Error("a trusted host must not fabricate usage")
+	payload := out.ToTransportPayload(nil)
+	if payload.Usage == nil {
+		t.Fatal("usage must never be omitted: backend rejects envelopes without it")
 	}
-	// ToPayload / ToPayloadWithLanguage 是不带 usage 的便捷入口。
+	if payload.Usage.PromptTokens != 1 || payload.Usage.CompletionTokens != 1 ||
+		payload.Usage.TotalTokens != 2 || payload.Usage.InvocationCount != 1 ||
+		payload.Usage.Status != "FINAL" || payload.Usage.Estimated {
+		t.Errorf("fallback usage must be minimal FINAL usage (1/1/2), got %+v", payload.Usage)
+	}
+	// 便捷入口同样必须带 usage。
 	out.Usage = usage
-	if out.ToPayload().Usage != nil {
-		t.Error("ToPayload must not include usage")
+	if out.ToPayload().Usage == nil {
+		t.Error("ToPayload must include usage")
 	}
 	language := "zh-CN"
-	if out.ToPayloadWithLanguage(&language).Usage != nil {
-		t.Error("ToPayloadWithLanguage must not include usage")
+	if out.ToPayloadWithLanguage(&language).Usage == nil {
+		t.Error("ToPayloadWithLanguage must include usage")
 	}
 }
 
@@ -117,7 +121,7 @@ func TestToTransportPayloadGatesUsageBehindTrustedFlag(t *testing.T) {
 func TestToTransportPayloadDoesNotAppendLanguageBoilerplate(t *testing.T) {
 	out := &ProcessedOutput{Assessments: []any{}, Summary: "原始摘要", Extensions: []any{}}
 	for _, language := range []*string{nil, strPtr("zh-CN"), strPtr("en-US")} {
-		if got := out.ToTransportPayload(language, false).PayloadInfo; got != "原始摘要" {
+		if got := out.ToTransportPayload(language).PayloadInfo; got != "原始摘要" {
 			t.Errorf("payload_info = %q, want the untouched summary", got)
 		}
 	}
@@ -226,7 +230,7 @@ func TestExecutorResultJSON(t *testing.T) {
 
 func TestPlaceholderOutputShape(t *testing.T) {
 	out := PlaceholderOutput("摘要")
-	payload := out.ToTransportPayload(nil, false)
+	payload := out.ToTransportPayload(nil)
 	if payload.PayloadInfo != "摘要" {
 		t.Errorf("payload_info = %q, want 摘要", payload.PayloadInfo)
 	}
@@ -452,7 +456,7 @@ func TestPlaceholderProcessorUnknownPositionHasNoSkeleton(t *testing.T) {
 			t.Errorf("position %v should not produce a skeleton, got %v", position, out.PayloadResult)
 		}
 		// 信封仍然合法。
-		result, ok := out.ToTransportPayload(nil, false).PayloadResult.(map[string]any)
+		result, ok := out.ToTransportPayload(nil).PayloadResult.(map[string]any)
 		if !ok {
 			t.Fatal("payload_result should be synthesized")
 		}
@@ -470,7 +474,7 @@ func TestPlaceholderProcessorProducesNoEvidenceRefs(t *testing.T) {
 	if len(out.EvidenceRefs) != 0 {
 		t.Errorf("EvidenceRefs = %v, want empty", out.EvidenceRefs)
 	}
-	encoded, err := json.Marshal(out.ToTransportPayload(nil, false))
+	encoded, err := json.Marshal(out.ToTransportPayload(nil))
 	if err != nil {
 		t.Fatal(err)
 	}

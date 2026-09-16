@@ -26,7 +26,7 @@
 | 信封版本固定 | `schemaVersion` 必须为 `1.0` |
 | 岗位显式 | 正式岗位任务的 `positionType` 使用平台定义的 8 个大写枚举；探测任务可省略 |
 | 边界字段收口 | `globalParameters` 只允许 `language/targetMarkets/symbolPool/universeMode`；`runtimeContext` 只允许 `isFinal` |
-| 结果信封固定 | 普通 Bound 顶层为 `payload_result/payload_info/contract_version`；受信 Host 额外携带 FINAL `usage`，版本固定 `V2` |
+| 结果信封固定 | 顶层为 `payload_result/payload_info/contract_version` 加必填 `usage`（RULE-BND-001，2026-09-16 起后端拒收缺 usage 的回传；无计量兜底零值），版本固定 `V2` |
 | 去重可恢复 | `runId + request SHA-256` 绑定幂等键并写入 PostgreSQL |
 | 异步只走 v2 | callback 无 token；每次尝试使用新的 Unix 秒签名 |
 | 回执读两层 | 先看 HTTP/code，再读 `accepted/runStatus/runMsg` |

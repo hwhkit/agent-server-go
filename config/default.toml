@@ -56,7 +56,9 @@ default_agent_slug = ""
 # 可选的回调令牌(mpk_*)。配置了会在 callback URL 上附加 ?token=,
 # 兼容要求「令牌+签名」双凭证的存量平台;新平台(2026-08-17 起)令牌可选,可留空。
 # callback_token = "mpk_xxxxxxxx"
-# 仅受信 Investor Workflow Host 可开启；开启后成功结果必须携带供应商 FINAL usage。
+# 信封 usage 自 2026-09-16 起总是回传（RULE-BND-001）：执行器有计量用真实值，没有则兜底最小合规值（平台要求 totalTokens > 0）。
+# 本开关只对「受信 Investor Workflow Host」生效：开启后拿不到供应商 FINAL usage 的结果直接判失败
+# （同步 502 / 异步抑制 callback），不再走零值兜底。
 trusted_usage_reporting_enabled = false
 
 # --- 单体多 Agent 管理平台 ---

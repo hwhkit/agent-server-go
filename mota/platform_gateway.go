@@ -741,7 +741,7 @@ func (s *PlatformState) runGatewaySync(
 		return
 	}
 
-	payload := output.ToTransportPayload(request.context.Language, s.TrustedUsageReportingEnabled)
+	payload := output.ToTransportPayload(request.context.Language)
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		slog.Error("serialize agent output failed",
@@ -851,7 +851,7 @@ func (s *PlatformState) runGatewayAsync(
 			return
 		}
 
-		payload := output.ToTransportPayload(request.context.Language, s.TrustedUsageReportingEnabled)
+		payload := output.ToTransportPayload(request.context.Language)
 		encoded, err := json.Marshal(payload)
 		if err != nil {
 			slog.Error("serialize async agent output failed",

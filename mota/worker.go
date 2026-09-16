@@ -298,14 +298,15 @@ func (w *PullWorker) renewLoop(ctx context.Context, runID string) {
 // completeTask 回传结果:POST {queue}/complete,带 X-MoTA-Run-ID。
 //
 // Pull complete 与 Push callback 使用同一 V2 信封,保留技术面 signals、风控
-// checks、交易 orders 等岗位专属 payload_result;受信 Host 额外携带 usage。
+// checks、交易 orders 等岗位专属 payload_result;信封必须携带 usage
+// (RULE-BND-001,缺计量时兜底最小合规值)。
 func (w *PullWorker) completeTask(ctx context.Context, runID string, out *ProcessedOutput, errorInfo *string) {
 	trusted := w.cfg.TrustedUsageReportingEnabled
 	if trusted && out.Usage == nil {
 		slog.Warn("trusted Pull result has no FINAL provider usage; complete suppressed", "run_id", runID)
 		return
 	}
-	payload := out.ToTransportPayload(nil, trusted)
+	payload := out.ToTransportPayload(nil)
 	if errorInfo != nil {
 		payload.PayloadInfo = *errorInfo
 	}

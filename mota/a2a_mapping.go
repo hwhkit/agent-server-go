@@ -189,7 +189,7 @@ func a2aMergeTextIntoBrief(brief any, text string) any {
 // 一个 artifact 两个 part:结构化 payload_result(DataPart)在前,人读摘要
 // payload_info(TextPart)在后。这样只认文本的客户端也能用。
 func A2AArtifactFromOutput(artifactID string, agent *AgentConfig, output *ProcessedOutput) A2AArtifact {
-	payload := output.ToTransportPayload(nil, false)
+	payload := output.ToTransportPayload(nil)
 	parts := []A2APart{A2APartData(map[string]any{
 		"payloadResult":   payload.PayloadResult,
 		"contractVersion": payload.ContractVersion,

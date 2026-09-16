@@ -596,3 +596,23 @@ go test -race ./... -count=1: ok
 至此 rs `mota-agent-server-rs` 的功能已**全部**复刻到 Go 侧,包括当初记录
 为缺口的 A2A 模块。没有已知的剩余差距。
 
+## 2026-09-16 · usage 改为每次结果回传必填（RULE-BND-001 对齐）
+
+线上后端自 2026-09-15 起对所有 Bound 结果回传（Push 同步 200 / Push 异步
+callback / Pull complete）强制顶层 `usage`，缺失判 `RUNTIME_USAGE_MISSING`
+拒收（本仓实测：sync 200 三键信封静默拒收、async callback 回执
+`accepted:false` + `RUNTIME_USAGE_MISSING`）。旧实现「普通通道不带 usage、
+仅受信 Host 携带」与运行期规则冲突，本次对齐：
+
+- `ToTransportPayload` 去掉 `includeUsage` 门控：执行器报告用量用真实值；
+  无计量兜底零值 FINAL usage（0/0/0、invocationCount=1、非估算）。
+- `TrustedUsageReportingEnabled` 语义收窄为「受信严格模式」：开启后拿不到
+  供应商 usage 仍判失败（同步 502 / 异步抑制 callback），不走零值兜底。
+- 同步修改 push.go / worker.go / platform_gateway.go 调用点与
+  processor_output_test.go / push_test.go 断言（信封 4 键）。
+- 同根因的 mota-creator-web 随包 Push/Pull 开发者工具包已于同日修复并推送。
+
+补充（同日第二轮实测）：零值兜底被平台判 `RUNTIME_USAGE_INVALID`——运行期
+要求 `totalTokens > 0` 且等于 `promptTokens + completionTokens`（冻结契约
+`minimum: 0` 与实现不符）。兜底改为最小合规值 1/1/2（`FinalReportedUsage(1,
+nil, 1, nil, 1)`）。

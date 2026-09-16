@@ -131,8 +131,11 @@ func assertEnvelope(t *testing.T, raw []byte, wantAssessments int) {
 	if err := json.Unmarshal(raw, &top); err != nil {
 		t.Fatalf("bad response JSON: %v", err)
 	}
-	if len(top) != 3 {
-		t.Fatalf("envelope must have exactly 3 top-level keys, got %d: %s", len(top), raw)
+	if len(top) != 4 {
+		t.Fatalf("envelope must have exactly 4 top-level keys (three business keys + usage), got %d: %s", len(top), raw)
+	}
+	if _, ok := top["usage"]; !ok {
+		t.Fatalf("envelope must carry usage (RULE-BND-001): %s", raw)
 	}
 	env := decodePayload(t, raw)
 	if env.ContractVersion != "V2" {

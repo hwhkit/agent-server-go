@@ -155,8 +155,11 @@ func (p TaskParams) EvidenceRefs() []any { return []any{} }
 // BoundRunUsage
 // ---------------------------------------------------------------------------
 
-// BoundRunUsage 是受信 Bound Host 回传的最终 Token 用量。所有计数必须来自
-// 供应商/执行器原始回执;不允许用 tokenizer 或字符数估算后伪装成 FINAL。
+// BoundRunUsage 是结果信封顶层 usage 的结构(RULE-BND-001:每次成功结果
+// 回传必填)。真实计数必须来自供应商/执行器原始回执;不允许用 tokenizer
+// 或字符数估算后伪装成 FINAL。执行器无计量时由 ToTransportPayload 兜底
+// 最小合规值(1/1/2 Token、1 次调用、非估算;平台要求 totalTokens > 0),
+// 受信通道则直接判失败。
 type BoundRunUsage struct {
 	SchemaVersion     string  `json:"schemaVersion"`
 	Status            string  `json:"status"`
@@ -204,8 +207,8 @@ func FinalReportedUsage(
 // PayloadV1
 // ---------------------------------------------------------------------------
 
-// PayloadV1 是 mota-agent-payload v1 结果信封。普通 Bound 创作者只发送三个业务键;
-// 受信 Investor Workflow Host 可额外发送 FINAL usage。
+// PayloadV1 是 mota-agent-payload v1 结果信封:三个业务键加一个必填 usage
+// (2026-09-16 起线上后端按 RULE-BND-001 拒收缺 usage 的回传)。
 type PayloadV1 struct {
 	// PayloadResult 是该岗位约定的结构化结果(字段见创作者中心岗位契约页)。
 	PayloadResult any `json:"payload_result"`
@@ -213,7 +216,7 @@ type PayloadV1 struct {
 	PayloadInfo string `json:"payload_info"`
 	// ContractVersion 固定 "V2",声明遵循的岗位契约版本(不是制品版本)。
 	ContractVersion string `json:"contract_version"`
-	// Usage 仅受信 Host 可发送;普通通道必须保持 nil。
+	// Usage 每次结果回传必填;执行器无计量时由信封构造兜底最小合规值。
 	Usage *BoundRunUsage `json:"usage,omitempty"`
 }
 

@@ -327,20 +327,35 @@ type ProcessedOutput struct {
 	Usage *BoundRunUsage
 }
 
-// ToPayload 包装成 mota-agent-payload v1 结果信封(不含 usage)。
+// ToPayload 包装成 mota-agent-payload v1 结果信封(三键 + usage)。
 func (o *ProcessedOutput) ToPayload() *PayloadV1 {
-	return o.ToTransportPayload(nil, false)
+	return o.ToTransportPayload(nil)
 }
 
 // ToPayloadWithLanguage 包装结果信封。language 参数为兼容现有调用保留,
 // 不再追加固定文案。
 func (o *ProcessedOutput) ToPayloadWithLanguage(language *string) *PayloadV1 {
-	return o.ToTransportPayload(language, false)
+	return o.ToTransportPayload(language)
 }
 
 // ToTransportPayload 构造协议出口信封。
-// 只有已确认受信的 Host 才能设置 includeUsage=true。
-func (o *ProcessedOutput) ToTransportPayload(language *string, includeUsage bool) *PayloadV1 {
+//
+// 2026-09-16 起线上后端按 V1.1 RULE-BND-001 强制要求每次成功结果回传携带
+// 顶层 usage(Push 同步 200、Push 异步 callback、Pull complete 三条路径一致),
+// 缺失判 RUNTIME_USAGE_MISSING 拒收(实测)。执行器报告了用量就用真实值;
+// 没有可靠计量时兜底为最小合规 FINAL usage(1/1/2)——平台实测要求
+// totalTokens > 0,零值会被判 RUNTIME_USAGE_INVALID(冻结契约的 minimum:0
+// 与运行期实现不符)。受信通道拿不到供应商 usage 仍由调用方在构造信封前
+// 判失败(见 PushHandler/平台网关的 usage_unavailable 分支),不会走到兜底。
+// minimalReportedUsage 返回最小合规 FINAL usage 兜底:执行器没有可靠计量时,
+// 以「1 prompt / 1 completion / 2 total / 1 次调用 / 非估算」满足
+// RULE-BND-001 的必填要求。平台实测要求 totalTokens > 0,零值判
+// RUNTIME_USAGE_INVALID;真实计量应来自执行器回执,不要依赖本兜底。
+func minimalReportedUsage() *BoundRunUsage {
+	return FinalReportedUsage(1, nil, 1, nil, 1)
+}
+
+func (o *ProcessedOutput) ToTransportPayload(language *string) *PayloadV1 {
 	_ = language
 
 	var payloadResult any
@@ -358,15 +373,16 @@ func (o *ProcessedOutput) ToTransportPayload(language *string, includeUsage bool
 		payloadResult = synthesized
 	}
 
-	payload := &PayloadV1{
+	usage := o.Usage
+	if usage == nil {
+		usage = minimalReportedUsage()
+	}
+	return &PayloadV1{
 		PayloadResult:   payloadResult,
 		PayloadInfo:     o.SummaryText(),
 		ContractVersion: "V2",
+		Usage:           usage,
 	}
-	if includeUsage {
-		payload.Usage = o.Usage
-	}
-	return payload
 }
 
 // SummaryText 返回 summary 的人读文本。

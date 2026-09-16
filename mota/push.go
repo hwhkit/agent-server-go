@@ -265,7 +265,7 @@ func (h *PushHandler) handleSync(
 		}
 	}
 
-	payload := output.ToTransportPayload(taskContext.Language, h.Config.TrustedUsageReportingEnabled)
+	payload := output.ToTransportPayload(taskContext.Language)
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return 0, apierror.Internal("serialize task result failed")
@@ -338,7 +338,7 @@ func (h *PushHandler) handleAsync(
 					"run_id", runID)
 				return
 			}
-			payload = output.ToTransportPayload(language, trusted)
+			payload = output.ToTransportPayload(language)
 		}
 
 		receipt, err := SendCallback(ctx, client, callbackURL, runID,
