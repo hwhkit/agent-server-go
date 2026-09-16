@@ -47,8 +47,11 @@ var pushPositionTypes = map[string]bool{
 }
 
 // pushGlobalParameterKeys 是 bound-task v1 允许的 globalParameters 键。
+// 平台评测任务会下发风控参数(2026-09-16 实测样本),属于合法契约内容。
 var pushGlobalParameterKeys = map[string]bool{
 	"language": true, "targetMarkets": true, "symbolPool": true, "universeMode": true,
+	"riskLevel": true, "maxPositionSizeUsd": true, "maxDrawdownThreshold": true,
+	"stopLossThresholdPct": true, "maxInvestmentTargetsUsd": true,
 }
 
 // ---------------------------------------------------------------------------
@@ -156,9 +159,11 @@ func (h *PushHandler) handle(w http.ResponseWriter, r *http.Request) (int, *apie
 	}
 	var task BoundTask
 	if err := json.Unmarshal(body, &task); err != nil {
+		slog.Warn("Push envelope unmarshal failed", "run_id", runID, "body", string(body), "error", err.Error())
 		return 0, pushValidation("body", fmt.Sprintf("invalid task envelope: %v", err))
 	}
 	if apiErr := validateTask(&task, runID); apiErr != nil {
+		slog.Warn("Push task validation failed", "run_id", runID, "body", string(body), "api_error", fmt.Sprintf("%+v", apiErr))
 		return 0, apiErr
 	}
 
