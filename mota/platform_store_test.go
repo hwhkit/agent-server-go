@@ -868,11 +868,16 @@ func TestRunAndAgentViewJSONKeys(t *testing.T) {
 func TestStoreSessionLifecycle(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
+	username := unique("session-admin")
+	if err := store.EnsureBootstrapAdmin(ctx, username, "test-hash"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = store.DeleteUser(ctx, username) })
 	token := randomToken(32)
 	hash := tokenHash(token)
 	expiresAt := time.Now().Unix() + 3600
 
-	if err := store.CreateSession(ctx, hash, "admin", "csrf-token-value", expiresAt); err != nil {
+	if err := store.CreateSession(ctx, hash, username, "csrf-token-value", expiresAt); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
 	t.Cleanup(func() { _ = store.DeleteSession(ctx, hash) })
@@ -881,7 +886,7 @@ func TestStoreSessionLifecycle(t *testing.T) {
 	if err != nil || record == nil {
 		t.Fatalf("get session: %v (nil=%t)", err, record == nil)
 	}
-	if record.Username != "admin" || record.CSRFToken != "csrf-token-value" {
+	if record.Username != username || record.Role != UserRoleAdmin || record.CSRFToken != "csrf-token-value" {
 		t.Errorf("session = %+v", record)
 	}
 	if record.ExpiresAt != expiresAt {
@@ -889,7 +894,7 @@ func TestStoreSessionLifecycle(t *testing.T) {
 	}
 
 	// 同 token 再次创建即覆盖(ON CONFLICT DO UPDATE)。
-	if err := store.CreateSession(ctx, hash, "admin", "rotated-csrf", expiresAt+1); err != nil {
+	if err := store.CreateSession(ctx, hash, username, "rotated-csrf", expiresAt+1); err != nil {
 		t.Fatalf("recreate session: %v", err)
 	}
 	record, err = store.GetSession(ctx, hash)
@@ -916,8 +921,13 @@ func TestStoreSessionLifecycle(t *testing.T) {
 func TestStoreExpiredSessionIsNotReturned(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
+	username := unique("expired-admin")
+	if err := store.EnsureBootstrapAdmin(ctx, username, "test-hash"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = store.DeleteUser(ctx, username) })
 	hash := tokenHash(randomToken(32))
-	if err := store.CreateSession(ctx, hash, "admin", "csrf", time.Now().Unix()-1); err != nil {
+	if err := store.CreateSession(ctx, hash, username, "csrf", time.Now().Unix()-1); err != nil {
 		t.Fatalf("create expired session: %v", err)
 	}
 	t.Cleanup(func() { _ = store.DeleteSession(ctx, hash) })
@@ -928,6 +938,72 @@ func TestStoreExpiredSessionIsNotReturned(t *testing.T) {
 	}
 	if record != nil {
 		t.Error("expired session must not be returned")
+	}
+}
+
+func TestStoreUserRolesSessionsAndActorScopedAudits(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	admin := unique("account-admin")
+	user := unique("account-user")
+	if err := store.EnsureBootstrapAdmin(ctx, admin, "test-admin-hash"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = store.DeleteUser(ctx, admin) })
+	if created, err := store.CreateUser(ctx, user, "test-user-hash", UserRoleUser); err != nil || !created {
+		t.Fatalf("create user = %v, %v", created, err)
+	}
+	t.Cleanup(func() { _, _ = store.DeleteUser(ctx, user) })
+	if got, err := store.GetUserAuth(ctx, admin); err != nil || got == nil || got.Role != UserRoleAdmin {
+		t.Fatalf("admin auth = %#v, %v", got, err)
+	}
+	if got, err := store.GetUser(ctx, user); err != nil || got == nil || got.Role != UserRoleUser {
+		t.Fatalf("user view = %#v, %v", got, err)
+	}
+
+	tokenHashValue := tokenHash(randomToken(32))
+	if err := store.CreateSession(ctx, tokenHashValue, user, "csrf", time.Now().Unix()+3600); err != nil {
+		t.Fatal(err)
+	}
+	if session, err := store.GetSession(ctx, tokenHashValue); err != nil || session == nil || session.Role != UserRoleUser {
+		t.Fatalf("user session = %#v, %v", session, err)
+	}
+
+	if err := store.RecordAudit(ctx, admin, "user.create", user, map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordAudit(ctx, user, "agent.update", "role-agent", map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	userAudits, err := store.ListAuditLogs(ctx, 100, user)
+	if err != nil || len(userAudits) == 0 {
+		t.Fatalf("user audits = %#v, %v", userAudits, err)
+	}
+	for _, entry := range userAudits {
+		if entry.Actor != user {
+			t.Fatalf("leaked another actor: %#v", entry)
+		}
+	}
+	allAudits, err := store.ListAuditLogs(ctx, 100, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var foundAdmin, foundUser bool
+	for _, entry := range allAudits {
+		foundAdmin = foundAdmin || entry.Actor == admin
+		foundUser = foundUser || entry.Actor == user
+	}
+	if !foundAdmin || !foundUser {
+		t.Fatalf("all audits missing actors: admin=%t user=%t", foundAdmin, foundUser)
+	}
+
+	disabled := false
+	updated, err := store.UpdateUser(ctx, user, nil, UserRoleUser, disabled)
+	if err != nil || updated == nil || updated.Enabled {
+		t.Fatalf("disable user = %#v, %v", updated, err)
+	}
+	if session, err := store.GetSession(ctx, tokenHashValue); err != nil || session != nil {
+		t.Fatalf("disabled user session survived: %#v, %v", session, err)
 	}
 }
 

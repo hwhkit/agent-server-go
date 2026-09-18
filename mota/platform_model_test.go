@@ -100,6 +100,18 @@ func TestAgentInputDefaultsToGatewayAndRejectsUnsupportedCombination(t *testing.
 	}
 }
 
+func TestAgentNameIsLimitedToThirtyCharacters(t *testing.T) {
+	secret := "test-signing-secret-0123456789"
+	valid := &AgentInput{Slug: "name-limit-agent", Name: strings.Repeat("a", 30), ExecutorKind: ExecutorKindRust, ExecutionMode: ExecutionModeLocal, SigningSecret: &secret}
+	if err := valid.Validate(true); err != nil {
+		t.Fatalf("30 character name: %v", err)
+	}
+	invalid := &AgentInput{Slug: "name-limit-agent", Name: strings.Repeat("a", 31), ExecutorKind: ExecutorKindRust, ExecutionMode: ExecutionModeLocal, SigningSecret: &secret}
+	if err := invalid.Validate(true); err == nil {
+		t.Fatal("31 character name must be rejected")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // AgentInput.Validate:字段级拒绝分支
 // ---------------------------------------------------------------------------

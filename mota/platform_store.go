@@ -94,6 +94,13 @@ func (s *AgentStore) initialize(ctx context.Context) error {
                 created_at          TEXT NOT NULL,
                 updated_at          TEXT NOT NULL)`,
 		`ALTER TABLE agents ADD COLUMN IF NOT EXISTS execution_mode TEXT NOT NULL DEFAULT 'gateway'`,
+		`CREATE TABLE IF NOT EXISTS admin_users (
+                username      TEXT PRIMARY KEY,
+                password_hash TEXT NOT NULL,
+                role          TEXT NOT NULL CHECK (role IN ('admin', 'user')),
+                enabled       BOOLEAN NOT NULL DEFAULT true,
+                created_at    TEXT NOT NULL,
+                updated_at    TEXT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS admin_sessions (
                 token_hash   TEXT PRIMARY KEY,
                 username     TEXT NOT NULL,
@@ -481,6 +488,137 @@ func (s *AgentStore) ConsumeRequestNonce(ctx context.Context, agentSlug, nonce s
 	return inserted, nil
 }
 
+// EnsureBootstrapAdmin 把旧版单管理员配置迁移为数据库账号；已存在账号绝不
+// 覆盖密码、角色或启停状态。
+func (s *AgentStore) EnsureBootstrapAdmin(ctx context.Context, username, passwordHash string) error {
+	now := nowTimestamp()
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO admin_users (username, password_hash, role, enabled, created_at, updated_at) `+
+			`VALUES ($1, $2, 'admin', true, $3, $3) ON CONFLICT (username) DO NOTHING`,
+		username, passwordHash, now)
+	return err
+}
+
+func (s *AgentStore) GetUserAuth(ctx context.Context, username string) (*UserAuthRecord, error) {
+	var record UserAuthRecord
+	var role string
+	err := s.pool.QueryRow(ctx,
+		"SELECT username, password_hash, role, enabled FROM admin_users WHERE username = $1",
+		username).Scan(&record.Username, &record.PasswordHash, &role, &record.Enabled)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	parsed, ok := ParseUserRole(role)
+	if !ok {
+		return nil, fmt.Errorf("invalid stored user role: %s", role)
+	}
+	record.Role = parsed
+	return &record, nil
+}
+
+func (s *AgentStore) GetUser(ctx context.Context, username string) (*UserView, error) {
+	row := s.pool.QueryRow(ctx,
+		"SELECT username, role, enabled, created_at, updated_at FROM admin_users WHERE username = $1",
+		username)
+	view, err := scanUserView(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	return view, err
+}
+
+func (s *AgentStore) ListUsers(ctx context.Context) ([]UserView, error) {
+	rows, err := s.pool.Query(ctx,
+		"SELECT username, role, enabled, created_at, updated_at FROM admin_users ORDER BY created_at ASC, username ASC")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	users := []UserView{}
+	for rows.Next() {
+		view, err := scanUserView(rows)
+		if err != nil {
+			return nil, err
+		}
+		users = append(users, *view)
+	}
+	return users, rows.Err()
+}
+
+func (s *AgentStore) CreateUser(ctx context.Context, username, passwordHash string, role UserRole) (bool, error) {
+	now := nowTimestamp()
+	tag, err := s.pool.Exec(ctx,
+		`INSERT INTO admin_users (username, password_hash, role, enabled, created_at, updated_at) `+
+			`VALUES ($1, $2, $3, true, $4, $4) ON CONFLICT (username) DO NOTHING`,
+		username, passwordHash, string(role), now)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+func (s *AgentStore) UpdateUser(ctx context.Context, username string, passwordHash *string, role UserRole, enabled bool) (*UserView, error) {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE admin_users SET password_hash = COALESCE($2, password_hash), `+
+			`role = $3, enabled = $4, updated_at = $5 WHERE username = $1`,
+		username, passwordHash, string(role), enabled, nowTimestamp())
+	if err != nil {
+		return nil, err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, nil
+	}
+	if passwordHash != nil || !enabled {
+		if _, err := s.pool.Exec(ctx, "DELETE FROM admin_sessions WHERE username = $1", username); err != nil {
+			return nil, err
+		}
+	}
+	return s.GetUser(ctx, username)
+}
+
+func (s *AgentStore) DeleteUser(ctx context.Context, username string) (bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, "DELETE FROM admin_sessions WHERE username = $1", username); err != nil {
+		return false, err
+	}
+	tag, err := tx.Exec(ctx, "DELETE FROM admin_users WHERE username = $1", username)
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+func (s *AgentStore) EnabledAdminCount(ctx context.Context) (int64, error) {
+	var count int64
+	err := s.pool.QueryRow(ctx,
+		"SELECT COUNT(*) FROM admin_users WHERE role = 'admin' AND enabled = true").Scan(&count)
+	return count, err
+}
+
+func scanUserView(row pgx.Row) (*UserView, error) {
+	var view UserView
+	var role string
+	if err := row.Scan(&view.Username, &role, &view.Enabled, &view.CreatedAt, &view.UpdatedAt); err != nil {
+		return nil, err
+	}
+	parsed, ok := ParseUserRole(role)
+	if !ok {
+		return nil, fmt.Errorf("invalid stored user role: %s", role)
+	}
+	view.Role = parsed
+	return &view, nil
+}
+
 // CreateSession 新建或替换一条管理会话。
 func (s *AgentStore) CreateSession(ctx context.Context, tokenHash, username, csrfToken string, expiresAt int64) error {
 	_, err := s.pool.Exec(ctx,
@@ -502,16 +640,23 @@ func (s *AgentStore) GetSession(ctx context.Context, tokenHash string) (*Session
 		}
 	}
 	record := &SessionRecord{}
+	var role string
 	err := s.pool.QueryRow(ctx,
-		`SELECT username, csrf_token, expires_at FROM admin_sessions `+
-			`WHERE token_hash = $1 AND expires_at > $2`, tokenHash, now).
-		Scan(&record.Username, &record.CSRFToken, &record.ExpiresAt)
+		`SELECT s.username, u.role, s.csrf_token, s.expires_at FROM admin_sessions s `+
+			`JOIN admin_users u ON u.username = s.username `+
+			`WHERE s.token_hash = $1 AND s.expires_at > $2 AND u.enabled = true`, tokenHash, now).
+		Scan(&record.Username, &role, &record.CSRFToken, &record.ExpiresAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, err
 	}
+	parsed, ok := ParseUserRole(role)
+	if !ok {
+		return nil, fmt.Errorf("invalid stored user role: %s", role)
+	}
+	record.Role = parsed
 	return record, nil
 }
 
@@ -532,6 +677,36 @@ func (s *AgentStore) RecordAudit(ctx context.Context, actor, action, target stri
 			`VALUES ($1, $2, $3, $4, $5)`,
 		actor, action, target, string(encoded), nowTimestamp())
 	return err
+}
+
+// ListAuditLogs 按时间倒序读取最近审计。actor 非空时只返回该用户自己的记录。
+func (s *AgentStore) ListAuditLogs(ctx context.Context, limit int, actor string) ([]AuditLogView, error) {
+	limit = clampInt(limit, 1, 200)
+	const columns = "id, actor, action, target, details, created_at"
+	var rows pgx.Rows
+	var err error
+	if actor != "" {
+		rows, err = s.pool.Query(ctx, "SELECT "+columns+" FROM audit_log WHERE actor = $1 ORDER BY created_at DESC, id DESC LIMIT $2", actor, limit)
+	} else {
+		rows, err = s.pool.Query(ctx, "SELECT "+columns+" FROM audit_log ORDER BY created_at DESC, id DESC LIMIT $1", limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	logs := []AuditLogView{}
+	for rows.Next() {
+		var view AuditLogView
+		var details string
+		if err := rows.Scan(&view.ID, &view.Actor, &view.Action, &view.Target, &details, &view.CreatedAt); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(details), &view.Details); err != nil {
+			view.Details = details
+		}
+		logs = append(logs, view)
+	}
+	return logs, rows.Err()
 }
 
 // GetExecutorProvider 读取智能体中心 Provider 配置。整份 JSON 使用平台主密钥

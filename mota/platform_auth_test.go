@@ -172,7 +172,7 @@ func TestNewAdminAuthPasswordSources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("plain password: %v", err)
 	}
-	if !VerifyAdminPassword(auth.passwordHash, "plain-secret") {
+	if !VerifyAdminPassword(auth.dummyPasswordHash, "plain-secret") {
 		t.Error("the plain password must be hashed at startup")
 	}
 
@@ -188,10 +188,10 @@ func TestNewAdminAuthPasswordSources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("preset hash: %v", err)
 	}
-	if auth.passwordHash != preset {
+	if auth.dummyPasswordHash != preset {
 		t.Error("a configured password_hash must be used verbatim")
 	}
-	if VerifyAdminPassword(auth.passwordHash, "ignored-plain") {
+	if VerifyAdminPassword(auth.dummyPasswordHash, "ignored-plain") {
 		t.Error("the plain password must be ignored when a hash is configured")
 	}
 
@@ -223,7 +223,7 @@ func newTestAuth(t *testing.T, password string) *AdminAuth {
 	t.Helper()
 	store := newTestStore(t)
 	cfg := testPlatformConfig(t)
-	cfg.AdminUsername = "admin"
+	cfg.AdminUsername = uniqueSlug("auth-admin")
 	cfg.AdminPassword = password
 	cfg.AdminPasswordHash = ""
 	auth, err := NewAdminAuth(cfg, store)
@@ -235,7 +235,7 @@ func newTestAuth(t *testing.T, password string) *AdminAuth {
 
 func TestAdminAuthLoginIssuesSession(t *testing.T) {
 	auth := newTestAuth(t, "pw-correct")
-	outcome, err := auth.Login(context.Background(), "admin", "pw-correct")
+	outcome, err := auth.Login(context.Background(), auth.Username(), "pw-correct")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestAdminAuthLoginIssuesSession(t *testing.T) {
 	if err != nil || record == nil {
 		t.Fatalf("session lookup = (%v, %v)", record, err)
 	}
-	if record.Username != "admin" || record.CSRFToken != outcome.Session.CSRFToken {
+	if record.Username != auth.Username() || record.CSRFToken != outcome.Session.CSRFToken {
 		t.Errorf("session record = %+v", record)
 	}
 }
@@ -265,10 +265,10 @@ func TestAdminAuthLoginIssuesSession(t *testing.T) {
 func TestAdminAuthLoginRejectsWrongCredentials(t *testing.T) {
 	auth := newTestAuth(t, "pw-correct")
 	cases := []struct{ user, password string }{
-		{"admin", "pw-wrong"},
+		{auth.Username(), "pw-wrong"},
 		{"root", "pw-correct"},
 		{"", "pw-correct"},
-		{"admin", ""},
+		{auth.Username(), ""},
 	}
 	for _, item := range cases {
 		// 每次都重置退避,避免第 3 次以后变成限流。
@@ -291,7 +291,7 @@ func TestAdminAuthLoginBackoffAfterRepeatedFailures(t *testing.T) {
 	auth := newTestAuth(t, "pw-correct")
 	// 前两次只是 invalid,不封禁。
 	for i := 0; i < loginFailureGrace-1; i++ {
-		outcome, err := auth.Login(context.Background(), "admin", "nope")
+		outcome, err := auth.Login(context.Background(), auth.Username(), "nope")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -304,7 +304,7 @@ func TestAdminAuthLoginBackoffAfterRepeatedFailures(t *testing.T) {
 	}
 
 	// 第 3 次失败触发封禁。
-	outcome, err := auth.Login(context.Background(), "admin", "nope")
+	outcome, err := auth.Login(context.Background(), auth.Username(), "nope")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +320,7 @@ func TestAdminAuthLoginBackoffAfterRepeatedFailures(t *testing.T) {
 	}
 
 	// 封禁期内即使凭证正确也走限流。
-	outcome, err = auth.Login(context.Background(), "admin", "pw-correct")
+	outcome, err = auth.Login(context.Background(), auth.Username(), "pw-correct")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +333,7 @@ func TestAdminAuthLoginBackoffAfterRepeatedFailures(t *testing.T) {
 
 	// 手动解除封禁后正确凭证通过,并把计数清零。
 	auth.clearFailures()
-	outcome, err = auth.Login(context.Background(), "admin", "pw-correct")
+	outcome, err = auth.Login(context.Background(), auth.Username(), "pw-correct")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,7 +391,7 @@ func TestAdminAuthLoginRateLimitsWhenSlotsExhausted(t *testing.T) {
 	}
 
 	started := time.Now()
-	outcome, err := auth.Login(context.Background(), "admin", "pw-correct")
+	outcome, err := auth.Login(context.Background(), auth.Username(), "pw-correct")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -411,7 +411,7 @@ func TestAdminAuthLoginRateLimitsWhenSlotsExhausted(t *testing.T) {
 func TestAdminAuthLoginReleasesSlots(t *testing.T) {
 	auth := newTestAuth(t, "pw-correct")
 	for i := 0; i < loginSlotCount+2; i++ {
-		outcome, err := auth.Login(context.Background(), "admin", "pw-correct")
+		outcome, err := auth.Login(context.Background(), auth.Username(), "pw-correct")
 		if err != nil {
 			t.Fatalf("iteration %d: %v", i, err)
 		}
@@ -432,7 +432,7 @@ func TestAdminAuthLoginReleasesSlots(t *testing.T) {
 
 func TestAdminAuthAuthenticateAndLogout(t *testing.T) {
 	auth := newTestAuth(t, "pw-correct")
-	outcome, err := auth.Login(context.Background(), "admin", "pw-correct")
+	outcome, err := auth.Login(context.Background(), auth.Username(), "pw-correct")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -456,7 +456,7 @@ func TestAdminAuthAuthenticateAndLogout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if session == nil || session.Username != "admin" {
+	if session == nil || session.Username != auth.Username() {
 		t.Fatalf("session = %+v", session)
 	}
 

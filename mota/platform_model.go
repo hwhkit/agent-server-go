@@ -226,8 +226,8 @@ func (i *AgentInput) Validate(requireSecret bool) error {
 	if err := ValidateSlug(i.Slug); err != nil {
 		return err
 	}
-	if nameLen := utf8.RuneCountInString(i.Name); nameLen < 1 || nameLen > 50 {
-		return errors.New("name must contain 1-50 characters")
+	if nameLen := utf8.RuneCountInString(i.Name); nameLen < 1 || nameLen > 30 {
+		return errors.New("name must contain 1-30 characters")
 	}
 	if utf8.RuneCountInString(i.Description) > 500 {
 		return errors.New("description must not exceed 500 characters")
@@ -485,9 +485,52 @@ type ChannelEventView struct {
 	CreatedAt  string  `json:"createdAt"`
 }
 
+// AuditLogView 是管理台用户操作审计记录。Details 不包含密钥明文。
+type AuditLogView struct {
+	ID        int64  `json:"id"`
+	Actor     string `json:"actor"`
+	Action    string `json:"action"`
+	Target    string `json:"target"`
+	Details   any    `json:"details"`
+	CreatedAt string `json:"createdAt"`
+}
+
+// UserRole 是管理台账号角色。
+type UserRole string
+
+const (
+	UserRoleAdmin UserRole = "admin"
+	UserRoleUser  UserRole = "user"
+)
+
+func ParseUserRole(value string) (UserRole, bool) {
+	switch UserRole(value) {
+	case UserRoleAdmin, UserRoleUser:
+		return UserRole(value), true
+	default:
+		return "", false
+	}
+}
+
+type UserView struct {
+	Username  string   `json:"username"`
+	Role      UserRole `json:"role"`
+	Enabled   bool     `json:"enabled"`
+	CreatedAt string   `json:"createdAt"`
+	UpdatedAt string   `json:"updatedAt"`
+}
+
+type UserAuthRecord struct {
+	Username     string
+	PasswordHash string
+	Role         UserRole
+	Enabled      bool
+}
+
 // SessionRecord 是一条有效的管理会话。
 type SessionRecord struct {
 	Username  string
+	Role      UserRole
 	CSRFToken string
 	ExpiresAt int64
 }

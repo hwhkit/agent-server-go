@@ -25,6 +25,8 @@ type PlatformState struct {
 	// Mutation 把 Agent 的存储变更与 Registry 应用串行化,避免持久配置与
 	// 活动注册表不一致。
 	Mutation sync.Mutex
+	// AccountMutation 串行化账号角色、启停与删除，确保至少一个可用管理员。
+	AccountMutation sync.Mutex
 	// HTTPClient 是网关直调共用的 HTTP 客户端;为 nil 时用 http.DefaultClient。
 	// 生产装配经 PlatformDependencies.ExecutorHTTPClient 注入,不设总超时。
 	HTTPClient *http.Client

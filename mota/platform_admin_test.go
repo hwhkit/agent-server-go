@@ -83,6 +83,41 @@ func (f *adminFixture) callWithoutCSRF(t *testing.T, method, target, body string
 	return recorder
 }
 
+func (f *adminFixture) callAs(t *testing.T, session *IssuedSession, method, target, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(method, target, strings.NewReader(body))
+	request.AddCookie(&http.Cookie{Name: SessionCookieName, Value: session.Token})
+	request.Header.Set("X-CSRF-Token", session.CSRFToken)
+	recorder := httptest.NewRecorder()
+	f.handler.ServeHTTP(recorder, request)
+	return recorder
+}
+
+func (f *adminFixture) loginAs(t *testing.T, username, password string) *IssuedSession {
+	t.Helper()
+	body := jsonString(map[string]any{"username": username, "password": password})
+	recorder := f.call(t, http.MethodPost, "/api/admin/login", body, false)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("login %s status=%d body=%s", username, recorder.Code, recorder.Body.String())
+	}
+	var decoded struct {
+		Data sessionData `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	token := ""
+	for _, cookie := range recorder.Result().Cookies() {
+		if cookie.Name == SessionCookieName {
+			token = cookie.Value
+		}
+	}
+	if token == "" {
+		t.Fatal("login did not set session cookie")
+	}
+	return &IssuedSession{Token: token, Username: decoded.Data.Username, Role: decoded.Data.Role, CSRFToken: decoded.Data.CSRFToken, ExpiresAt: decoded.Data.ExpiresAt}
+}
+
 // mustLogin 走 HTTP 登录并解出会话。
 func (f *adminFixture) mustLogin(t *testing.T) *IssuedSession {
 	t.Helper()
@@ -108,6 +143,8 @@ func (f *adminFixture) mustLogin(t *testing.T) *IssuedSession {
 	}
 	return &IssuedSession{
 		Token:     token,
+		Username:  decoded.Data.Username,
+		Role:      decoded.Data.Role,
 		CSRFToken: decoded.Data.CSRFToken,
 		ExpiresAt: decoded.Data.ExpiresAt,
 	}
@@ -271,7 +308,7 @@ func TestAdminLoginSetsSessionCookieAndAudits(t *testing.T) {
 	if err := json.Unmarshal(raw, &data); err != nil {
 		t.Fatalf("data is not sessionData: %v", err)
 	}
-	if data.Username != "admin" {
+	if data.Username != "admin" || data.Role != UserRoleAdmin {
 		t.Errorf("username = %q", data.Username)
 	}
 	if data.CSRFToken == "" || data.ExpiresAt == 0 {
@@ -382,7 +419,7 @@ func TestAdminSessionEndpoint(t *testing.T) {
 	if err := json.Unmarshal(raw, &data); err != nil {
 		t.Fatal(err)
 	}
-	if data.Username != "admin" || data.CSRFToken != fixture.session.CSRFToken {
+	if data.Username != "admin" || data.Role != UserRoleAdmin || data.CSRFToken != fixture.session.CSRFToken {
 		t.Errorf("data = %+v", data)
 	}
 }
@@ -423,6 +460,124 @@ func TestAdminLogoutRequiresCSRFAndClearsSession(t *testing.T) {
 	// 会话已失效。
 	recorder = fixture.call(t, http.MethodGet, "/api/admin/session", "", true)
 	wantAdminError(t, recorder, http.StatusUnauthorized, "authentication_required")
+}
+
+func TestAccountManagementRolesRevocationAndAuditScope(t *testing.T) {
+	fixture := newAdminFixture(t)
+	username := uniqueSlug("console-user")
+	password := "initial-user-password-2026"
+	newPassword := "rotated-user-password-2026"
+
+	create := fixture.call(t, http.MethodPost, "/api/admin/users",
+		jsonString(map[string]any{"username": username, "password": password, "role": "user"}), true)
+	raw := adminData(t, create, http.StatusCreated)
+	var created UserView
+	if err := json.Unmarshal(raw, &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Username != username || created.Role != UserRoleUser || !created.Enabled {
+		t.Fatalf("created user = %+v", created)
+	}
+	t.Cleanup(func() { _, _ = fixture.state.Store.DeleteUser(context.Background(), username) })
+
+	duplicate := fixture.call(t, http.MethodPost, "/api/admin/users",
+		jsonString(map[string]any{"username": username, "password": password, "role": "user"}), true)
+	wantAdminError(t, duplicate, http.StatusConflict, "username_exists")
+
+	userSession := fixture.loginAs(t, username, password)
+	if userSession.Role != UserRoleUser {
+		t.Fatalf("session role = %q", userSession.Role)
+	}
+	forbidden := fixture.callAs(t, userSession, http.MethodGet, "/api/admin/users", "")
+	wantAdminError(t, forbidden, http.StatusForbidden, "admin_required")
+	promote := fixture.call(t, http.MethodPut, "/api/admin/users/"+username,
+		jsonString(map[string]any{"password": nil, "role": "admin", "enabled": true}), true)
+	adminData(t, promote, http.StatusOK)
+	promotedAccess := fixture.callAs(t, userSession, http.MethodGet, "/api/admin/users", "")
+	adminData(t, promotedAccess, http.StatusOK)
+	demote := fixture.call(t, http.MethodPut, "/api/admin/users/"+username,
+		jsonString(map[string]any{"password": nil, "role": "user", "enabled": true}), true)
+	adminData(t, demote, http.StatusOK)
+	demotedAccess := fixture.callAs(t, userSession, http.MethodGet, "/api/admin/users", "")
+	wantAdminError(t, demotedAccess, http.StatusForbidden, "admin_required")
+
+	if err := fixture.state.Store.RecordAudit(context.Background(), username,
+		"agent.update", "user-owned-audit", map[string]any{"revision": 2}); err != nil {
+		t.Fatal(err)
+	}
+	userAuditResponse := fixture.callAs(t, userSession, http.MethodGet, "/api/admin/audit-logs?limit=100", "")
+	userAuditRaw := adminData(t, userAuditResponse, http.StatusOK)
+	var userAudits []AuditLogView
+	if err := json.Unmarshal(userAuditRaw, &userAudits); err != nil {
+		t.Fatal(err)
+	}
+	if len(userAudits) == 0 {
+		t.Fatal("user audit list is empty")
+	}
+	for _, entry := range userAudits {
+		if entry.Actor != username {
+			t.Fatalf("user audit leaked actor %q", entry.Actor)
+		}
+	}
+
+	adminAuditResponse := fixture.call(t, http.MethodGet, "/api/admin/audit-logs?limit=100", "", true)
+	adminAuditRaw := adminData(t, adminAuditResponse, http.StatusOK)
+	var adminAudits []AuditLogView
+	if err := json.Unmarshal(adminAuditRaw, &adminAudits); err != nil {
+		t.Fatal(err)
+	}
+	var sawAdmin, sawUser bool
+	for _, entry := range adminAudits {
+		sawAdmin = sawAdmin || entry.Actor == "admin"
+		sawUser = sawUser || entry.Actor == username
+	}
+	if !sawAdmin || !sawUser {
+		t.Fatalf("admin audit scope incomplete: admin=%t user=%t", sawAdmin, sawUser)
+	}
+
+	rotate := fixture.call(t, http.MethodPut, "/api/admin/users/"+username,
+		jsonString(map[string]any{"password": newPassword, "role": "user", "enabled": true}), true)
+	adminData(t, rotate, http.StatusOK)
+	stale := fixture.callAs(t, userSession, http.MethodGet, "/api/admin/session", "")
+	wantAdminError(t, stale, http.StatusUnauthorized, "authentication_required")
+	userSession = fixture.loginAs(t, username, newPassword)
+
+	disable := fixture.call(t, http.MethodPut, "/api/admin/users/"+username,
+		jsonString(map[string]any{"password": nil, "role": "user", "enabled": false}), true)
+	adminData(t, disable, http.StatusOK)
+	disabledSession := fixture.callAs(t, userSession, http.MethodGet, "/api/admin/session", "")
+	wantAdminError(t, disabledSession, http.StatusUnauthorized, "authentication_required")
+
+	reenable := fixture.call(t, http.MethodPut, "/api/admin/users/"+username,
+		jsonString(map[string]any{"password": nil, "role": "user", "enabled": true}), true)
+	adminData(t, reenable, http.StatusOK)
+	_ = fixture.loginAs(t, username, newPassword)
+
+	deleted := fixture.call(t, http.MethodDelete, "/api/admin/users/"+username, "", true)
+	adminData(t, deleted, http.StatusOK)
+	if got, err := fixture.state.Store.GetUser(context.Background(), username); err != nil || got != nil {
+		t.Fatalf("deleted user = %#v, %v", got, err)
+	}
+}
+
+func TestAccountManagementProtectsCurrentAdminAndValidatesInput(t *testing.T) {
+	fixture := newAdminFixture(t)
+
+	selfDemote := fixture.call(t, http.MethodPut, "/api/admin/users/admin",
+		jsonString(map[string]any{"password": nil, "role": "user", "enabled": true}), true)
+	wantAdminError(t, selfDemote, http.StatusUnprocessableEntity, "cannot_demote_self")
+	selfDelete := fixture.call(t, http.MethodDelete, "/api/admin/users/admin", "", true)
+	wantAdminError(t, selfDelete, http.StatusUnprocessableEntity, "cannot_delete_self")
+
+	invalidUsername := fixture.call(t, http.MethodPost, "/api/admin/users",
+		jsonString(map[string]any{"username": "bad user", "password": "valid-password-2026", "role": "user"}), true)
+	wantAdminError(t, invalidUsername, http.StatusUnprocessableEntity, "invalid_username")
+	shortPassword := fixture.call(t, http.MethodPost, "/api/admin/users",
+		jsonString(map[string]any{"username": "short-password", "password": "too-short", "role": "user"}), true)
+	wantAdminError(t, shortPassword, http.StatusUnprocessableEntity, "invalid_password")
+	invalidRole := fixture.call(t, http.MethodPost, "/api/admin/users",
+		jsonString(map[string]any{"username": "invalid-role", "password": "valid-password-2026", "role": "owner"}), true)
+	wantAdminError(t, invalidRole, http.StatusBadRequest, "invalid_user")
 }
 
 // hasAuditAction / countAuditAction 直接查审计表。

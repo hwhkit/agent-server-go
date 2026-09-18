@@ -25,6 +25,7 @@ Go 版以 Rust 实现为行为基准，现已在同一进程内增加：
 - 本地真实 Harness：Codex、Pi、OpenCode、Qwen Code、Gemini CLI、OpenHands、Claude Code、DeepSeek Harness
 - 远端托管运行时：OpenAI Agents API 与 Claude Managed Agents Session/SSE
 - Agent/全局双层并发门、有界 admission、运行日志和 Provider 热更新
+- 账号管理：数据库多账号登录、`admin/user` 角色、停用/改密踢下线、管理员保护与审计日志
 - Rust 同款 HMAC v1 canonical、防重放 5 分钟窗口和兼容 `X-MoTA-Signature`
 
 ```bash
@@ -38,6 +39,14 @@ export DATABASE_URL='postgres://postgres:postgres@127.0.0.1:5432/mota_agent'
 浏览器打开 `http://127.0.0.1:8080/admin`。Provider 密钥与 MCP Authorization 会作为
 整份配置使用平台主密钥加密后写入 PostgreSQL，管理 API 只返回“已配置”状态，不回显明文。
 配置保存后立即对新任务生效；正在运行的任务继续使用启动时的配置快照。
+
+### 账号与审计
+
+启动时 `ADMIN__USERNAME` 和管理员密码会幂等迁移为数据库中的初始 `admin` 账号；
+之后可在“账号管理”页面创建管理员或普通用户。管理员可以管理全部账号并查看全部
+审计记录，普通用户只能查看自己的审计。修改密码、停用或删除账号会立即撤销该账号
+的现有会话；系统禁止当前管理员降级、停用或删除自己，并保护至少一个已启用管理员。
+账号密码使用 Argon2id 存储，用户列表与审计 API 不返回密码哈希。
 
 OpenAI 托管智能体启用示例：
 

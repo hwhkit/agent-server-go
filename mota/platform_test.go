@@ -109,7 +109,9 @@ func TestPlatformAdminAndGateway(t *testing.T) {
 		`id="agent-execution-mode"`,
 		`<option value="opencode">OpenCode</option>`,
 		`<option value="openai_agent">OpenAI 托管智能体</option>`,
-		`<h2 id="runs-title" data-i18n="runs.title">运行日志</h2>`,
+		`id="runs-title" class="page-title"`,
+		`id="audit-section"`,
+		`id="users-section"`,
 	} {
 		if !strings.Contains(string(pageBody), marker) {
 			t.Fatalf("embedded admin console is missing %s", marker)

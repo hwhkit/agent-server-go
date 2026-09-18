@@ -7,6 +7,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -109,6 +110,19 @@ func (a *AdminHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/api/admin/channel-events":
 		a.route(w, r, http.MethodGet, a.listChannelEvents)
 		return
+	case "/api/admin/audit-logs":
+		a.route(w, r, http.MethodGet, a.listAuditLogs)
+		return
+	case "/api/admin/users":
+		switch r.Method {
+		case http.MethodGet:
+			a.listUsers(w, r)
+		case http.MethodPost:
+			a.createUser(w, r)
+		default:
+			writeAdminError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed")
+		}
+		return
 	}
 	if providerID, ok := strings.CutPrefix(path, "/api/admin/providers/"); ok && providerID != "" {
 		if r.Method != http.MethodPut {
@@ -116,6 +130,17 @@ func (a *AdminHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.updateProvider(w, r, providerID)
+		return
+	}
+	if username, ok := strings.CutPrefix(path, "/api/admin/users/"); ok && username != "" {
+		switch r.Method {
+		case http.MethodPut:
+			a.updateUser(w, r, username)
+		case http.MethodDelete:
+			a.deleteUser(w, r, username)
+		default:
+			writeAdminError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed")
+		}
 		return
 	}
 	if slug, ok := strings.CutPrefix(path, "/api/admin/agents/"); ok && slug != "" {
@@ -241,11 +266,24 @@ func (a *AdminHandler) requireSession(
 	return session, true
 }
 
+func (a *AdminHandler) requireAdminSession(w http.ResponseWriter, r *http.Request, requireCSRF bool) (*SessionRecord, bool) {
+	session, ok := a.requireSession(w, r, requireCSRF)
+	if !ok {
+		return nil, false
+	}
+	if session.Role != UserRoleAdmin {
+		writeAdminError(w, http.StatusForbidden, "admin_required", "此操作仅管理员可用")
+		return nil, false
+	}
+	return session, true
+}
+
 // sessionData 是 /api/admin/session 与登录成功的响应体。
 type sessionData struct {
-	Username  string `json:"username"`
-	CSRFToken string `json:"csrfToken"`
-	ExpiresAt int64  `json:"expiresAt"`
+	Username  string   `json:"username"`
+	Role      UserRole `json:"role"`
+	CSRFToken string   `json:"csrfToken"`
+	ExpiresAt int64    `json:"expiresAt"`
 }
 
 func (a *AdminHandler) login(w http.ResponseWriter, r *http.Request) {
@@ -273,13 +311,14 @@ func (a *AdminHandler) login(w http.ResponseWriter, r *http.Request) {
 
 	switch outcome.Kind {
 	case LoginAuthenticated:
-		if err := a.State.Store.RecordAudit(r.Context(), a.State.Auth.Username(),
+		if err := a.State.Store.RecordAudit(r.Context(), outcome.Session.Username,
 			"admin.login", "session", map[string]any{"result": "success"}); err != nil {
 			slog.Warn("record admin login audit failed", "error", err)
 		}
 		w.Header().Add("Set-Cookie", a.State.Auth.SessionCookie(outcome.Session))
 		writeAdminData(w, http.StatusOK, sessionData{
-			Username:  a.State.Auth.Username(),
+			Username:  outcome.Session.Username,
+			Role:      outcome.Session.Role,
 			CSRFToken: outcome.Session.CSRFToken,
 			ExpiresAt: outcome.Session.ExpiresAt,
 		})
@@ -303,6 +342,7 @@ func (a *AdminHandler) session(w http.ResponseWriter, r *http.Request) {
 	}
 	writeAdminData(w, http.StatusOK, sessionData{
 		Username:  session.Username,
+		Role:      session.Role,
 		CSRFToken: session.CSRFToken,
 		ExpiresAt: session.ExpiresAt,
 	})
@@ -324,6 +364,230 @@ func (a *AdminHandler) logout(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Add("Set-Cookie", a.State.Auth.ClearCookie())
 	writeAdminData(w, http.StatusOK, map[string]any{"loggedOut": true})
+}
+
+type createUserInput struct {
+	Username string   `json:"username"`
+	Password string   `json:"password"`
+	Role     UserRole `json:"role"`
+}
+
+type updateUserInput struct {
+	Password *string  `json:"password"`
+	Role     UserRole `json:"role"`
+	Enabled  bool     `json:"enabled"`
+}
+
+func (a *AdminHandler) listUsers(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.requireAdminSession(w, r, false); !ok {
+		return
+	}
+	users, err := a.State.Store.ListUsers(r.Context())
+	if err != nil {
+		writeStorageError(w, err, "list users")
+		return
+	}
+	writeAdminData(w, http.StatusOK, users)
+}
+
+func (a *AdminHandler) createUser(w http.ResponseWriter, r *http.Request) {
+	session, ok := a.requireAdminSession(w, r, true)
+	if !ok {
+		return
+	}
+	var input createUserInput
+	if err := json.NewDecoder(io.LimitReader(r.Body, int64(a.State.ConfigSnapshot().MaxRequestBodyBytes)+1)).Decode(&input); err != nil {
+		writeAdminError(w, http.StatusBadRequest, "invalid_user", "账号格式不正确："+err.Error())
+		return
+	}
+	if _, valid := ParseUserRole(string(input.Role)); !valid {
+		writeAdminError(w, http.StatusBadRequest, "invalid_user", "账号角色必须为 admin 或 user")
+		return
+	}
+	username := strings.TrimSpace(input.Username)
+	if !validUsername(username) {
+		writeAdminError(w, http.StatusUnprocessableEntity, "invalid_username", "用户名需为 2–64 位字母、数字、点、下划线或连字符")
+		return
+	}
+	if message := validateUserPassword(input.Password); message != "" {
+		writeAdminError(w, http.StatusUnprocessableEntity, "invalid_password", message)
+		return
+	}
+	passwordHash, err := HashAdminPassword(input.Password)
+	if err != nil {
+		writeStorageError(w, err, "hash user password")
+		return
+	}
+
+	a.State.AccountMutation.Lock()
+	defer a.State.AccountMutation.Unlock()
+	ctx := mutationContext(r)
+	created, err := a.State.Store.CreateUser(ctx, username, passwordHash, input.Role)
+	if err != nil {
+		writeStorageError(w, err, "create user")
+		return
+	}
+	if !created {
+		writeAdminError(w, http.StatusConflict, "username_exists", "用户名已存在")
+		return
+	}
+	if err := a.State.Store.RecordAudit(ctx, session.Username, "user.create", username,
+		map[string]any{"role": string(input.Role), "enabled": true}); err != nil {
+		slog.Warn("record user create audit failed", "user", username, "error", err)
+	}
+	user, err := a.State.Store.GetUser(ctx, username)
+	if err != nil || user == nil {
+		if err == nil {
+			err = errors.New("created user missing")
+		}
+		writeStorageError(w, err, "get created user")
+		return
+	}
+	writeAdminData(w, http.StatusCreated, user)
+}
+
+func (a *AdminHandler) updateUser(w http.ResponseWriter, r *http.Request, username string) {
+	session, ok := a.requireAdminSession(w, r, true)
+	if !ok {
+		return
+	}
+	var input updateUserInput
+	if err := json.NewDecoder(io.LimitReader(r.Body, int64(a.State.ConfigSnapshot().MaxRequestBodyBytes)+1)).Decode(&input); err != nil {
+		writeAdminError(w, http.StatusBadRequest, "invalid_user", "账号格式不正确："+err.Error())
+		return
+	}
+	if _, valid := ParseUserRole(string(input.Role)); !valid {
+		writeAdminError(w, http.StatusBadRequest, "invalid_user", "账号角色必须为 admin 或 user")
+		return
+	}
+	if input.Password != nil && *input.Password == "" {
+		input.Password = nil
+	}
+	var passwordHash *string
+	if input.Password != nil {
+		if message := validateUserPassword(*input.Password); message != "" {
+			writeAdminError(w, http.StatusUnprocessableEntity, "invalid_password", message)
+			return
+		}
+		hash, err := HashAdminPassword(*input.Password)
+		if err != nil {
+			writeStorageError(w, err, "hash user password")
+			return
+		}
+		passwordHash = &hash
+	}
+
+	a.State.AccountMutation.Lock()
+	defer a.State.AccountMutation.Unlock()
+	ctx := mutationContext(r)
+	current, err := a.State.Store.GetUser(ctx, username)
+	if err != nil {
+		writeStorageError(w, err, "get user")
+		return
+	}
+	if current == nil {
+		writeAdminError(w, http.StatusNotFound, "user_not_found", "账号不存在")
+		return
+	}
+	if username == session.Username && (input.Role != UserRoleAdmin || !input.Enabled) {
+		writeAdminError(w, http.StatusUnprocessableEntity, "cannot_demote_self", "不能降级或停用当前登录账号")
+		return
+	}
+	if current.Role == UserRoleAdmin && current.Enabled && (input.Role != UserRoleAdmin || !input.Enabled) {
+		count, err := a.State.Store.EnabledAdminCount(ctx)
+		if err != nil {
+			writeStorageError(w, err, "count enabled admins")
+			return
+		}
+		if count <= 1 {
+			writeAdminError(w, http.StatusUnprocessableEntity, "last_admin_required", "系统必须保留至少一个已启用的管理员")
+			return
+		}
+	}
+	updated, err := a.State.Store.UpdateUser(ctx, username, passwordHash, input.Role, input.Enabled)
+	if err != nil {
+		writeStorageError(w, err, "update user")
+		return
+	}
+	if updated == nil {
+		writeAdminError(w, http.StatusNotFound, "user_not_found", "账号不存在")
+		return
+	}
+	if err := a.State.Store.RecordAudit(ctx, session.Username, "user.update", username,
+		map[string]any{"role": string(input.Role), "enabled": input.Enabled, "passwordChanged": passwordHash != nil}); err != nil {
+		slog.Warn("record user update audit failed", "user", username, "error", err)
+	}
+	writeAdminData(w, http.StatusOK, updated)
+}
+
+func (a *AdminHandler) deleteUser(w http.ResponseWriter, r *http.Request, username string) {
+	session, ok := a.requireAdminSession(w, r, true)
+	if !ok {
+		return
+	}
+	if username == session.Username {
+		writeAdminError(w, http.StatusUnprocessableEntity, "cannot_delete_self", "不能删除当前登录账号")
+		return
+	}
+	a.State.AccountMutation.Lock()
+	defer a.State.AccountMutation.Unlock()
+	ctx := mutationContext(r)
+	current, err := a.State.Store.GetUser(ctx, username)
+	if err != nil {
+		writeStorageError(w, err, "get user")
+		return
+	}
+	if current == nil {
+		writeAdminError(w, http.StatusNotFound, "user_not_found", "账号不存在")
+		return
+	}
+	if current.Role == UserRoleAdmin && current.Enabled {
+		count, err := a.State.Store.EnabledAdminCount(ctx)
+		if err != nil {
+			writeStorageError(w, err, "count enabled admins")
+			return
+		}
+		if count <= 1 {
+			writeAdminError(w, http.StatusUnprocessableEntity, "last_admin_required", "系统必须保留至少一个已启用的管理员")
+			return
+		}
+	}
+	deleted, err := a.State.Store.DeleteUser(ctx, username)
+	if err != nil {
+		writeStorageError(w, err, "delete user")
+		return
+	}
+	if !deleted {
+		writeAdminError(w, http.StatusNotFound, "user_not_found", "账号不存在")
+		return
+	}
+	if err := a.State.Store.RecordAudit(ctx, session.Username, "user.delete", username, map[string]any{}); err != nil {
+		slog.Warn("record user delete audit failed", "user", username, "error", err)
+	}
+	writeAdminData(w, http.StatusOK, map[string]any{"deleted": true})
+}
+
+func validUsername(username string) bool {
+	if len(username) < 2 || len(username) > 64 {
+		return false
+	}
+	for _, value := range []byte(username) {
+		if (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') || (value >= '0' && value <= '9') || value == '.' || value == '_' || value == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validateUserPassword(password string) string {
+	if len(password) < 12 || len(password) > 512 {
+		return "密码长度需为 12–512 个字符"
+	}
+	if password == "admin" || password == "password" || password == "change-me" {
+		return "密码不能使用不安全的默认值"
+	}
+	return ""
 }
 
 // recordLoginFailure 审计一次凭证失败。
@@ -449,7 +713,7 @@ func (a *AdminHandler) validateWorkspace(input *AgentInput) (int, string, string
 	}
 	if !IsAssignmentConfigured(config, input.ExecutorKind, input.ExecutionMode) {
 		return http.StatusUnprocessableEntity, "executor_provider_not_configured",
-			"请先在智能体中心完成对应执行器配置，再创建或更新岗位智能体", false
+			"请先在执行职能体完成对应执行器配置，再创建或更新岗位职能体", false
 	}
 	return 0, "", "", true
 }
@@ -615,4 +879,21 @@ func (a *AdminHandler) listChannelEvents(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeAdminData(w, http.StatusOK, events)
+}
+
+func (a *AdminHandler) listAuditLogs(w http.ResponseWriter, r *http.Request) {
+	session, ok := a.requireSession(w, r, false)
+	if !ok {
+		return
+	}
+	actor := ""
+	if session.Role == UserRoleUser {
+		actor = session.Username
+	}
+	logs, err := a.State.Store.ListAuditLogs(r.Context(), adminQueryLimit(r), actor)
+	if err != nil {
+		writeStorageError(w, err, "list audit logs")
+		return
+	}
+	writeAdminData(w, http.StatusOK, logs)
 }

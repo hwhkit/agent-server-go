@@ -162,11 +162,11 @@ func VerifyAdminPassword(encoded, password string) bool {
 
 // AdminAuth 承载管理台鉴权状态。对应 rs AdminAuth。
 type AdminAuth struct {
-	username     string
-	passwordHash string
-	ttl          time.Duration
-	secureCookie bool
-	store        *AgentStore
+	dummyPasswordHash string
+	bootstrapUsername string
+	ttl               time.Duration
+	secureCookie      bool
+	store             *AgentStore
 
 	// loginSlots 限制并发口令校验数(argon2 是 CPU/内存密集的)。
 	loginSlots *semaphore
@@ -200,6 +200,8 @@ type LoginOutcome struct {
 // IssuedSession 是新签发的管理会话。
 type IssuedSession struct {
 	Token     string
+	Username  string
+	Role      UserRole
 	CSRFToken string
 	ExpiresAt int64
 }
@@ -225,18 +227,21 @@ func NewAdminAuth(config *PlatformConfig, store *AgentStore) (*AdminAuth, error)
 	default:
 		return nil, errors.New("admin password is not configured")
 	}
+	if err := store.EnsureBootstrapAdmin(context.Background(), config.AdminUsername, passwordHash); err != nil {
+		return nil, fmt.Errorf("ensure bootstrap admin: %w", err)
+	}
 	return &AdminAuth{
-		username:     config.AdminUsername,
-		passwordHash: passwordHash,
-		ttl:          config.AdminSessionTTL,
-		secureCookie: config.SecureCookies,
-		store:        store,
-		loginSlots:   newSemaphore(loginSlotCount),
+		dummyPasswordHash: passwordHash,
+		bootstrapUsername: config.AdminUsername,
+		ttl:               config.AdminSessionTTL,
+		secureCookie:      config.SecureCookies,
+		store:             store,
+		loginSlots:        newSemaphore(loginSlotCount),
 	}, nil
 }
 
-// Username 返回配置的管理员用户名。
-func (a *AdminAuth) Username() string { return a.username }
+// Username 返回启动配置迁移出的初始管理员用户名；登录认证本身支持数据库中的全部账号。
+func (a *AdminAuth) Username() string { return a.bootstrapUsername }
 
 // Login 校验凭证并签发会话。
 //
@@ -253,9 +258,18 @@ func (a *AdminAuth) Login(ctx context.Context, username, password string) (*Logi
 		return &LoginOutcome{Kind: LoginRateLimited, RetryAfterSecs: retryAfter}, nil
 	}
 
-	// 口令与用户名都要比对;两者都不匹配时也只暴露同一条错误。
-	valid := VerifyAdminPassword(a.passwordHash, password) && username == a.username
-	if !valid {
+	account, err := a.store.GetUserAuth(ctx, username)
+	if err != nil {
+		return nil, err
+	}
+	hash := a.dummyPasswordHash
+	enabled := false
+	if account != nil {
+		hash = account.PasswordHash
+		enabled = account.Enabled
+	}
+	// 不存在的用户名也校验 dummy hash，避免账号枚举产生明显时序差异。
+	if !VerifyAdminPassword(hash, password) || !enabled {
 		a.recordFailure()
 		return &LoginOutcome{Kind: LoginInvalid}, nil
 	}
@@ -264,12 +278,15 @@ func (a *AdminAuth) Login(ctx context.Context, username, password string) (*Logi
 	token := randomToken(32)
 	csrfToken := randomToken(24)
 	expiresAt := time.Now().Unix() + int64(a.ttl.Seconds())
-	if err := a.store.CreateSession(ctx, tokenHash(token), a.username, csrfToken, expiresAt); err != nil {
+	if account == nil {
+		return nil, errors.New("authenticated account disappeared")
+	}
+	if err := a.store.CreateSession(ctx, tokenHash(token), account.Username, csrfToken, expiresAt); err != nil {
 		return nil, err
 	}
 	return &LoginOutcome{
 		Kind:    LoginAuthenticated,
-		Session: &IssuedSession{Token: token, CSRFToken: csrfToken, ExpiresAt: expiresAt},
+		Session: &IssuedSession{Token: token, Username: account.Username, Role: account.Role, CSRFToken: csrfToken, ExpiresAt: expiresAt},
 	}, nil
 }
 
