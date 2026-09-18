@@ -27,15 +27,23 @@ const (
 	ExecutorKindCodex           ExecutorKind = "codex"
 	ExecutorKindReasonix        ExecutorKind = "reasonix"
 	ExecutorKindPi              ExecutorKind = "pi"
+	ExecutorKindOpenCode        ExecutorKind = "opencode"
+	ExecutorKindQwenCode        ExecutorKind = "qwen_code"
+	ExecutorKindGeminiCLI       ExecutorKind = "gemini_cli"
+	ExecutorKindOpenHands       ExecutorKind = "openhands"
 	ExecutorKindDeepseekHarness ExecutorKind = "deepseek_harness"
 	ExecutorKindGoose           ExecutorKind = "goose"
+	ExecutorKindOpenAIAgent     ExecutorKind = "openai_agent"
+	ExecutorKindClaudeManaged   ExecutorKind = "claude_managed_agent"
 )
 
 // ParseExecutorKind 严格解析(不做大小写折叠),与 Rust 侧 ExecutorKind::parse 一致。
 func ParseExecutorKind(value string) (ExecutorKind, error) {
 	switch ExecutorKind(value) {
 	case ExecutorKindRust, ExecutorKindClaudeCode, ExecutorKindCodex, ExecutorKindReasonix,
-		ExecutorKindPi, ExecutorKindDeepseekHarness, ExecutorKindGoose:
+		ExecutorKindPi, ExecutorKindOpenCode, ExecutorKindQwenCode, ExecutorKindGeminiCLI,
+		ExecutorKindOpenHands, ExecutorKindDeepseekHarness, ExecutorKindGoose,
+		ExecutorKindOpenAIAgent, ExecutorKindClaudeManaged:
 		return ExecutorKind(value), nil
 	default:
 		return "", errors.New("unsupported executor kind")
@@ -47,7 +55,9 @@ func (k ExecutorKind) String() string { return string(k) }
 // SupportsLocalCLI 表示该执行器是否支持本机 CLI 进程调用。
 func (k ExecutorKind) SupportsLocalCLI() bool {
 	switch k {
-	case ExecutorKindClaudeCode, ExecutorKindCodex, ExecutorKindReasonix, ExecutorKindPi:
+	case ExecutorKindClaudeCode, ExecutorKindCodex, ExecutorKindReasonix, ExecutorKindPi,
+		ExecutorKindOpenCode, ExecutorKindQwenCode, ExecutorKindGeminiCLI,
+		ExecutorKindOpenHands, ExecutorKindDeepseekHarness:
 		return true
 	default:
 		return false
@@ -55,7 +65,16 @@ func (k ExecutorKind) SupportsLocalCLI() bool {
 }
 
 // SupportsGateway 表示该执行器是否可经 litellm 网关直调。
-func (k ExecutorKind) SupportsGateway() bool { return k != ExecutorKindRust }
+func (k ExecutorKind) SupportsGateway() bool {
+	switch k {
+	case ExecutorKindRust, ExecutorKindOpenCode, ExecutorKindQwenCode,
+		ExecutorKindGeminiCLI, ExecutorKindOpenHands, ExecutorKindOpenAIAgent,
+		ExecutorKindClaudeManaged:
+		return false
+	default:
+		return true
+	}
+}
 
 // SupportsExecutionMode 判断执行器与执行方式的组合是否可用。
 func (k ExecutorKind) SupportsExecutionMode(mode ExecutionMode) bool {
@@ -64,6 +83,8 @@ func (k ExecutorKind) SupportsExecutionMode(mode ExecutionMode) bool {
 		return k == ExecutorKindRust || k.SupportsGateway()
 	case ExecutionModeLocal:
 		return k == ExecutorKindRust || k.SupportsLocalCLI()
+	case ExecutionModeManaged:
+		return k == ExecutorKindOpenAIAgent || k == ExecutorKindClaudeManaged
 	default:
 		return false
 	}
@@ -74,7 +95,7 @@ func (k ExecutorKind) SupportsExecutionMode(mode ExecutionMode) bool {
 // ---------------------------------------------------------------------------
 
 // ExecutionMode 是 Agent 执行方式:经 litellm 网关直调(默认,保留既有行为),
-// 或调用本机安装的 agent CLI(pi / codex / reasonix / claude_code)。
+// 调用本机安装的 agent CLI，或调用远端托管智能体运行时。
 type ExecutionMode string
 
 const (
@@ -82,15 +103,17 @@ const (
 	ExecutionModeGateway ExecutionMode = "gateway"
 	// ExecutionModeLocal 调用本机安装的 agent CLI 进程。
 	ExecutionModeLocal ExecutionMode = "local"
+	// ExecutionModeManaged 由 OpenAI / Anthropic 托管 Agent 管理会话与上下文。
+	ExecutionModeManaged ExecutionMode = "managed"
 )
 
 // ParseExecutionMode 严格解析,与 Rust 侧 ExecutionMode::parse 一致。
 func ParseExecutionMode(value string) (ExecutionMode, error) {
 	switch ExecutionMode(value) {
-	case ExecutionModeGateway, ExecutionModeLocal:
+	case ExecutionModeGateway, ExecutionModeLocal, ExecutionModeManaged:
 		return ExecutionMode(value), nil
 	default:
-		return "", errors.New("execution_mode must be gateway or local")
+		return "", errors.New("execution_mode must be gateway, local, or managed")
 	}
 }
 

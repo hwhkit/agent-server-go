@@ -47,6 +47,15 @@ func TestPlatformExecutionBackendsHaveSafeDefaults(t *testing.T) {
 	if cfg.LocalAgents.ReasonixBinary != "/usr/local/bin/reasonix" {
 		t.Errorf("local_agents.reasonix_binary = %q, want /usr/local/bin/reasonix", cfg.LocalAgents.ReasonixBinary)
 	}
+	if cfg.LocalAgents.DeepseekHarnessBinary != "dsh" || cfg.LocalAgents.OpenCodeBinary != "opencode" || cfg.LocalAgents.QwenCodeBinary != "qwen" || cfg.LocalAgents.GeminiCLIBinary != "gemini" || cfg.LocalAgents.OpenHandsBinary != "openhands" {
+		t.Errorf("new local Agent defaults are incomplete: %+v", cfg.LocalAgents)
+	}
+	if cfg.OpenAIAgents.Enabled || cfg.OpenAIAgents.BaseURL != "https://api.openai.com/v1" || cfg.OpenAIAgents.DefaultModel != "gpt-6-astra" {
+		t.Errorf("unexpected OpenAI Agents defaults: %+v", cfg.OpenAIAgents)
+	}
+	if cfg.ClaudeManaged.Enabled || cfg.ClaudeManaged.BaseURL != "https://api.anthropic.com/v1" {
+		t.Errorf("unexpected Claude Managed defaults: %+v", cfg.ClaudeManaged)
+	}
 	if cfg.LocalAgents.DefaultModel != "litellm/dsk_4f" {
 		t.Errorf("local_agents.default_model = %q, want litellm/dsk_4f", cfg.LocalAgents.DefaultModel)
 	}
@@ -69,6 +78,19 @@ func TestPlatformExecutionBackendsHaveSafeDefaults(t *testing.T) {
 	if cfg.AdminSessionTTL != 72*time.Hour {
 		t.Errorf("admin.session_ttl = %s, want 72h", cfg.AdminSessionTTL)
 	}
+}
+
+func TestManagedProvidersRequireCredentialsWhenEnabled(t *testing.T) {
+	root := validPlatformRoot()
+	enabled := true
+	root.OpenAIAgents.Enabled = &enabled
+	_, err := platformConfigFromFile(root)
+	requireErrContains(t, err, "openai_agents].enabled=true requires api_key")
+
+	root = validPlatformRoot()
+	root.ClaudeManaged.Enabled = &enabled
+	_, err = platformConfigFromFile(root)
+	requireErrContains(t, err, "claude_managed].enabled=true requires api_key, agent_id, and environment_id")
 }
 
 func containsString(values []string, want string) bool {

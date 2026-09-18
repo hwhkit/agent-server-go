@@ -56,9 +56,18 @@ type GatewayConfig struct {
 
 // LocalAgentConfig 是本机 agent CLI(pi / codex / reasonix)的配置。
 type LocalAgentConfig struct {
-	CodexBinary    string
-	PiBinary       string
-	ReasonixBinary string
+	CodexBinary           string
+	PiBinary              string
+	ReasonixBinary        string
+	DeepseekHarnessBinary string
+	OpenCodeBinary        string
+	OpenCodeDefaultModel  string
+	QwenCodeBinary        string
+	QwenCodeDefaultModel  string
+	GeminiCLIBinary       string
+	GeminiCLIDefaultModel string
+	OpenHandsBinary       string
+	OpenHandsDefaultModel string
 	// FinanceExtensionPath 是 Pi 基本面/技术分析岗位的只读金融数据扩展;
 	// 未配置时保持无工具模式。
 	FinanceExtensionPath string
@@ -72,6 +81,36 @@ type LocalAgentConfig struct {
 	AllowedEnv         []string
 	MaxOutputBytes     int
 	MaxPromptBytes     int
+}
+
+// OpenAIAgentsConfig 是 OpenAI 托管 Agents API 配置。
+type OpenAIAgentsConfig struct {
+	Enabled          bool
+	BaseURL          string
+	APIKey           string
+	DefaultModel     string
+	ReasoningEffort  string
+	Environment      string
+	MCPServerURL     string
+	MCPServerLabel   string
+	MCPAuthorization string
+	MCPRequired      bool
+	DeleteSession    bool
+	MaxResponseBytes int
+}
+
+// ClaudeManagedAgentsConfig 是 Anthropic Claude Managed Agents(beta)配置。
+type ClaudeManagedAgentsConfig struct {
+	Enabled          bool
+	BaseURL          string
+	APIKey           string
+	WorkspaceID      string
+	AgentID          string
+	EnvironmentID    string
+	VaultIDs         []string
+	MaxListCostCents *uint64
+	DeleteSession    bool
+	MaxResponseBytes int
 }
 
 // PlatformConfig 是平台运行所需的全部配置。
@@ -97,8 +136,10 @@ type PlatformConfig struct {
 	ClaudeAllowedEnv     []string
 	MaxClaudeOutputBytes int
 
-	Gateway     GatewayConfig
-	LocalAgents LocalAgentConfig
+	Gateway       GatewayConfig
+	LocalAgents   LocalAgentConfig
+	OpenAIAgents  OpenAIAgentsConfig
+	ClaudeManaged ClaudeManagedAgentsConfig
 }
 
 // ---------------------------------------------------------------------------
@@ -106,11 +147,13 @@ type PlatformConfig struct {
 // ---------------------------------------------------------------------------
 
 type platformRootFile struct {
-	Platform    platformSectionFile `toml:"platform"`
-	Admin       adminSectionFile    `toml:"admin"`
-	Claude      claudeSectionFile   `toml:"claude"`
-	Gateway     gatewaySectionFile  `toml:"gateway"`
-	LocalAgents localAgentFile      `toml:"local_agents"`
+	Platform      platformSectionFile `toml:"platform"`
+	Admin         adminSectionFile    `toml:"admin"`
+	Claude        claudeSectionFile   `toml:"claude"`
+	Gateway       gatewaySectionFile  `toml:"gateway"`
+	LocalAgents   localAgentFile      `toml:"local_agents"`
+	OpenAIAgents  openAIAgentsFile    `toml:"openai_agents"`
+	ClaudeManaged claudeManagedFile   `toml:"claude_managed"`
 }
 
 type platformSectionFile struct {
@@ -149,17 +192,54 @@ type gatewaySectionFile struct {
 }
 
 type localAgentFile struct {
-	CodexBinary          *string   `toml:"codex_binary"`
-	PiBinary             *string   `toml:"pi_binary"`
-	ReasonixBinary       *string   `toml:"reasonix_binary"`
-	FinanceExtensionPath *string   `toml:"finance_extension_path"`
-	StrategySkillPaths   *[]string `toml:"strategy_skill_paths"`
-	AnalysisSkillPaths   *[]string `toml:"analysis_skill_paths"`
-	WorkflowSkillPaths   *[]string `toml:"workflow_skill_paths"`
-	DefaultModel         *string   `toml:"default_model"`
-	AllowedEnv           *[]string `toml:"allowed_env"`
-	MaxOutputBytes       *int      `toml:"max_output_bytes"`
-	MaxPromptBytes       *int      `toml:"max_prompt_bytes"`
+	CodexBinary           *string   `toml:"codex_binary"`
+	PiBinary              *string   `toml:"pi_binary"`
+	ReasonixBinary        *string   `toml:"reasonix_binary"`
+	DeepseekHarnessBinary *string   `toml:"deepseek_harness_binary"`
+	OpenCodeBinary        *string   `toml:"opencode_binary"`
+	OpenCodeDefaultModel  *string   `toml:"opencode_default_model"`
+	QwenCodeBinary        *string   `toml:"qwen_code_binary"`
+	QwenCodeDefaultModel  *string   `toml:"qwen_code_default_model"`
+	GeminiCLIBinary       *string   `toml:"gemini_cli_binary"`
+	GeminiCLIDefaultModel *string   `toml:"gemini_cli_default_model"`
+	OpenHandsBinary       *string   `toml:"openhands_binary"`
+	OpenHandsDefaultModel *string   `toml:"openhands_default_model"`
+	FinanceExtensionPath  *string   `toml:"finance_extension_path"`
+	StrategySkillPaths    *[]string `toml:"strategy_skill_paths"`
+	AnalysisSkillPaths    *[]string `toml:"analysis_skill_paths"`
+	WorkflowSkillPaths    *[]string `toml:"workflow_skill_paths"`
+	DefaultModel          *string   `toml:"default_model"`
+	AllowedEnv            *[]string `toml:"allowed_env"`
+	MaxOutputBytes        *int      `toml:"max_output_bytes"`
+	MaxPromptBytes        *int      `toml:"max_prompt_bytes"`
+}
+
+type openAIAgentsFile struct {
+	Enabled          *bool   `toml:"enabled"`
+	BaseURL          *string `toml:"base_url"`
+	APIKey           *string `toml:"api_key"`
+	DefaultModel     *string `toml:"default_model"`
+	ReasoningEffort  *string `toml:"reasoning_effort"`
+	Environment      *string `toml:"environment"`
+	MCPServerURL     *string `toml:"mcp_server_url"`
+	MCPServerLabel   *string `toml:"mcp_server_label"`
+	MCPAuthorization *string `toml:"mcp_authorization"`
+	MCPRequired      *bool   `toml:"mcp_required"`
+	DeleteSession    *bool   `toml:"delete_session"`
+	MaxResponseBytes *int    `toml:"max_response_bytes"`
+}
+
+type claudeManagedFile struct {
+	Enabled          *bool     `toml:"enabled"`
+	BaseURL          *string   `toml:"base_url"`
+	APIKey           *string   `toml:"api_key"`
+	WorkspaceID      *string   `toml:"workspace_id"`
+	AgentID          *string   `toml:"agent_id"`
+	EnvironmentID    *string   `toml:"environment_id"`
+	VaultIDs         *[]string `toml:"vault_ids"`
+	MaxListCostCents *uint64   `toml:"max_list_cost_cents"`
+	DeleteSession    *bool     `toml:"delete_session"`
+	MaxResponseBytes *int      `toml:"max_response_bytes"`
 }
 
 // merge 用 other 中已设置的字段覆盖 r。
@@ -197,6 +277,15 @@ func (r *platformRootFile) merge(other *platformRootFile) {
 	mergePtr(&r.LocalAgents.CodexBinary, other.LocalAgents.CodexBinary)
 	mergePtr(&r.LocalAgents.PiBinary, other.LocalAgents.PiBinary)
 	mergePtr(&r.LocalAgents.ReasonixBinary, other.LocalAgents.ReasonixBinary)
+	mergePtr(&r.LocalAgents.DeepseekHarnessBinary, other.LocalAgents.DeepseekHarnessBinary)
+	mergePtr(&r.LocalAgents.OpenCodeBinary, other.LocalAgents.OpenCodeBinary)
+	mergePtr(&r.LocalAgents.OpenCodeDefaultModel, other.LocalAgents.OpenCodeDefaultModel)
+	mergePtr(&r.LocalAgents.QwenCodeBinary, other.LocalAgents.QwenCodeBinary)
+	mergePtr(&r.LocalAgents.QwenCodeDefaultModel, other.LocalAgents.QwenCodeDefaultModel)
+	mergePtr(&r.LocalAgents.GeminiCLIBinary, other.LocalAgents.GeminiCLIBinary)
+	mergePtr(&r.LocalAgents.GeminiCLIDefaultModel, other.LocalAgents.GeminiCLIDefaultModel)
+	mergePtr(&r.LocalAgents.OpenHandsBinary, other.LocalAgents.OpenHandsBinary)
+	mergePtr(&r.LocalAgents.OpenHandsDefaultModel, other.LocalAgents.OpenHandsDefaultModel)
 	mergePtr(&r.LocalAgents.FinanceExtensionPath, other.LocalAgents.FinanceExtensionPath)
 	mergePtr(&r.LocalAgents.StrategySkillPaths, other.LocalAgents.StrategySkillPaths)
 	mergePtr(&r.LocalAgents.AnalysisSkillPaths, other.LocalAgents.AnalysisSkillPaths)
@@ -205,6 +294,30 @@ func (r *platformRootFile) merge(other *platformRootFile) {
 	mergePtr(&r.LocalAgents.AllowedEnv, other.LocalAgents.AllowedEnv)
 	mergePtr(&r.LocalAgents.MaxOutputBytes, other.LocalAgents.MaxOutputBytes)
 	mergePtr(&r.LocalAgents.MaxPromptBytes, other.LocalAgents.MaxPromptBytes)
+
+	mergePtr(&r.OpenAIAgents.Enabled, other.OpenAIAgents.Enabled)
+	mergePtr(&r.OpenAIAgents.BaseURL, other.OpenAIAgents.BaseURL)
+	mergePtr(&r.OpenAIAgents.APIKey, other.OpenAIAgents.APIKey)
+	mergePtr(&r.OpenAIAgents.DefaultModel, other.OpenAIAgents.DefaultModel)
+	mergePtr(&r.OpenAIAgents.ReasoningEffort, other.OpenAIAgents.ReasoningEffort)
+	mergePtr(&r.OpenAIAgents.Environment, other.OpenAIAgents.Environment)
+	mergePtr(&r.OpenAIAgents.MCPServerURL, other.OpenAIAgents.MCPServerURL)
+	mergePtr(&r.OpenAIAgents.MCPServerLabel, other.OpenAIAgents.MCPServerLabel)
+	mergePtr(&r.OpenAIAgents.MCPAuthorization, other.OpenAIAgents.MCPAuthorization)
+	mergePtr(&r.OpenAIAgents.MCPRequired, other.OpenAIAgents.MCPRequired)
+	mergePtr(&r.OpenAIAgents.DeleteSession, other.OpenAIAgents.DeleteSession)
+	mergePtr(&r.OpenAIAgents.MaxResponseBytes, other.OpenAIAgents.MaxResponseBytes)
+
+	mergePtr(&r.ClaudeManaged.Enabled, other.ClaudeManaged.Enabled)
+	mergePtr(&r.ClaudeManaged.BaseURL, other.ClaudeManaged.BaseURL)
+	mergePtr(&r.ClaudeManaged.APIKey, other.ClaudeManaged.APIKey)
+	mergePtr(&r.ClaudeManaged.WorkspaceID, other.ClaudeManaged.WorkspaceID)
+	mergePtr(&r.ClaudeManaged.AgentID, other.ClaudeManaged.AgentID)
+	mergePtr(&r.ClaudeManaged.EnvironmentID, other.ClaudeManaged.EnvironmentID)
+	mergePtr(&r.ClaudeManaged.VaultIDs, other.ClaudeManaged.VaultIDs)
+	mergePtr(&r.ClaudeManaged.MaxListCostCents, other.ClaudeManaged.MaxListCostCents)
+	mergePtr(&r.ClaudeManaged.DeleteSession, other.ClaudeManaged.DeleteSession)
+	mergePtr(&r.ClaudeManaged.MaxResponseBytes, other.ClaudeManaged.MaxResponseBytes)
 }
 
 func mergePtr[T any](target **T, source *T) {
@@ -290,17 +403,52 @@ func platformConfigFromFile(root *platformRootFile) (*PlatformConfig, error) {
 		},
 
 		LocalAgents: LocalAgentConfig{
-			CodexBinary:          derefOr(root.LocalAgents.CodexBinary, "codex"),
-			PiBinary:             derefOr(root.LocalAgents.PiBinary, "/usr/local/bin/pi"),
-			ReasonixBinary:       derefOr(root.LocalAgents.ReasonixBinary, "/usr/local/bin/reasonix"),
-			FinanceExtensionPath: nonEmpty(derefOr(root.LocalAgents.FinanceExtensionPath, "")),
-			StrategySkillPaths:   derefSliceOr(root.LocalAgents.StrategySkillPaths, nil),
-			AnalysisSkillPaths:   derefSliceOr(root.LocalAgents.AnalysisSkillPaths, nil),
-			WorkflowSkillPaths:   derefSliceOr(root.LocalAgents.WorkflowSkillPaths, nil),
-			DefaultModel:         derefOr(root.LocalAgents.DefaultModel, "litellm/dsk_4f"),
-			AllowedEnv:           derefSliceOr(root.LocalAgents.AllowedEnv, defaultLocalAgentEnv),
-			MaxOutputBytes:       derefIntOr(root.LocalAgents.MaxOutputBytes, 1024*1024),
-			MaxPromptBytes:       derefIntOr(root.LocalAgents.MaxPromptBytes, 128*1024),
+			CodexBinary:           derefOr(root.LocalAgents.CodexBinary, "codex"),
+			PiBinary:              derefOr(root.LocalAgents.PiBinary, "/usr/local/bin/pi"),
+			ReasonixBinary:        derefOr(root.LocalAgents.ReasonixBinary, "/usr/local/bin/reasonix"),
+			DeepseekHarnessBinary: derefOr(root.LocalAgents.DeepseekHarnessBinary, "dsh"),
+			OpenCodeBinary:        derefOr(root.LocalAgents.OpenCodeBinary, "opencode"),
+			OpenCodeDefaultModel:  derefOr(root.LocalAgents.OpenCodeDefaultModel, ""),
+			QwenCodeBinary:        derefOr(root.LocalAgents.QwenCodeBinary, "qwen"),
+			QwenCodeDefaultModel:  derefOr(root.LocalAgents.QwenCodeDefaultModel, ""),
+			GeminiCLIBinary:       derefOr(root.LocalAgents.GeminiCLIBinary, "gemini"),
+			GeminiCLIDefaultModel: derefOr(root.LocalAgents.GeminiCLIDefaultModel, "auto"),
+			OpenHandsBinary:       derefOr(root.LocalAgents.OpenHandsBinary, "openhands"),
+			OpenHandsDefaultModel: derefOr(root.LocalAgents.OpenHandsDefaultModel, ""),
+			FinanceExtensionPath:  nonEmpty(derefOr(root.LocalAgents.FinanceExtensionPath, "")),
+			StrategySkillPaths:    derefSliceOr(root.LocalAgents.StrategySkillPaths, nil),
+			AnalysisSkillPaths:    derefSliceOr(root.LocalAgents.AnalysisSkillPaths, nil),
+			WorkflowSkillPaths:    derefSliceOr(root.LocalAgents.WorkflowSkillPaths, nil),
+			DefaultModel:          derefOr(root.LocalAgents.DefaultModel, "litellm/dsk_4f"),
+			AllowedEnv:            derefSliceOr(root.LocalAgents.AllowedEnv, defaultLocalAgentEnv),
+			MaxOutputBytes:        derefIntOr(root.LocalAgents.MaxOutputBytes, 1024*1024),
+			MaxPromptBytes:        derefIntOr(root.LocalAgents.MaxPromptBytes, 128*1024),
+		},
+		OpenAIAgents: OpenAIAgentsConfig{
+			Enabled:          derefBoolOr(root.OpenAIAgents.Enabled, false),
+			BaseURL:          strings.TrimRight(derefOr(root.OpenAIAgents.BaseURL, "https://api.openai.com/v1"), "/"),
+			APIKey:           derefOr(root.OpenAIAgents.APIKey, ""),
+			DefaultModel:     strings.TrimSpace(derefOr(root.OpenAIAgents.DefaultModel, "gpt-6-astra")),
+			ReasoningEffort:  strings.TrimSpace(derefOr(root.OpenAIAgents.ReasoningEffort, "medium")),
+			Environment:      strings.TrimSpace(derefOr(root.OpenAIAgents.Environment, "none")),
+			MCPServerURL:     nonEmpty(derefOr(root.OpenAIAgents.MCPServerURL, "")),
+			MCPServerLabel:   strings.TrimSpace(derefOr(root.OpenAIAgents.MCPServerLabel, "mota_tools")),
+			MCPAuthorization: derefOr(root.OpenAIAgents.MCPAuthorization, ""),
+			MCPRequired:      derefBoolOr(root.OpenAIAgents.MCPRequired, true),
+			DeleteSession:    derefBoolOr(root.OpenAIAgents.DeleteSession, true),
+			MaxResponseBytes: derefIntOr(root.OpenAIAgents.MaxResponseBytes, 2*1024*1024),
+		},
+		ClaudeManaged: ClaudeManagedAgentsConfig{
+			Enabled:          derefBoolOr(root.ClaudeManaged.Enabled, false),
+			BaseURL:          strings.TrimRight(derefOr(root.ClaudeManaged.BaseURL, "https://api.anthropic.com/v1"), "/"),
+			APIKey:           derefOr(root.ClaudeManaged.APIKey, ""),
+			WorkspaceID:      nonEmpty(derefOr(root.ClaudeManaged.WorkspaceID, "")),
+			AgentID:          strings.TrimSpace(derefOr(root.ClaudeManaged.AgentID, "")),
+			EnvironmentID:    strings.TrimSpace(derefOr(root.ClaudeManaged.EnvironmentID, "")),
+			VaultIDs:         derefSliceOr(root.ClaudeManaged.VaultIDs, nil),
+			MaxListCostCents: root.ClaudeManaged.MaxListCostCents,
+			DeleteSession:    derefBoolOr(root.ClaudeManaged.DeleteSession, true),
+			MaxResponseBytes: derefIntOr(root.ClaudeManaged.MaxResponseBytes, 2*1024*1024),
 		},
 	}
 
@@ -342,6 +490,16 @@ func defaultLocalAgentEnv() []string {
 		"LITELLM_API_KEY",
 		"OPENAI_API_KEY",
 		"DEEPSEEK_API_KEY",
+		"GEMINI_API_KEY",
+		"GOOGLE_API_KEY",
+		"GOOGLE_CLOUD_PROJECT",
+		"DASHSCOPE_API_KEY",
+		"QWEN_API_KEY",
+		"LLM_API_KEY",
+		"LLM_BASE_URL",
+		"LLM_MODEL",
+		"OPENCODE_CONFIG",
+		"OPENCODE_CONFIG_CONTENT",
 		"MOTA_FINANCE_USER_AGENT",
 		"LOCAL_AGENT__STRATEGY_SKILL_PATHS",
 		"LOCAL_AGENT__ANALYSIS_SKILL_PATHS",
@@ -387,7 +545,29 @@ func applyPlatformEnv(root *platformRootFile) error {
 	setEnvString("LOCAL_AGENT__CODEX_BINARY", &root.LocalAgents.CodexBinary)
 	setEnvString("LOCAL_AGENT__PI_BINARY", &root.LocalAgents.PiBinary)
 	setEnvString("LOCAL_AGENT__REASONIX_BINARY", &root.LocalAgents.ReasonixBinary)
+	setEnvString("LOCAL_AGENT__DEEPSEEK_HARNESS_BINARY", &root.LocalAgents.DeepseekHarnessBinary)
+	setEnvString("LOCAL_AGENT__OPENCODE_BINARY", &root.LocalAgents.OpenCodeBinary)
+	setEnvString("LOCAL_AGENT__OPENCODE_DEFAULT_MODEL", &root.LocalAgents.OpenCodeDefaultModel)
+	setEnvString("LOCAL_AGENT__QWEN_CODE_BINARY", &root.LocalAgents.QwenCodeBinary)
+	setEnvString("LOCAL_AGENT__QWEN_CODE_DEFAULT_MODEL", &root.LocalAgents.QwenCodeDefaultModel)
+	setEnvString("LOCAL_AGENT__GEMINI_CLI_BINARY", &root.LocalAgents.GeminiCLIBinary)
+	setEnvString("LOCAL_AGENT__GEMINI_CLI_DEFAULT_MODEL", &root.LocalAgents.GeminiCLIDefaultModel)
+	setEnvString("LOCAL_AGENT__OPENHANDS_BINARY", &root.LocalAgents.OpenHandsBinary)
+	setEnvString("LOCAL_AGENT__OPENHANDS_DEFAULT_MODEL", &root.LocalAgents.OpenHandsDefaultModel)
 	setEnvString("LOCAL_AGENT__DEFAULT_MODEL", &root.LocalAgents.DefaultModel)
+	setEnvString("OPENAI_AGENTS__BASE_URL", &root.OpenAIAgents.BaseURL)
+	setEnvString("OPENAI_AGENTS__API_KEY", &root.OpenAIAgents.APIKey)
+	setEnvString("OPENAI_AGENTS__DEFAULT_MODEL", &root.OpenAIAgents.DefaultModel)
+	setEnvString("OPENAI_AGENTS__REASONING_EFFORT", &root.OpenAIAgents.ReasoningEffort)
+	setEnvString("OPENAI_AGENTS__ENVIRONMENT", &root.OpenAIAgents.Environment)
+	setEnvString("OPENAI_AGENTS__MCP_SERVER_URL", &root.OpenAIAgents.MCPServerURL)
+	setEnvString("OPENAI_AGENTS__MCP_SERVER_LABEL", &root.OpenAIAgents.MCPServerLabel)
+	setEnvString("OPENAI_AGENTS__MCP_AUTHORIZATION", &root.OpenAIAgents.MCPAuthorization)
+	setEnvString("CLAUDE_MANAGED__BASE_URL", &root.ClaudeManaged.BaseURL)
+	setEnvString("CLAUDE_MANAGED__API_KEY", &root.ClaudeManaged.APIKey)
+	setEnvString("CLAUDE_MANAGED__WORKSPACE_ID", &root.ClaudeManaged.WorkspaceID)
+	setEnvString("CLAUDE_MANAGED__AGENT_ID", &root.ClaudeManaged.AgentID)
+	setEnvString("CLAUDE_MANAGED__ENVIRONMENT_ID", &root.ClaudeManaged.EnvironmentID)
 
 	// 兼容现网原有 Anthropic/LiteLLM 环境变量;新 AGENT_GATEWAY__* 优先。
 	if root.Gateway.BaseURL == nil || strings.TrimSpace(*root.Gateway.BaseURL) == "" {
@@ -407,6 +587,21 @@ func applyPlatformEnv(root *platformRootFile) error {
 		return err
 	}
 	if err := setEnvBool("ADMIN__SECURE_COOKIES", &root.Admin.SecureCookies); err != nil {
+		return err
+	}
+	if err := setEnvBool("OPENAI_AGENTS__ENABLED", &root.OpenAIAgents.Enabled); err != nil {
+		return err
+	}
+	if err := setEnvBool("OPENAI_AGENTS__MCP_REQUIRED", &root.OpenAIAgents.MCPRequired); err != nil {
+		return err
+	}
+	if err := setEnvBool("OPENAI_AGENTS__DELETE_SESSION", &root.OpenAIAgents.DeleteSession); err != nil {
+		return err
+	}
+	if err := setEnvBool("CLAUDE_MANAGED__ENABLED", &root.ClaudeManaged.Enabled); err != nil {
+		return err
+	}
+	if err := setEnvBool("CLAUDE_MANAGED__DELETE_SESSION", &root.ClaudeManaged.DeleteSession); err != nil {
 		return err
 	}
 	if err := setEnvInt("PLATFORM__MAX_REQUEST_BODY_BYTES", &root.Platform.MaxRequestBodyBytes); err != nil {
@@ -436,6 +631,16 @@ func applyPlatformEnv(root *platformRootFile) error {
 	if err := setEnvInt("LOCAL_AGENT__MAX_PROMPT_BYTES", &root.LocalAgents.MaxPromptBytes); err != nil {
 		return err
 	}
+	if err := setEnvInt("OPENAI_AGENTS__MAX_RESPONSE_BYTES", &root.OpenAIAgents.MaxResponseBytes); err != nil {
+		return err
+	}
+	if err := setEnvInt("CLAUDE_MANAGED__MAX_RESPONSE_BYTES", &root.ClaudeManaged.MaxResponseBytes); err != nil {
+		return err
+	}
+	if err := setEnvUint("CLAUDE_MANAGED__MAX_LIST_COST_CENTS", &root.ClaudeManaged.MaxListCostCents); err != nil {
+		return err
+	}
+	setEnvCSV("CLAUDE_MANAGED__VAULT_IDS", &root.ClaudeManaged.VaultIDs)
 
 	if root.LocalAgents.FinanceExtensionPath == nil {
 		setEnvString("LOCAL_AGENT__FINANCE_EXTENSION_PATH", &root.LocalAgents.FinanceExtensionPath)
@@ -678,6 +883,11 @@ func (c *PlatformConfig) Validate() error {
 		{"codex_binary", c.LocalAgents.CodexBinary},
 		{"pi_binary", c.LocalAgents.PiBinary},
 		{"reasonix_binary", c.LocalAgents.ReasonixBinary},
+		{"deepseek_harness_binary", c.LocalAgents.DeepseekHarnessBinary},
+		{"opencode_binary", c.LocalAgents.OpenCodeBinary},
+		{"qwen_code_binary", c.LocalAgents.QwenCodeBinary},
+		{"gemini_cli_binary", c.LocalAgents.GeminiCLIBinary},
+		{"openhands_binary", c.LocalAgents.OpenHandsBinary},
 	} {
 		if strings.TrimSpace(item.binary) == "" {
 			return fmt.Errorf("[local_agents].%s must not be empty", item.name)
@@ -722,6 +932,45 @@ func (c *PlatformConfig) Validate() error {
 		return errors.New("[local_agents].max_prompt_bytes must be between 4096 and 1048576")
 	}
 
+	if err := validateManagedURL("[openai_agents].base_url", c.OpenAIAgents.BaseURL); err != nil {
+		return err
+	}
+	if c.OpenAIAgents.Enabled && strings.TrimSpace(c.OpenAIAgents.APIKey) == "" {
+		return errors.New("[openai_agents].enabled=true requires api_key")
+	}
+	if c.OpenAIAgents.DefaultModel == "" {
+		return errors.New("[openai_agents].default_model must not be empty")
+	}
+	if c.OpenAIAgents.ReasoningEffort == "" {
+		return errors.New("[openai_agents].reasoning_effort must not be empty")
+	}
+	if c.OpenAIAgents.Environment != "none" {
+		return errors.New("[openai_agents].environment currently must be none")
+	}
+	if c.OpenAIAgents.MCPServerURL != "" {
+		if err := validateManagedURL("[openai_agents].mcp_server_url", c.OpenAIAgents.MCPServerURL); err != nil {
+			return err
+		}
+		if c.OpenAIAgents.MCPServerLabel == "" {
+			return errors.New("[openai_agents].mcp_server_label must not be empty")
+		}
+	}
+	if c.OpenAIAgents.MaxResponseBytes < 4096 || c.OpenAIAgents.MaxResponseBytes > 16*1024*1024 {
+		return errors.New("[openai_agents].max_response_bytes must be between 4096 and 16777216")
+	}
+
+	if err := validateManagedURL("[claude_managed].base_url", c.ClaudeManaged.BaseURL); err != nil {
+		return err
+	}
+	if c.ClaudeManaged.Enabled {
+		if strings.TrimSpace(c.ClaudeManaged.APIKey) == "" || c.ClaudeManaged.AgentID == "" || c.ClaudeManaged.EnvironmentID == "" {
+			return errors.New("[claude_managed].enabled=true requires api_key, agent_id, and environment_id")
+		}
+	}
+	if c.ClaudeManaged.MaxResponseBytes < 4096 || c.ClaudeManaged.MaxResponseBytes > 16*1024*1024 {
+		return errors.New("[claude_managed].max_response_bytes must be between 4096 and 16777216")
+	}
+
 	// Rust 侧在 PlatformState::initialize 里 canonicalize workspace_root;
 	// 这里提前解析为绝对路径,后续执行器只做 workspace 逃逸检查。
 	root, err := filepath.Abs(c.WorkspaceRoot)
@@ -729,6 +978,14 @@ func (c *PlatformConfig) Validate() error {
 		return fmt.Errorf("resolve [claude].workspace_root %s: %w", c.WorkspaceRoot, err)
 	}
 	c.WorkspaceRoot = root
+	return nil
+}
+
+func validateManagedURL(name, value string) error {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return fmt.Errorf("%s must be an absolute HTTP(S) URL", name)
+	}
 	return nil
 }
 

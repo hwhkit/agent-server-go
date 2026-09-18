@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -18,6 +19,11 @@ const (
 	LocalCliPi LocalCliKind = iota
 	LocalCliCodex
 	LocalCliReasonix
+	LocalCliOpenCode
+	LocalCliQwenCode
+	LocalCliGeminiCLI
+	LocalCliOpenHands
+	LocalCliDeepseekHarness
 )
 
 // Label 是日志与错误信息里使用的执行器名。
@@ -29,6 +35,16 @@ func (k LocalCliKind) Label() string {
 		return "Codex"
 	case LocalCliReasonix:
 		return "Reasonix"
+	case LocalCliOpenCode:
+		return "OpenCode"
+	case LocalCliQwenCode:
+		return "Qwen Code"
+	case LocalCliGeminiCLI:
+		return "Gemini CLI"
+	case LocalCliOpenHands:
+		return "OpenHands"
+	case LocalCliDeepseekHarness:
+		return "DeepSeek Harness"
 	default:
 		return "unknown"
 	}
@@ -43,6 +59,16 @@ func (k LocalCliKind) binary(config *PlatformConfig) string {
 		return config.LocalAgents.CodexBinary
 	case LocalCliReasonix:
 		return config.LocalAgents.ReasonixBinary
+	case LocalCliOpenCode:
+		return config.LocalAgents.OpenCodeBinary
+	case LocalCliQwenCode:
+		return config.LocalAgents.QwenCodeBinary
+	case LocalCliGeminiCLI:
+		return config.LocalAgents.GeminiCLIBinary
+	case LocalCliOpenHands:
+		return config.LocalAgents.OpenHandsBinary
+	case LocalCliDeepseekHarness:
+		return config.LocalAgents.DeepseekHarnessBinary
 	default:
 		return ""
 	}
@@ -58,6 +84,8 @@ const (
 	LocalOutputPiJSONLines
 	// LocalOutputCodexJSONLines Codex 的 JSONL 事件流。
 	LocalOutputCodexJSONLines
+	LocalOutputGeminiJSON
+	LocalOutputOpenHandsJSONLines
 )
 
 // LocalCommand 是一条待执行的本机 CLI 调用。
@@ -67,7 +95,8 @@ type LocalCommand struct {
 	Label        string
 	OutputMode   LocalOutputMode
 	// MetricsPath 非空时,执行结束后需读取并删除该文件以获取 usage(仅 Reasonix)。
-	MetricsPath string
+	MetricsPath  string
+	CleanupPaths []string
 }
 
 // localModelAliases 是管理页遗留的网关模型别名;命中则回退到本机默认模型。
@@ -77,13 +106,33 @@ var localModelAliases = map[string]bool{"": true, "deepseek-v4-flash": true, "ds
 //
 // 管理页历史上填的是网关别名(dsk_4f 等),而本机 Pi/Codex/Reasonix 需要
 // provider/model 形式,因此这些别名统一回退到 [local_agents].default_model。
-func localModel(config *PlatformConfig, runtime *AgentRuntime) string {
+func localModel(config *PlatformConfig, runtime *AgentRuntime, kinds ...LocalCliKind) string {
+	kind := LocalCliPi
+	if len(kinds) > 0 {
+		kind = kinds[0]
+	}
+	fallback := config.LocalAgents.DefaultModel
+	switch kind {
+	case LocalCliOpenCode:
+		fallback = config.LocalAgents.OpenCodeDefaultModel
+	case LocalCliQwenCode:
+		fallback = config.LocalAgents.QwenCodeDefaultModel
+	case LocalCliGeminiCLI:
+		fallback = config.LocalAgents.GeminiCLIDefaultModel
+	case LocalCliOpenHands:
+		fallback = config.LocalAgents.OpenHandsDefaultModel
+	case LocalCliDeepseekHarness:
+		fallback = config.Gateway.Model
+	}
 	if runtime.Config.ClaudeModel == nil {
-		return config.LocalAgents.DefaultModel
+		return fallback
 	}
 	configured := strings.TrimSpace(*runtime.Config.ClaudeModel)
+	if kind == LocalCliDeepseekHarness && configured == "deepseek-v4-flash" {
+		return configured
+	}
 	if localModelAliases[configured] {
-		return config.LocalAgents.DefaultModel
+		return fallback
 	}
 	return configured
 }
@@ -302,13 +351,77 @@ func agentCommand(
 		cmd, metricsPath := buildReasonixCommand(config, runtime, prompt)
 		local.Cmd = cmd
 		local.MetricsPath = metricsPath
+	case LocalCliOpenCode:
+		args := []string{"run", "--agent", "plan", "--format", "default"}
+		if model := localModel(config, runtime, kind); model != "" {
+			args = append(args, "--model", model)
+		}
+		args = append(args, prompt)
+		local.Cmd = exec.Command(kind.binary(config), args...)
+	case LocalCliQwenCode:
+		args := []string{"--output-format", "text", "--safe-mode"}
+		if model := localModel(config, runtime, kind); model != "" {
+			args = append(args, "--model", model)
+		}
+		args = append(args, "--prompt", prompt)
+		local.Cmd = exec.Command(kind.binary(config), args...)
+	case LocalCliGeminiCLI:
+		args := []string{"--output-format", "json", "--approval-mode", "plan", "--skip-trust"}
+		if model := localModel(config, runtime, kind); model != "" {
+			args = append(args, "--model", model)
+		}
+		args = append(args, "--prompt", prompt)
+		local.Cmd = exec.Command(kind.binary(config), args...)
+		local.OutputMode = LocalOutputGeminiJSON
+	case LocalCliOpenHands:
+		local.Cmd = exec.Command(kind.binary(config), "--headless", "--json", "--task", prompt)
+		local.OutputMode = LocalOutputOpenHandsJSONLines
+	case LocalCliDeepseekHarness:
+		model := localModel(config, runtime, kind)
+		if model == "" {
+			model = "deepseek-v4-flash"
+		}
+		patchPath := filepath.Join(os.TempDir(), fmt.Sprintf("mota-dsh-model-%d-%s.yml", os.Getpid(), randomToken(12)))
+		quotedModel := strconv.Quote(model)
+		_ = os.WriteFile(patchPath, []byte("- id: agent-default-model\n  config:\n    provider: deepseek-official\n    model: "+quotedModel+"\n"), 0o600)
+		local.Cmd = exec.Command(kind.binary(config), "--profile", "headless", "--patch", patchPath, prompt)
+		local.CleanupPaths = append(local.CleanupPaths, patchPath)
 	}
 
 	local.Cmd.Dir = workspace
 	// 显式清空环境:子进程只能看到白名单变量,不继承宿主的其它凭据。
 	local.Cmd.Env = []string{}
 	copyAllowedEnv(local.Cmd, config.LocalAgents.AllowedEnv)
+	if kind == LocalCliOpenHands {
+		if model := localModel(config, runtime, kind); model != "" {
+			setEnvVar(local.Cmd, "LLM_MODEL", model)
+			if localSliceContains(config.LocalAgents.AllowedEnv, "LLM_API_KEY") && hasEnvVar(local.Cmd, "LLM_API_KEY") {
+				local.Cmd.Args = append(local.Cmd.Args, "--override-with-envs")
+			}
+		}
+	}
+	if kind == LocalCliDeepseekHarness {
+		if config.Gateway.BaseURL != "" {
+			setEnvVar(local.Cmd, "DEEPSEEK_BASE_URL", config.Gateway.BaseURL)
+		}
+		if config.Gateway.APIKey != "" {
+			setEnvVar(local.Cmd, "DEEPSEEK_API_KEY", config.Gateway.APIKey)
+		}
+		if model := localModel(config, runtime, kind); model != "" {
+			setEnvVar(local.Cmd, "DEEPSEEK_MODEL", model)
+			setEnvVar(local.Cmd, "DSH_MODEL", model)
+		}
+	}
 	return local
+}
+
+func localSliceContains(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }
 
 // buildPiCommand 组装 Pi 的 argv。提示词是最后一个位置参数,不走 stdin。
@@ -347,7 +460,7 @@ func buildPiCommand(config *PlatformConfig, runtime *AgentRuntime, prompt, syste
 	}
 
 	args = append(args, "--system-prompt", piSystemPrompt)
-	if model := localModel(config, runtime); model != "" {
+	if model := localModel(config, runtime, LocalCliPi); model != "" {
 		args = append(args, "--model", model)
 	}
 	if useDataExtension {
@@ -377,7 +490,7 @@ func buildCodexCommand(config *PlatformConfig, runtime *AgentRuntime) *exec.Cmd 
 			base)
 		args = append(args, "--config", `model_provider="litellm"`, "--config", provider)
 	}
-	if model := localModel(config, runtime); model != "" {
+	if model := localModel(config, runtime, LocalCliCodex); model != "" {
 		// Codex 的 --model 只接受裸模型名,provider 由 --config 指定。
 		args = append(args, "--model", strings.TrimPrefix(model, "litellm/"))
 	}
@@ -394,7 +507,7 @@ func buildReasonixCommand(config *PlatformConfig, runtime *AgentRuntime, prompt 
 		fmt.Sprintf("mota-reasonix-metrics-%d-%s.json", os.Getpid(), randomToken(12)))
 
 	args := []string{"run", "--print", "--metrics", metricsPath}
-	if model := localModel(config, runtime); model != "" {
+	if model := localModel(config, runtime, LocalCliReasonix); model != "" {
 		args = append(args, "--model", model)
 	}
 	args = append(args, prompt)

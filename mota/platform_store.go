@@ -534,6 +534,46 @@ func (s *AgentStore) RecordAudit(ctx context.Context, actor, action, target stri
 	return err
 }
 
+// GetExecutorProvider 读取智能体中心 Provider 配置。整份 JSON 使用平台主密钥
+// 加密存储，避免 API key 与 MCP Authorization 以明文落库。
+func (s *AgentStore) GetExecutorProvider(ctx context.Context, providerID string) (map[string]any, error) {
+	key := "executor_provider:" + providerID
+	var encrypted string
+	err := s.pool.QueryRow(ctx, "SELECT value FROM platform_settings WHERE key = $1", key).Scan(&encrypted)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	plaintext, err := s.cipher.Decrypt(encrypted, key)
+	if err != nil {
+		return nil, err
+	}
+	var value map[string]any
+	if err := json.Unmarshal([]byte(plaintext), &value); err != nil {
+		return nil, fmt.Errorf("decode stored executor provider %s: %w", providerID, err)
+	}
+	return value, nil
+}
+
+// PutExecutorProvider 加密并保存一份 Provider 配置。
+func (s *AgentStore) PutExecutorProvider(ctx context.Context, providerID string, value map[string]any) error {
+	key := "executor_provider:" + providerID
+	plaintext, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	encrypted, err := s.cipher.Encrypt(string(plaintext), key)
+	if err != nil {
+		return err
+	}
+	_, err = s.pool.Exec(ctx,
+		`INSERT INTO platform_settings (key, value) VALUES ($1, $2) `+
+			`ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, key, encrypted)
+	return err
+}
+
 // ---------------------------------------------------------------------------
 // 运行记录
 // ---------------------------------------------------------------------------

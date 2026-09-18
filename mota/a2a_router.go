@@ -68,7 +68,7 @@ func NewA2aStateFromPlatform(platform *PlatformState, config *A2AConfig) (*A2aSt
 	}
 	dispatcher := NewAgentDispatcher(platform.Registry, executor, platform.GlobalExecution, "")
 	return NewA2aState(
-		config, platform.Config.PublicBaseURL, platform.Registry, dispatcher,
+		config, platform.ConfigSnapshot().PublicBaseURL, platform.Registry, dispatcher,
 		NewA2APostgresTaskStore(platform.Store),
 	), nil
 }

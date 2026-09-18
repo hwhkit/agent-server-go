@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark">
   <meta name="theme-color" content="#07110f">
-  <title data-i18n="title.page">MOTA Agent 控制台</title>
+  <title data-i18n="title.page">MOTA 智能体控制台</title>
   <style>
     :root {
       color-scheme: dark;
@@ -385,6 +385,9 @@
     .sync-meta { margin-right: 4px; color: var(--faint); font: 9px/1.4 var(--mono); text-align: right; }
     .mobile-brand { display: none; align-items: center; gap: 9px; color: var(--text); text-decoration: none; font: 750 10px/1 var(--mono); letter-spacing: 0.09em; }
     .mobile-logout { display: none; }
+    .mobile-nav { display: none; align-items: center; gap: 5px; margin-left: auto; }
+    .mobile-nav a { border: 1px solid transparent; border-radius: 7px; padding: 8px 9px; color: var(--muted); text-decoration: none; font: 750 9px/1 var(--mono); }
+    .mobile-nav a.active { color: var(--text); border-color: var(--line); background: rgba(117,239,186,0.06); }
 
     .content { width: min(1440px, 100%); margin: 0 auto; }
     .hero-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 28px; padding: 42px 0 24px; }
@@ -424,6 +427,27 @@
     .section-title h2 { margin: 6px 0 0; font-size: 20px; letter-spacing: -0.03em; }
     .section-title p { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
     .section-actions { display: flex; gap: 8px; align-items: flex-end; }
+    .provider-summary { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+    .provider-summary span { border: 1px solid var(--line); border-radius: 999px; padding: 7px 11px; color: var(--muted); background: rgba(255,255,255,0.018); font: 700 9px/1 var(--mono); }
+    .provider-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+    .provider-group { padding-top: 14px; border-top: 1px solid rgba(117,239,186,0.24); }
+    .provider-group + .provider-group { margin-top: 34px; }
+    .provider-group-title { display: flex; align-items: center; gap: 10px; margin: 0 0 15px; color: var(--text-soft); font: 850 11px/1 var(--mono); letter-spacing: 0.12em; }
+    .provider-group-title::before { content: ""; width: 28px; height: 2px; border-radius: 999px; background: var(--mint); box-shadow: 0 0 12px rgba(117,239,186,0.35); }
+    .provider-group-title::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, rgba(117,239,186,0.2), transparent); }
+    .provider-card { display: grid; min-height: 134px; padding: 13px; border: 1px solid var(--line); border-radius: 12px; background: linear-gradient(145deg, rgba(255,255,255,0.026), rgba(255,255,255,0.01)); box-shadow: inset 0 1px rgba(255,255,255,0.025); }
+    .provider-card.ready { border-color: rgba(117,239,186,0.28); }
+    .provider-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .provider-card h3 { margin: 0; font-size: 14px; }
+    .provider-card p { margin: 6px 0 0; color: var(--muted); font-size: 11px; line-height: 1.4; }
+    .provider-status { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 999px; padding: 4px 7px; color: var(--faint); font: 800 8px/1 var(--mono); white-space: nowrap; }
+    .provider-status::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--faint); }
+    .provider-status.ready { color: var(--mint); border-color: rgba(117,239,186,0.3); }
+    .provider-status.ready::before { background: var(--mint); box-shadow: 0 0 8px rgba(117,239,186,0.6); }
+    .provider-card-foot { align-self: end; display: flex; justify-content: space-between; align-items: flex-end; gap: 10px; margin-top: 9px; }
+    .provider-detail { color: var(--faint); font: 9px/1.45 var(--mono); }
+    .provider-form-fields { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 16px; }
+    .provider-form-fields .span-2 { grid-column: span 2; }
     .agents-toolbar { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; margin: 2px 0 14px; }
     .agents-filters { display: flex; align-items: center; gap: 22px; flex: 1; flex-wrap: wrap; }
     .agents-filters .filter-select-wrap .select { min-width: 150px; }
@@ -480,6 +504,7 @@
     .execution-agent-name { color: var(--text-soft); font: 700 9px/1 var(--mono); }
     .execution-mode-badge { display: inline-grid; width: 20px; height: 20px; place-items: center; border: 1px solid rgba(115, 215, 234, 0.32); border-radius: 6px; color: var(--cyan); background: rgba(115, 215, 234, 0.08); font: 800 9px/1 var(--mono); }
     .execution-mode-badge.local { border-color: rgba(117, 239, 186, 0.34); color: var(--mint); background: rgba(117, 239, 186, 0.09); }
+    .execution-mode-badge.managed { border-color: rgba(183, 148, 246, 0.42); color: #c7a9ff; background: rgba(183, 148, 246, 0.10); }
     .execution-agent-unknown { color: var(--muted); font: 9px/1.4 var(--mono); white-space: nowrap; }
     .agent-runs-row:hover { background: var(--surface-2, rgba(255,255,255,0.03)); }
     .agent-runs-card { cursor: pointer; }
@@ -662,6 +687,7 @@
       .topbar { display: flex; min-height: 66px; margin: 0 -22px; padding: 11px 22px; }
       .topbar-title { display: none; }
       .mobile-brand { display: flex; }
+      .mobile-nav { display: flex; }
       .mobile-logout { display: inline-flex; }
       .sync-meta { display: none; }
       .hero-row { padding-top: 32px; }
@@ -703,6 +729,9 @@
       .runs-toolbar > .section-actions { width: auto; }
       .section-actions { width: 100%; }
       .section-actions .button { flex: 1; }
+      .provider-grid { grid-template-columns: 1fr; }
+      .provider-form-fields { grid-template-columns: 1fr; }
+      .provider-form-fields .span-2 { grid-column: auto; }
       .form-grid { grid-template-columns: 1fr; }
       .span-2 { grid-column: auto; }
       .drawer-head, .form-scroll { padding-left: 18px; padding-right: 18px; }
@@ -717,6 +746,7 @@
     }
     @media (max-width: 390px) {
       .mobile-brand span:last-child { display: none; }
+      .mobile-nav a { padding-inline: 7px; }
       .stats-grid { grid-template-columns: 1fr; }
       .stat-card { min-height: 58px; }
       .agent-card-grid { grid-template-columns: 1fr; }
@@ -782,13 +812,14 @@
 
   <div id="app-view" class="view app-view" hidden>
     <aside class="sidebar" aria-label="控制台导航" data-i18n-aria="sidebar.label">
-      <a class="sidebar-brand" href="#agents-section" aria-label="返回控制台概览" data-i18n-aria="sidebar.brand.label">
+      <a class="sidebar-brand" href="#providers-section" aria-label="返回智能体中心" data-i18n-aria="sidebar.brand.label">
         <span class="brand-mark" aria-hidden="true"></span>
         <span><strong>智能体控制台</strong><small>Copyright @ MoTA</small></span>
       </a>
       <nav class="side-nav">
-        <a class="active" href="#agents-section" data-nav-target="agents-section" data-i18n="sidebar.nav.agents">智能体管理</a>
-        <a href="#runs-section" data-nav-target="runs-section" data-i18n="sidebar.nav.runs">最近运行</a>
+        <a class="active" href="#providers-section" data-nav-target="providers-section">智能体中心</a>
+        <a href="#agents-section" data-nav-target="agents-section" data-i18n="sidebar.nav.agents">岗位管理</a>
+        <a href="#runs-section" data-nav-target="runs-section" data-i18n="sidebar.nav.runs">运行日志</a>
       </nav>
       <div class="sidebar-spacer"></div>
       <div class="sidebar-status">
@@ -803,12 +834,30 @@
 
     <main id="main-content" class="app-main" tabindex="-1">
       <header class="topbar">
-        <a class="mobile-brand" href="#agents-section"><span class="brand-mark" aria-hidden="true"></span><span>智能体控制台</span></a>
+        <a class="mobile-brand" href="#providers-section"><span class="brand-mark" aria-hidden="true"></span><span>智能体控制台</span></a>
+        <nav class="mobile-nav" aria-label="移动端导航">
+          <a class="active" href="#providers-section" data-nav-target="providers-section">中心</a>
+          <a href="#agents-section" data-nav-target="agents-section">岗位</a>
+          <a href="#runs-section" data-nav-target="runs-section">运行</a>
+        </nav>
         <button id="mobile-logout-button" class="button ghost mobile-logout" type="button" aria-label="退出登录" data-i18n-aria="sidebar.logout.label" data-i18n="sidebar.logout">退出</button>
       </header>
 
       <div class="content">
-        <section id="agents-section" class="section" aria-labelledby="agents-title">
+        <section id="providers-section" class="section" aria-labelledby="providers-title">
+          <div class="section-head">
+            <div class="section-title">
+              <h2 id="providers-title">智能体中心</h2>
+              <p>先配置本地或远端执行智能体，配置完成后才能分配给岗位。</p>
+            </div>
+            <div class="section-actions">
+              <button id="providers-refresh-button" class="button ghost" type="button">刷新状态</button>
+            </div>
+          </div>
+          <div id="providers-panel" aria-live="polite" aria-busy="true"></div>
+        </section>
+
+        <section id="agents-section" class="section" aria-labelledby="agents-title" hidden>
           <div class="stats-grid" aria-label="关键指标" data-i18n-aria="overview.stats.label">
             <article class="stat-card"><div class="stat-label" data-i18n="overview.stat.total">智能体总数</div><div id="stat-total" class="stat-value">—</div><div class="stat-foot" data-i18n="overview.stat.total.foot">已注册路由</div></article>
             <article class="stat-card"><div class="stat-label" data-i18n="overview.stat.enabled">已启用</div><div id="stat-enabled" class="stat-value">—</div><div class="stat-foot" data-i18n="overview.stat.enabled.foot">可接收请求</div></article>
@@ -841,7 +890,7 @@
             </div>
             <div class="section-actions">
               <button id="refresh-button" class="button ghost" type="button" data-i18n="topbar.refresh">刷新数据</button>
-              <button id="create-agent-button" class="button primary" type="button" data-i18n="topbar.create">创建 Agent</button>
+              <button id="create-agent-button" class="button primary" type="button" data-i18n="topbar.create">创建智能体</button>
             </div>
           </div>
           <div id="agents-panel" class="panel" aria-live="polite" aria-busy="true"></div>
@@ -850,7 +899,7 @@
         <section id="runs-section" class="section" aria-labelledby="runs-title">
           <div class="section-head">
             <div class="section-title">
-              <h2 id="runs-title" data-i18n="runs.title">最近运行</h2>
+              <h2 id="runs-title" data-i18n="runs.title">运行日志</h2>
             </div>
           </div>
           <div class="runs-toolbar">
@@ -905,11 +954,13 @@
     <div class="drawer-backdrop" data-close-drawer></div>
     <section id="agent-drawer" class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" tabindex="-1">
       <header class="drawer-head">
-        <div><h2 id="drawer-title" data-i18n="drawer.title.create">创建 Agent</h2></div>
-        <button class="button ghost drawer-close" type="button" data-close-drawer aria-label="关闭 Agent 表单" data-i18n-aria="drawer.close.label" data-i18n="drawer.close">关闭</button>
+        <div><h2 id="drawer-title" data-i18n="drawer.title.create">创建智能体</h2></div>
+        <button class="button ghost drawer-close" type="button" data-close-drawer aria-label="关闭智能体表单" data-i18n-aria="drawer.close.label" data-i18n="drawer.close">关闭</button>
       </header>
 
       <form id="agent-form" class="agent-form">
+        <input id="agent-signature-encoding" name="signature_encoding" type="hidden" value="hex">
+        <input id="agent-workspace-path" name="workspace_path" type="hidden" value=".">
         <div class="form-scroll">
           <div id="agent-form-error" class="form-error" role="alert" hidden></div>
 
@@ -923,7 +974,7 @@
               </div>
               <div class="field">
                 <label for="agent-name"><span data-i18n="drawer.name.label">名称</span> <span class="required" aria-hidden="true">*</span></label>
-                <input id="agent-name" class="input" name="name" type="text" required maxlength="50" placeholder="客户支持 Agent" data-i18n-placeholder="drawer.name.placeholder">
+                <input id="agent-name" class="input" name="name" type="text" required maxlength="50" placeholder="客户支持智能体" data-i18n-placeholder="drawer.name.placeholder">
                 <p class="field-help">最多 80 字符。</p>
               </div>
               <div class="field span-2">
@@ -935,8 +986,14 @@
                 <select id="agent-executor-kind" class="select agent-execution-select" name="executor_kind">
                   <option value="pi">Pi</option>
                   <option value="codex">Codex</option>
+                  <option value="opencode">OpenCode</option>
+                  <option value="qwen_code">Qwen Code</option>
+                  <option value="gemini_cli">Gemini CLI</option>
+                  <option value="openhands">OpenHands</option>
                   <option value="reasonix">Reasonix</option>
                   <option value="claude_code">Claude Code</option>
+                  <option value="openai_agent">OpenAI 托管智能体</option>
+                  <option value="claude_managed_agent">Claude 托管智能体</option>
                 </select>
               </div>
               <div id="agent-execution-mode-field" class="field">
@@ -944,6 +1001,56 @@
                 <select id="agent-execution-mode" class="select agent-execution-select" name="execution_mode">
                   <option id="agent-execution-gateway-option" value="gateway">远端网关（默认）</option>
                   <option id="agent-execution-local-option" value="local">本机 Local</option>
+                  <option id="agent-execution-managed-option" value="managed">OpenAI 托管</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="agent-claude-model" data-i18n="drawer.model.label">模型选择</label>
+                <select id="agent-claude-model" class="select" name="claude_model">
+                  <option value="">留空（服务端默认）</option>
+                  <optgroup label="Claude">
+                    <option value="claude-opus-5">claude-opus-5</option>
+                    <option value="claude-opus-4-8">claude-opus-4-8</option>
+                    <option value="claude-sonnet-5">claude-sonnet-5</option>
+                    <option value="claude-opus5">claude-opus5</option>
+                    <option value="claude-opus4.8">claude-opus4.8</option>
+                    <option value="claude-sonnet5">claude-sonnet5</option>
+                  </optgroup>
+                  <optgroup label="DeepSeek">
+                    <option value="deepseek-v4-pro">deepseek-v4-pro</option>
+                    <option value="deepseek-v4-flash">deepseek-v4-flash</option>
+                  </optgroup>
+                  <optgroup label="GLM">
+                    <option value="glm5.2">glm5.2</option>
+                    <option value="glm5.3">glm5.3</option>
+                  </optgroup>
+                  <optgroup label="GPT">
+                    <option value="gpt-6-astra">gpt-6-astra</option>
+                    <option value="gpt-5.6-sol">gpt-5.6-sol</option>
+                    <option value="gpt-5.6-luna">gpt-5.6-luna</option>
+                    <option value="gpt-5.6-terra">gpt-5.6-terra</option>
+                    <option value="gpt5.6-sol">gpt5.6-sol</option>
+                    <option value="gpt5.6-luna">gpt5.6-luna</option>
+                    <option value="gpt5.6-terra">gpt5.6-terra</option>
+                  </optgroup>
+                  <optgroup label="Kimi">
+                    <option value="kimi-k3">kimi-k3</option>
+                  </optgroup>
+                  <optgroup label="Qwen">
+                    <option value="qwen3.7-max">qwen3.7-max</option>
+                    <option value="qwen3.8-max">qwen3.8-max</option>
+                    <option value="qwen3.6-plus">qwen3.6-plus</option>
+                  </optgroup>
+                </select>
+                <p class="field-help">模型与执行器配置关联；留空使用服务端默认。</p>
+              </div>
+              <div class="field">
+                <label for="agent-permission-mode" data-i18n="drawer.permission.label">权限模式</label>
+                <select id="agent-permission-mode" class="select" name="permission_mode">
+                  <option value="dontAsk">dontAsk</option>
+                  <option value="plan">plan</option>
+                  <option value="acceptEdits">acceptEdits</option>
+                  <option value="manual">manual</option>
                 </select>
               </div>
               <div class="field">
@@ -963,10 +1070,10 @@
             <div class="form-section-head"><h3 id="security-section-title" data-i18n="drawer.security.title">签名与密钥</h3><p data-i18n="drawer.security.desc">已保存的密钥不会回显。编辑时保持空白即可沿用当前值。</p></div>
             <div class="form-grid">
               <div class="field span-2">
-                <label for="agent-signing-secret">Signing Secret <span id="secret-required-mark" class="required" aria-hidden="true">*</span></label>
+                <label for="agent-signing-secret">签名密钥 <span id="secret-required-mark" class="required" aria-hidden="true">*</span></label>
                 <div class="input-group">
                   <input id="agent-signing-secret" class="input mono" name="signing_secret" type="password" maxlength="512" autocomplete="new-password" autocapitalize="none" spellcheck="false" placeholder="至少 16 个字符" aria-describedby="secret-help" data-i18n-placeholder="drawer.secret.placeholder">
-                  <button id="toggle-secret-button" class="button ghost" type="button" aria-label="显示 Signing Secret" aria-pressed="false" data-i18n-aria="drawer.secret.toggle.label" data-i18n="drawer.secret.toggle">显示</button>
+                  <button id="toggle-secret-button" class="button ghost" type="button" aria-label="显示签名密钥" aria-pressed="false" data-i18n-aria="drawer.secret.toggle.label" data-i18n="drawer.secret.toggle">显示</button>
                 </div>
                 <p id="secret-help" class="field-help" data-i18n="drawer.secret.help.create">创建时必填。首尾空白会作为密钥内容原样保留；仅可复制当前输入或刚生成、尚未保存的 secret。</p>
                 <div class="secret-actions">
@@ -974,18 +1081,11 @@
                   <button id="copy-secret-button" class="button ghost compact" type="button" data-i18n="drawer.secret.copy">复制当前输入</button>
                 </div>
               </div>
-              <div class="field">
-                <label for="agent-signature-encoding" data-i18n="drawer.encoding.label">签名编码</label>
-                <select id="agent-signature-encoding" class="select" name="signature_encoding">
-                  <option value="hex">hex</option>
-                  <option value="base64">base64</option>
-                </select>
-              </div>
             </div>
           </section>
 
           <section class="form-section" aria-labelledby="runtime-section-title">
-            <div class="form-section-head"><h3 id="runtime-section-title" data-i18n="drawer.runtime.title">运行时配置</h3><p data-i18n="drawer.runtime.desc">设置提示词、工作区、模型与工具权限。</p></div>
+            <div class="form-section-head"><h3 id="runtime-section-title" data-i18n="drawer.runtime.title">岗位配置</h3><p data-i18n="drawer.runtime.desc">设置岗位提示词与允许使用的工具。</p></div>
             <div class="form-grid">
               <div class="field span-2">
                 <label for="agent-system-prompt">提示词（岗位）</label>
@@ -1000,57 +1100,10 @@
                 </select>
                 <p class="field-help">提示词由服务端预置（对齐评测 schema），仅可选择，不可编辑。</p>
               </div>
-              <div class="field">
-                <label for="agent-workspace-path"><span data-i18n="drawer.workspace.label">工作区路径</span> <span class="required" aria-hidden="true">*</span></label>
-                <input id="agent-workspace-path" class="input mono" name="workspace_path" type="text" required maxlength="500" value="." placeholder=".">
-                <p class="field-help" data-i18n="drawer.workspace.help">使用工作区根目录内的相对路径，不允许父级跳转。</p>
-              </div>
-              <div class="field">
-                <label for="agent-claude-model" data-i18n="drawer.model.label">模型选择</label>
-                <select id="agent-claude-model" class="select" name="claude_model">
-                  <option value="">留空（服务端默认）</option>
-                  <optgroup label="Claude">
-                    <option value="claude-opus5">claude-opus5</option>
-                    <option value="claude-opus4.8">claude-opus4.8</option>
-                    <option value="claude-sonnet5">claude-sonnet5</option>
-                  </optgroup>
-                  <optgroup label="DeepSeek">
-                    <option value="deepseek-v4-pro">deepseek-v4-pro</option>
-                    <option value="deepseek-v4-flash">deepseek-v4-flash</option>
-                  </optgroup>
-                  <optgroup label="GLM">
-                    <option value="glm5.2">glm5.2</option>
-                    <option value="glm5.3">glm5.3</option>
-                  </optgroup>
-                  <optgroup label="GPT">
-                    <option value="gpt5.6-sol">gpt5.6-sol</option>
-                    <option value="gpt5.6-luna">gpt5.6-luna</option>
-                    <option value="gpt5.6-terra">gpt5.6-terra</option>
-                  </optgroup>
-                  <optgroup label="Kimi">
-                    <option value="kimi-k3">kimi-k3</option>
-                  </optgroup>
-                  <optgroup label="Qwen">
-                    <option value="qwen3.7-max">qwen3.7-max</option>
-                    <option value="qwen3.8-max">qwen3.8-max</option>
-                    <option value="qwen3.6-plus">qwen3.6-plus</option>
-                  </optgroup>
-                </select>
-                <p class="field-help">选择要使用的模型；留空使用服务端默认。</p>
-              </div>
               <div class="field span-2">
                 <label for="agent-allowed-tools" data-i18n="drawer.tools.label">允许的工具</label>
                 <textarea id="agent-allowed-tools" class="textarea mono" name="allowed_tools" placeholder="每行一个工具名称，也可使用逗号分隔" data-i18n-placeholder="drawer.tools.placeholder"></textarea>
                 <p class="field-help" data-i18n="drawer.tools.help">最多 64 项；空白表示不额外指定工具列表。</p>
-              </div>
-              <div class="field">
-                <label for="agent-permission-mode" data-i18n="drawer.permission.label">权限模式</label>
-                <select id="agent-permission-mode" class="select" name="permission_mode">
-                  <option value="dontAsk">dontAsk</option>
-                  <option value="plan">plan</option>
-                  <option value="acceptEdits">acceptEdits</option>
-                  <option value="manual">manual</option>
-                </select>
               </div>
             </div>
           </section>
@@ -1078,7 +1131,33 @@
           <span class="form-footer-note" data-i18n="drawer.footer.note">保存后 revision 将由服务端更新</span>
           <div class="form-footer-actions">
             <button class="button ghost" type="button" data-close-drawer data-i18n="drawer.cancel">取消</button>
-            <button id="save-agent-button" class="button primary" type="submit" data-i18n="drawer.title.create">创建 Agent</button>
+            <button id="save-agent-button" class="button primary" type="submit" data-i18n="drawer.title.create">创建智能体</button>
+          </div>
+        </footer>
+      </form>
+    </section>
+  </div>
+
+  <div id="provider-drawer-layer" class="drawer-layer" aria-hidden="true" hidden>
+    <div class="drawer-backdrop" data-close-provider></div>
+    <section id="provider-drawer" class="drawer" role="dialog" aria-modal="true" aria-labelledby="provider-drawer-title" tabindex="-1">
+      <header class="drawer-head">
+        <div>
+          <div class="eyebrow">AGENT CENTER</div>
+          <h2 id="provider-drawer-title">配置智能体</h2>
+        </div>
+        <button class="button ghost drawer-close" type="button" data-close-provider aria-label="关闭智能体配置">关闭</button>
+      </header>
+      <form id="provider-form" class="agent-form">
+        <div class="form-scroll">
+          <div id="provider-form-error" class="form-error" role="alert" hidden></div>
+          <div id="provider-form-fields" class="provider-form-fields"></div>
+        </div>
+        <footer class="form-footer">
+          <span class="form-footer-note">Secret 留空表示保留；保存后立即对新任务生效</span>
+          <div class="form-footer-actions">
+            <button class="button ghost" type="button" data-close-provider>取消</button>
+            <button id="save-provider-button" class="button primary" type="submit">保存配置</button>
           </div>
         </footer>
       </form>
@@ -1089,7 +1168,7 @@
     <div class="modal-backdrop" data-close-delete></div>
     <section id="delete-modal" class="modal-card" role="dialog" aria-modal="true" aria-labelledby="delete-title" tabindex="-1">
       <div class="danger-label" data-i18n="delete.label">Destructive operation</div>
-      <h2 id="delete-title" data-i18n="delete.title">确认删除 Agent</h2>
+      <h2 id="delete-title" data-i18n="delete.title">确认删除智能体</h2>
       <p data-i18n="delete.desc">此操作无法在控制台中撤销。请核对目标并输入 slug 完成第二次确认。</p>
       <div class="delete-target"><strong id="delete-agent-name"></strong><code id="delete-agent-slug"></code></div>
       <form id="delete-form">
@@ -1127,7 +1206,7 @@
 
       // ---------- i18n ----------
       const I18N = {
-        zh: {"title.page": "MOTA智能体控制台", "skip.main": "跳到主要内容", "boot.checking": "正在确认管理会话", "login.hero.eyebrow": "安全运维工作区", "login.hero.h1a": "管理运行中的", "login.hero.h1b": "智能体网络。", "login.hero.desc": "在一个清晰、安全的控制面中配置路由、执行策略与容量边界，并持续掌握最近运行状态。", "login.metric.session": "HttpOnly 会话", "login.metric.csrf": "写操作保护", "login.metric.secrets": "只显示脱敏提示", "login.panel.eyebrow": "管理员访问", "login.title": "登录控制台", "login.intro": "使用管理员凭据继续。会话凭据仅由服务器 Cookie 管理。", "login.retry": "重新检查会话", "login.username": "用户名", "login.password": "密码", "login.submit": "安全登录", "login.meta": "凭据仅发送至同源管理服务，不写入本地存储", "sidebar.label": "控制台导航", "sidebar.brand.label": "返回控制台概览", "sidebar.nav.workspace": "工作区", "sidebar.nav.overview": "运行概览", "sidebar.nav.agents": "智能体管理", "sidebar.nav.runs": "最近运行", "sidebar.status.online": "服务连接可用", "sidebar.session": "会话有效", "sidebar.logout.label": "退出登录", "sidebar.logout": "退出", "topbar.title.sub": "管理控制台", "topbar.title": "智能体控制台", "topbar.sync.none": "尚未同步", "topbar.refresh": "刷新数据", "topbar.create": "创建智能体", "topbar.lang.label": "切换语言", "overview.eyebrow": "运行快照", "overview.title": "智能体运行概览", "overview.desc": "集中管理智能体路由、执行配置、并发容量与最近 50 条运行记录。", "overview.signal.label": "控制面状态", "overview.signal.title": "控制面", "overview.signal.auth": "会话已认证", "overview.stats.label": "关键指标", "overview.stat.total": "智能体总数", "overview.stat.total.foot": "已注册路由", "overview.stat.enabled": "已启用", "overview.stat.enabled.foot": "可接收请求", "overview.stat.running": "执行中", "overview.stat.running.foot": "最近运行窗口", "overview.stat.failed": "异常运行", "overview.stat.failed.foot": "最近 50 条记录", "agents.eyebrow": "注册表 / 路由", "agents.title": "智能体列表", "agents.desc": "路由与执行配置的当前发布版本。", "agents.reload": "重新加载", "agents.new": "新建配置", "runs.eyebrow": "最近活动", "runs.title": "最近运行", "runs.desc": "按创建时间倒序显示最近 50 条执行记录。", "runs.reload": "重新加载", "drawer.eyebrow": "创建配置", "drawer.title.create": "创建智能体", "drawer.close": "关闭", "drawer.close.label": "关闭智能体表单", "drawer.basic.title": "基础信息", "drawer.basic.desc": "定义稳定路由标识、展示信息与执行器类型。", "drawer.slug.help": "2–64 位小写字母、数字或单个连字符；创建后不可修改。", "drawer.name.label": "名称", "drawer.name.placeholder": "客户支持智能体", "drawer.desc.label": "描述", "drawer.desc.placeholder": "简要说明职责、输入与预期输出", "drawer.executor.label": "执行器", "drawer.status.label": "运行状态", "drawer.status.desc": "允许该路由接收请求", "drawer.security.title": "签名与密钥", "drawer.security.desc": "已保存的密钥不会回显。编辑时保持空白即可沿用当前值。", "drawer.secret.placeholder": "至少 16 个字符", "drawer.secret.toggle": "显示", "drawer.secret.toggle.label": "显示 Signing Secret", "drawer.secret.help.create": "创建时必填。首尾空白会作为密钥内容原样保留；仅可复制当前输入或刚生成、尚未保存的 secret。", "drawer.secret.generate": "安全生成", "drawer.secret.copy": "复制当前输入", "drawer.encoding.label": "签名编码", "drawer.runtime.title": "运行时配置", "drawer.runtime.desc": "设置提示词、工作区、模型与工具权限。", "drawer.prompt.placeholder": "输入该智能体的系统指令", "drawer.workspace.label": "工作区路径", "drawer.workspace.help": "使用工作区根目录内的相对路径，不允许父级跳转。", "drawer.model.label": "模型选择", "drawer.model.placeholder": "留空使用服务端默认", "drawer.tools.label": "允许的工具", "drawer.tools.placeholder": "每行一个工具名称，也可使用逗号分隔", "drawer.tools.help": "最多 64 项；空白表示不额外指定工具列表。", "drawer.permission.label": "权限模式", "drawer.capacity.title": "容量与超时", "drawer.capacity.desc": "用有界并发和队列保护执行节点。", "drawer.timeout.label": "超时秒数", "drawer.concurrency.label": "最大并发", "drawer.queue.label": "队列容量", "drawer.footer.note": "保存后 revision 将由服务端更新", "drawer.cancel": "取消", "delete.label": "破坏性操作", "delete.title": "确认删除智能体", "delete.desc": "此操作无法在控制台中撤销。请核对目标并输入 slug 完成第二次确认。", "delete.confirm.html": "输入 <code id=\"delete-confirm-label\"></code> 以确认", "delete.cancel": "取消", "delete.confirm.btn": "永久删除", "agent.unnamed": "未命名智能体", "err.invalidFormat": "接口返回的 {key} 数据格式无效", "err.network": "无法连接管理服务，请检查网络后重试", "err.invalidJson": "服务返回了无法解析的数据", "err.httpStatus": "请求失败（HTTP {status}）", "err.missingData": "服务响应缺少 data 字段", "err.invalidSession": "会话响应缺少必要字段", "auth.expired": "会话已失效，请重新登录。", "auth.expiredToast": "会话已过期，已返回登录页", "state.sessionActive": "会话有效", "state.expiresMin": "{minutes} 分钟后到期", "state.expiresHour": "{hours} 小时内到期", "state.online": "服务连接可用", "state.offline": "浏览器当前离线", "toast.success": "操作成功", "toast.error": "请求失败", "toast.info": "提示", "toast.close": "关闭", "toast.close.label": "关闭通知", "agents.loadError": "智能体列表加载失败", "runs.loadError": "运行记录加载失败", "retry": "重试", "sync.refreshed": "智能体与运行记录已刷新", "sync.recent": "最近同步 {time}", "agent.enabled": "已启用", "agent.disabled": "已停用", "agents.empty.title": "还没有智能体", "agents.empty.desc": "创建第一个智能体后，动态路由和执行配置会显示在这里。", "agents.empty.action": "创建智能体", "agents.caption": "智能体注册表，包含路由、状态、执行器、容量、版本和更新时间", "th.agent": "智能体", "th.public": "公开接口", "th.status": "状态", "th.executor": "执行器", "th.capacity": "容量", "th.revision": "版本 / 密钥", "th.updated": "最后更新", "th.execmode": "执行方式", "th.actions": "操作", "action.copyRoute": "复制路由 URL", "capacity.concurrent": "{n} 并发", "capacity.queue": "队列 {n}", "capacity.value": "{c} / {q}", "revision.label": "rev {n}", "revision.full": "rev {n} · {hint}", "secret.configured": "密钥已配置", "secret.configuredShort": "已配置", "action.edit": "编辑", "action.delete": "删除", "detail.capacity": "并发 / 队列", "detail.revision": "版本 / 密钥", "action.copyUrl": "复制 URL", "runs.empty.title": "暂无运行记录", "runs.empty.desc": "智能体接收并执行请求后，最近状态会显示在这里。", "runs.empty.action": "刷新记录", "runs.caption": "最近 50 条智能体运行记录", "runs.filtered.title": "智能体的运行记录", "runs.showAll": "返回全部", "runs.refresh": "刷新", "runs.filterType": "接口类型", "runs.filterAgent": "智能体", "runs.filterStatus": "状态", "runs.successRate": "成功率", "runs.filterAll": "全部", "runs.filterSuccess": "成功", "runs.filterFailed": "失败", "th.runId": "运行 ID", "th.version": "版本", "th.duration": "耗时", "th.errorCode": "错误码", "th.endpoint": "接口 URI", "th.responseCode": "响应码", "th.started": "开始时间", "th.finished": "完成时间", "th.input": "输入", "th.type": "接口类型", "th.output": "输出", "runs.viewPayload": "查看", "runs.runIdCopied": "运行 ID 已复制", "runPayload.title": "运行详情", "copy.empty": "没有可复制的内容", "copy.denied": "浏览器拒绝了复制操作", "agents.stale": "智能体数据已变化，请刷新后重试", "copy.routeOk": "路由 URL 已复制", "copy.failed": "复制失败，请手动选择 URL", "secret.help.edit": "当前密钥提示：{hint}。留空表示不修改；首尾空白会原样保留。", "secret.help.none": "已保存的密钥不会回显；留空表示不修改，首尾空白会原样保留。", "drawer.title.edit": "编辑 {name}", "drawer.save.update": "保存更改", "valid.slug": "Slug 必须为 2–64 位小写字母或数字，可用单个连字符分隔", "valid.workspace": "工作区必须是根目录内的相对路径，且不能包含父级跳转", "valid.secretRequired": "创建智能体时必须填写 Signing Secret", "valid.secretLength": "Signing Secret 必须为 16–512 字节", "valid.tools": "工具最多 64 项，且每项不能超过 200 字节", "save.updated": "智能体配置已更新", "save.created": "智能体已创建", "delete.ok": "智能体“{name}”已删除", "session.checkFailed": "无法确认现有会话：{msg}", "login.ok": "登录成功，控制台数据正在同步", "login.badCredentials": "用户名或密码不正确。", "logout.ok": "已安全退出管理会话", "logout.failed": "退出未完成：{msg}。当前会话仍保持登录，可再次尝试。", "rng.unsupported": "当前浏览器不支持安全随机数生成，请使用现代浏览器", "secret.generated": "已生成 256 位随机 secret，保存后将不再完整显示", "secret.toggle.show": "显示", "secret.toggle.hide": "隐藏", "secret.toggle.label": "{action} Signing Secret", "secret.empty": "当前输入为空；已保存的 secret 不会被读取或复制", "secret.copied": "当前未保存的 secret 已复制", "copy.failed2": "复制失败", "online.restored": "网络连接已恢复", "offline.now": "浏览器已离线，数据操作将暂时失败"},
+        zh: {"title.page": "MOTA智能体控制台", "skip.main": "跳到主要内容", "boot.checking": "正在确认管理会话", "login.hero.eyebrow": "安全运维工作区", "login.hero.h1a": "管理运行中的", "login.hero.h1b": "智能体网络。", "login.hero.desc": "在一个清晰、安全的控制面中配置路由、执行策略与容量边界，并持续掌握最近运行状态。", "login.metric.session": "HttpOnly 会话", "login.metric.csrf": "写操作保护", "login.metric.secrets": "只显示脱敏提示", "login.panel.eyebrow": "管理员访问", "login.title": "登录控制台", "login.intro": "使用管理员凭据继续。会话凭据仅由服务器 Cookie 管理。", "login.retry": "重新检查会话", "login.username": "用户名", "login.password": "密码", "login.submit": "安全登录", "login.meta": "凭据仅发送至同源管理服务，不写入本地存储", "sidebar.label": "控制台导航", "sidebar.brand.label": "返回控制台概览", "sidebar.nav.workspace": "工作区", "sidebar.nav.overview": "运行概览", "sidebar.nav.agents": "智能体管理", "sidebar.nav.runs": "运行日志", "sidebar.status.online": "服务连接可用", "sidebar.session": "会话有效", "sidebar.logout.label": "退出登录", "sidebar.logout": "退出", "topbar.title.sub": "管理控制台", "topbar.title": "智能体控制台", "topbar.sync.none": "尚未同步", "topbar.refresh": "刷新数据", "topbar.create": "创建智能体", "topbar.lang.label": "切换语言", "overview.eyebrow": "运行快照", "overview.title": "智能体运行概览", "overview.desc": "集中管理智能体路由、执行配置、并发容量与最近 50 条运行记录。", "overview.signal.label": "控制面状态", "overview.signal.title": "控制面", "overview.signal.auth": "会话已认证", "overview.stats.label": "关键指标", "overview.stat.total": "智能体总数", "overview.stat.total.foot": "已注册路由", "overview.stat.enabled": "已启用", "overview.stat.enabled.foot": "可接收请求", "overview.stat.running": "执行中", "overview.stat.running.foot": "最近运行窗口", "overview.stat.failed": "异常运行", "overview.stat.failed.foot": "最近 50 条记录", "agents.eyebrow": "注册表 / 路由", "agents.title": "智能体列表", "agents.desc": "路由与执行配置的当前发布版本。", "agents.reload": "重新加载", "agents.new": "新建配置", "runs.eyebrow": "最近活动", "runs.title": "运行日志", "runs.desc": "按创建时间倒序显示最近 50 条执行记录。", "runs.reload": "重新加载", "drawer.eyebrow": "创建配置", "drawer.title.create": "创建智能体", "drawer.close": "关闭", "drawer.close.label": "关闭智能体表单", "drawer.basic.title": "基础信息", "drawer.basic.desc": "定义稳定路由标识、展示信息与执行器类型。", "drawer.slug.help": "2–64 位小写字母、数字或单个连字符；创建后不可修改。", "drawer.name.label": "名称", "drawer.name.placeholder": "客户支持智能体", "drawer.desc.label": "描述", "drawer.desc.placeholder": "简要说明职责、输入与预期输出", "drawer.executor.label": "执行器", "drawer.status.label": "运行状态", "drawer.status.desc": "允许该路由接收请求", "drawer.security.title": "签名与密钥", "drawer.security.desc": "已保存的密钥不会回显。编辑时保持空白即可沿用当前值。", "drawer.secret.placeholder": "至少 16 个字符", "drawer.secret.toggle": "显示", "drawer.secret.toggle.label": "显示签名密钥", "drawer.secret.help.create": "创建时必填。首尾空白会作为密钥内容原样保留；仅可复制当前输入或刚生成、尚未保存的签名密钥。", "drawer.secret.generate": "安全生成", "drawer.secret.copy": "复制当前输入", "drawer.encoding.label": "签名编码", "drawer.runtime.title": "岗位配置", "drawer.runtime.desc": "设置岗位提示词与允许使用的工具。", "drawer.prompt.placeholder": "输入该智能体的系统指令", "drawer.workspace.label": "工作区路径", "drawer.workspace.help": "使用工作区根目录内的相对路径，不允许父级跳转。", "drawer.model.label": "模型选择", "drawer.model.placeholder": "留空使用服务端默认", "drawer.tools.label": "允许的工具", "drawer.tools.placeholder": "每行一个工具名称，也可使用逗号分隔", "drawer.tools.help": "最多 64 项；空白表示不额外指定工具列表。", "drawer.permission.label": "权限模式", "drawer.capacity.title": "容量与超时", "drawer.capacity.desc": "用有界并发和队列保护执行节点。", "drawer.timeout.label": "超时秒数", "drawer.concurrency.label": "最大并发", "drawer.queue.label": "队列容量", "drawer.footer.note": "保存后 revision 将由服务端更新", "drawer.cancel": "取消", "delete.label": "破坏性操作", "delete.title": "确认删除智能体", "delete.desc": "此操作无法在控制台中撤销。请核对目标并输入 slug 完成第二次确认。", "delete.confirm.html": "输入 <code id=\"delete-confirm-label\"></code> 以确认", "delete.cancel": "取消", "delete.confirm.btn": "永久删除", "agent.unnamed": "未命名智能体", "err.invalidFormat": "接口返回的 {key} 数据格式无效", "err.network": "无法连接管理服务，请检查网络后重试", "err.invalidJson": "服务返回了无法解析的数据", "err.httpStatus": "请求失败（HTTP {status}）", "err.missingData": "服务响应缺少 data 字段", "err.invalidSession": "会话响应缺少必要字段", "auth.expired": "会话已失效，请重新登录。", "auth.expiredToast": "会话已过期，已返回登录页", "state.sessionActive": "会话有效", "state.expiresMin": "{minutes} 分钟后到期", "state.expiresHour": "{hours} 小时内到期", "state.online": "服务连接可用", "state.offline": "浏览器当前离线", "toast.success": "操作成功", "toast.error": "请求失败", "toast.info": "提示", "toast.close": "关闭", "toast.close.label": "关闭通知", "agents.loadError": "智能体列表加载失败", "runs.loadError": "运行记录加载失败", "retry": "重试", "sync.refreshed": "智能体与运行记录已刷新", "sync.recent": "最近同步 {time}", "agent.enabled": "已启用", "agent.disabled": "已停用", "agents.empty.title": "还没有智能体", "agents.empty.desc": "创建第一个智能体后，动态路由和执行配置会显示在这里。", "agents.empty.action": "创建智能体", "agents.caption": "智能体注册表，包含路由、状态、执行器、容量、版本和更新时间", "th.agent": "智能体", "th.public": "公开接口", "th.status": "状态", "th.executor": "执行器", "th.capacity": "容量", "th.revision": "版本 / 密钥", "th.updated": "最后更新", "th.execmode": "执行方式", "th.actions": "操作", "action.copyRoute": "复制路由 URL", "capacity.concurrent": "{n} 并发", "capacity.queue": "队列 {n}", "capacity.value": "{c} / {q}", "revision.label": "rev {n}", "revision.full": "rev {n} · {hint}", "secret.configured": "密钥已配置", "secret.configuredShort": "已配置", "action.edit": "编辑", "action.delete": "删除", "detail.capacity": "并发 / 队列", "detail.revision": "版本 / 密钥", "action.copyUrl": "复制 URL", "runs.empty.title": "暂无运行记录", "runs.empty.desc": "智能体接收并执行请求后，最近状态会显示在这里。", "runs.empty.action": "刷新记录", "runs.caption": "最近 50 条智能体运行记录", "runs.filtered.title": "智能体的运行记录", "runs.showAll": "返回全部", "runs.refresh": "刷新", "runs.filterType": "接口类型", "runs.filterAgent": "智能体", "runs.filterStatus": "状态", "runs.successRate": "成功率", "runs.filterAll": "全部", "runs.filterSuccess": "成功", "runs.filterFailed": "失败", "th.runId": "运行 ID", "th.version": "版本", "th.duration": "耗时", "th.errorCode": "错误码", "th.endpoint": "接口 URI", "th.responseCode": "响应码", "th.started": "开始时间", "th.finished": "完成时间", "th.input": "输入", "th.type": "接口类型", "th.output": "输出", "runs.viewPayload": "查看", "runs.runIdCopied": "运行 ID 已复制", "runPayload.title": "运行详情", "copy.empty": "没有可复制的内容", "copy.denied": "浏览器拒绝了复制操作", "agents.stale": "智能体数据已变化，请刷新后重试", "copy.routeOk": "路由 URL 已复制", "copy.failed": "复制失败，请手动选择 URL", "secret.help.edit": "当前签名密钥提示：{hint}。留空表示不修改；首尾空白会原样保留。", "secret.help.none": "已保存的签名密钥不会回显；留空表示不修改，首尾空白会原样保留。", "drawer.title.edit": "编辑 {name}", "drawer.save.update": "保存更改", "valid.slug": "Slug 必须为 2–64 位小写字母或数字，可用单个连字符分隔", "valid.workspace": "工作区必须是根目录内的相对路径，且不能包含父级跳转", "valid.secretRequired": "创建智能体时必须填写签名密钥", "valid.secretLength": "签名密钥必须为 16–512 字节", "valid.tools": "工具最多 64 项，且每项不能超过 200 字节", "save.updated": "智能体配置已更新", "save.created": "智能体已创建", "delete.ok": "智能体“{name}”已删除", "session.checkFailed": "无法确认现有会话：{msg}", "login.ok": "登录成功，控制台数据正在同步", "login.badCredentials": "用户名或密码不正确。", "logout.ok": "已安全退出管理会话", "logout.failed": "退出未完成：{msg}。当前会话仍保持登录，可再次尝试。", "rng.unsupported": "当前浏览器不支持安全随机数生成，请使用现代浏览器", "secret.generated": "已生成 256 位随机签名密钥，保存后将不再完整显示", "secret.toggle.show": "显示", "secret.toggle.hide": "隐藏", "secret.toggle.label": "{action}签名密钥", "secret.empty": "当前输入为空；已保存的签名密钥不会被读取或复制", "secret.copied": "当前未保存的签名密钥已复制", "copy.failed2": "复制失败", "online.restored": "网络连接已恢复", "offline.now": "浏览器已离线，数据操作将暂时失败"},
         en: {"title.page": "MOTA Agent Console", "skip.main": "Skip to main content", "boot.checking": "Confirming session…", "login.hero.eyebrow": "Secure operations workspace", "login.hero.h1a": "Manage your", "login.hero.h1b": "Agent network.", "login.hero.desc": "Configure routes, execution policies and capacity bounds in one clear, secure control plane, and keep an eye on recent run status.", "login.metric.session": "HttpOnly session", "login.metric.csrf": "Write-op protection", "login.metric.secrets": "Secrets masked", "login.panel.eyebrow": "Administrator access", "login.title": "Console login", "login.intro": "Continue with your admin credentials. Session credentials are managed by server cookies only.", "login.retry": "Re-check session", "login.username": "Username", "login.password": "Password", "login.submit": "Sign in securely", "login.meta": "Credentials are sent only to the same-origin admin service and never stored locally.", "sidebar.label": "Console navigation", "sidebar.brand.label": "Back to console overview", "sidebar.nav.workspace": "Workspace", "sidebar.nav.overview": "Overview", "sidebar.nav.agents": "Agents", "sidebar.nav.runs": "Recent runs", "sidebar.status.online": "Service reachable", "sidebar.session": "Session active", "sidebar.logout.label": "Log out", "sidebar.logout": "Log out", "topbar.title.sub": "Management plane", "topbar.title": "Agent Console", "topbar.sync.none": "Not synced", "topbar.refresh": "Refresh", "topbar.create": "New Agent", "topbar.lang.label": "Switch language", "overview.eyebrow": "Operations snapshot", "overview.title": "Agent overview", "overview.desc": "Manage agent routes, execution config, concurrency capacity and the latest 50 run records in one place.", "overview.signal.label": "Control plane status", "overview.signal.title": "Control plane", "overview.signal.auth": "Authenticated", "overview.stats.label": "Key metrics", "overview.stat.total": "Total agents", "overview.stat.total.foot": "Registered routes", "overview.stat.enabled": "Enabled", "overview.stat.enabled.foot": "Accepting requests", "overview.stat.running": "Running", "overview.stat.running.foot": "Recent run window", "overview.stat.failed": "Failed", "overview.stat.failed.foot": "Last 50 runs", "agents.eyebrow": "Registry / routes", "agents.title": "Agent List", "agents.desc": "Current published revision of routes and execution config.", "agents.reload": "Reload", "agents.new": "New config", "runs.eyebrow": "Recent activity", "runs.title": "Recent Runs", "runs.desc": "Latest 50 run records, newest first.", "runs.reload": "Reload", "drawer.eyebrow": "Create configuration", "drawer.title.create": "Create Agent", "drawer.close": "Close", "drawer.close.label": "Close agent form", "drawer.basic.title": "Basics", "drawer.basic.desc": "Define a stable route id, display information and executor type.", "drawer.slug.help": "2–64 lowercase letters, digits or a single hyphen; immutable after creation.", "drawer.name.label": "Name", "drawer.name.placeholder": "Customer support agent", "drawer.desc.label": "Description", "drawer.desc.placeholder": "Briefly describe duties, inputs and expected output.", "drawer.executor.label": "Executor", "drawer.status.label": "Runtime status", "drawer.status.desc": "Allow this route to accept requests", "drawer.security.title": "Signature & secrets", "drawer.security.desc": "Saved secrets are never echoed. Leave blank to keep the current value.", "drawer.secret.placeholder": "At least 16 characters", "drawer.secret.toggle": "Show", "drawer.secret.toggle.label": "Show Signing Secret", "drawer.secret.help.create": "Required on create. Leading/trailing whitespace is preserved as-is; only the current input or a freshly generated, unsaved secret can be copied.", "drawer.secret.generate": "Generate securely", "drawer.secret.copy": "Copy current input", "drawer.encoding.label": "Signature encoding", "drawer.runtime.title": "Runtime", "drawer.runtime.desc": "Set prompt, workspace, model and tool permissions.", "drawer.prompt.placeholder": "System instructions for this agent", "drawer.workspace.label": "Workspace path", "drawer.workspace.help": "Relative path inside the workspace root; parent traversal is not allowed.", "drawer.model.label": "Model selection", "drawer.model.placeholder": "Leave blank for server default", "drawer.tools.label": "Allowed tools", "drawer.tools.placeholder": "One tool per line, or comma-separated.", "drawer.tools.help": "Up to 64 items; blank means no extra tool list.", "drawer.permission.label": "Permission mode", "drawer.capacity.title": "Capacity & timeouts", "drawer.capacity.desc": "Bound concurrency and queue to protect executors.", "drawer.timeout.label": "Timeout (seconds)", "drawer.concurrency.label": "Max concurrency", "drawer.queue.label": "Queue capacity", "drawer.footer.note": "Revision will be updated by the server after saving.", "drawer.cancel": "Cancel", "delete.label": "Destructive operation", "delete.title": "Delete Agent?", "delete.desc": "This cannot be undone from the console. Review the target and type its slug to confirm.", "delete.confirm.html": "Type <code id=\"delete-confirm-label\"></code> to confirm", "delete.cancel": "Cancel", "delete.confirm.btn": "Delete permanently", "agent.unnamed": "Unnamed Agent", "err.invalidFormat": "Invalid data format for {key} in API response", "err.network": "Cannot reach the admin service. Check your network and retry.", "err.invalidJson": "Service returned unparsable data.", "err.httpStatus": "Request failed (HTTP {status})", "err.missingData": "Service response is missing the data field.", "err.invalidSession": "Session response is missing required fields.", "auth.expired": "Session expired. Please log in again.", "auth.expiredToast": "Session expired; returned to the login page.", "state.sessionActive": "Session active", "state.expiresMin": "expires in {minutes} min", "state.expiresHour": "expires in {hours} h", "state.online": "Service reachable", "state.offline": "Browser offline", "toast.success": "Success", "toast.error": "Request failed", "toast.info": "Info", "toast.close": "Close", "toast.close.label": "Dismiss notification", "agents.loadError": "Failed to load agents", "runs.loadError": "Failed to load runs", "retry": "Retry", "sync.refreshed": "Agents and runs refreshed", "sync.recent": "Synced {time}", "agent.enabled": "Enabled", "agent.disabled": "Disabled", "agents.empty.title": "No agents yet", "agents.empty.desc": "Dynamic routes and execution config will appear here after you create your first agent.", "agents.empty.action": "Create Agent", "agents.caption": "Agent registry with routes, status, executor, capacity, revision and update time.", "th.agent": "Agent", "th.public": "Public endpoint", "th.status": "Status", "th.executor": "Executor", "th.capacity": "Capacity", "th.revision": "Revision / key", "th.updated": "Updated", "th.execmode": "Execution mode", "th.actions": "Actions", "action.copyRoute": "Copy route URL", "capacity.concurrent": "{n} concurrent", "capacity.queue": "queue {n}", "capacity.value": "{c} / {q}", "revision.label": "rev {n}", "revision.full": "rev {n} · {hint}", "secret.configured": "key configured", "secret.configuredShort": "configured", "action.edit": "Edit", "action.delete": "Delete", "detail.capacity": "Concurrency / queue", "detail.revision": "Revision / key", "action.copyUrl": "Copy URL", "runs.empty.title": "No runs yet", "runs.empty.desc": "Recent status will appear here after agents receive and execute requests.", "runs.empty.action": "Refresh runs", "runs.caption": "Latest 50 agent run records.", "runs.filtered.title": "Agent run records", "runs.showAll": "Show all runs", "runs.refresh": "Refresh", "runs.filterType": "Interface type", "runs.filterAgent": "Agent", "runs.filterStatus": "Status", "runs.successRate": "Success rate", "runs.filterAll": "All", "runs.filterSuccess": "Success", "runs.filterFailed": "Failed", "th.runId": "Run ID", "th.version": "Rev", "th.duration": "Duration", "th.errorCode": "Error code", "th.endpoint": "Endpoint", "th.responseCode": "Response code", "th.started": "Started", "th.finished": "Finished", "th.input": "Input", "th.type": "Interface type", "th.output": "Output", "runs.viewPayload": "View", "runs.runIdCopied": "Run ID copied", "runPayload.title": "Run details", "copy.empty": "Nothing to copy.", "copy.denied": "The browser denied the copy operation.", "agents.stale": "Agent data changed; refresh and retry.", "copy.routeOk": "Route URL copied.", "copy.failed": "Copy failed; select the URL manually.", "secret.help.edit": "Current key hint: {hint}. Leave blank to keep unchanged; leading/trailing whitespace is preserved.", "secret.help.none": "Saved secrets are never echoed; leave blank to keep unchanged. Leading/trailing whitespace is preserved.", "drawer.title.edit": "Edit {name}", "drawer.save.update": "Save changes", "valid.slug": "Slug must be 2–64 lowercase letters or digits, optionally separated by single hyphens.", "valid.workspace": "Workspace must be a relative path inside the root, without parent traversal.", "valid.secretRequired": "Signing Secret is required when creating an agent.", "valid.secretLength": "Signing Secret must be 16–512 bytes.", "valid.tools": "At most 64 tools, each up to 200 bytes.", "save.updated": "Agent configuration updated.", "save.created": "Agent created.", "delete.ok": "Agent “{name}” deleted.", "session.checkFailed": "Cannot confirm session: {msg}", "login.ok": "Logged in; syncing console data.", "login.badCredentials": "Incorrect username or password.", "logout.ok": "Securely logged out.", "logout.failed": "Logout incomplete: {msg}. The session is still active; try again.", "rng.unsupported": "This browser lacks secure random generation; use a modern browser.", "secret.generated": "Generated a 256-bit random secret; it will be masked after saving.", "secret.toggle.show": "Show", "secret.toggle.hide": "Hide", "secret.toggle.label": "{action} Signing Secret", "secret.empty": "Input is empty; the saved secret was not read or copied.", "secret.copied": "Unsaved secret copied.", "copy.failed2": "Copy failed.", "online.restored": "Network restored.", "offline.now": "Browser is offline; data operations will fail temporarily."}
       };
       let lang = "zh";
@@ -1183,6 +1262,7 @@
         session: "/api/admin/session",
         login: "/api/admin/login",
         logout: "/api/admin/logout",
+        providers: "/api/admin/providers",
         agents: "/api/admin/agents",
         runs: "/api/admin/runs?limit=50",
         channelEvents: "/api/admin/channel-events?limit=200"
@@ -1200,6 +1280,7 @@
       const state = {
         session: null,
         authEpoch: 0,
+        providers: [],
         agents: [],
         runs: [],
         callbacks: [],
@@ -1215,12 +1296,15 @@
         agentsPage: 1,
         agentsPageSize: 30,
         agentsStatus: "idle",
+        providersStatus: "idle",
         runsStatus: "idle",
         lastSync: null,
         formMode: "create",
         editingSlug: null,
         deletingAgent: null,
         drawerOpen: false,
+        providerDrawerOpen: false,
+        editingProvider: null,
         deleteOpen: false,
         runPayloadOpen: false,
         formSubmitting: false,
@@ -1246,11 +1330,19 @@
       const mobileLogoutButton = $("#mobile-logout-button");
       const logoutButtons = [logoutButton, mobileLogoutButton];
       const agentsPanel = $("#agents-panel");
+      const providersPanel = $("#providers-panel");
+      const providersRefreshButton = $("#providers-refresh-button");
       const runsPanel = $("#runs-panel");
       const drawerLayer = $("#agent-drawer-layer");
       const drawer = $("#agent-drawer");
       const agentForm = $("#agent-form");
       const agentFormError = $("#agent-form-error");
+      const providerDrawerLayer = $("#provider-drawer-layer");
+      const providerDrawer = $("#provider-drawer");
+      const providerForm = $("#provider-form");
+      const providerFormFields = $("#provider-form-fields");
+      const providerFormError = $("#provider-form-error");
+      const saveProviderButton = $("#save-provider-button");
       const saveAgentButton = $("#save-agent-button");
       const secretInput = $("#agent-signing-secret");
       const deleteLayer = $("#delete-modal-layer");
@@ -1359,6 +1451,21 @@
         });
       }
 
+      function normalizeProvider(raw) {
+        return Object.freeze({
+          id: safeString(raw && raw.id),
+          name: safeString(raw && raw.name),
+          description: safeString(raw && raw.description),
+          category: safeString(raw && raw.category, "remote"),
+          configured: Boolean(raw && raw.configured),
+          editable: Boolean(raw && raw.editable),
+          status_detail: safeString(raw && raw.status_detail),
+          secret_configured: Boolean(raw && raw.secret_configured),
+          config: raw && typeof raw.config === "object" && raw.config ? raw.config : {},
+          assignments: Array.isArray(raw && raw.assignments) ? raw.assignments : []
+        });
+      }
+
       function normalizeRun(raw) {
         return Object.freeze({
           run_id: safeString(raw && raw.run_id),
@@ -1462,7 +1569,7 @@
         window.clearInterval(state.sessionTimer);
         state.sessionTimer = window.setInterval(updateSessionClock, 30000);
         updateNetworkStatus();
-        switchSection("agents-section");
+        switchSection("providers-section");
       }
 
       function clearSensitiveInputs() {
@@ -1471,15 +1578,17 @@
         secretInput.type = "password";
         $("#toggle-secret-button").textContent = t("secret.toggle.show");
         $("#toggle-secret-button").setAttribute("aria-pressed", "false");
-        $("#toggle-secret-button").setAttribute("aria-label", t("secret.toggle.label"));
+        $("#toggle-secret-button").setAttribute("aria-label", fmt("secret.toggle.label", { action: t("secret.toggle.show") }));
       }
 
       function resetAuthenticatedState() {
         state.authEpoch += 1;
         state.session = null;
+        state.providers = [];
         state.agents = [];
         state.runs = [];
         state.agentsStatus = "idle";
+        state.providersStatus = "idle";
         state.runsStatus = "idle";
         state.lastSync = null;
         state.logoutSubmitting = false;
@@ -1488,6 +1597,7 @@
         state.sessionTimer = null;
         clearSensitiveInputs();
         closeAgentDrawer(true);
+        closeProviderDrawer(true);
         closeDeleteModal(true);
         closeRunPayload(true);
         updateSummary();
@@ -1582,6 +1692,225 @@
         panel.append(outer);
       }
 
+      function renderProviders() {
+        providersPanel.replaceChildren();
+        providersPanel.setAttribute("aria-busy", "false");
+        for (const category of ["local", "remote"]) {
+          const entries = state.providers.filter((provider) => provider.category === category && provider.id !== "gateway");
+          if (!entries.length) continue;
+          const group = makeElement("div", "provider-group");
+          group.append(makeElement("h3", "provider-group-title", category === "local" ? "本地系统" : "远端智能体"));
+          const grid = makeElement("div", "provider-grid");
+          entries.forEach((provider) => {
+            const card = makeElement("article", "provider-card" + (provider.configured ? " ready" : ""));
+            const head = makeElement("div", "provider-card-head");
+            head.append(
+              makeElement("h3", "", providerDisplayName(provider)),
+              makeElement("span", "provider-status" + (provider.configured ? " ready" : ""), provider.configured ? "AVAILABLE" : "SETUP")
+            );
+            const copy = makeElement("div");
+            copy.append(makeElement("p", "", providerDisplayDescription(provider)));
+            const foot = makeElement("div", "provider-card-foot");
+            foot.append(makeElement("span", "provider-detail", providerDisplayStatus(provider)));
+            if (provider.editable) {
+              const button = makeElement("button", "button " + (provider.configured ? "ghost" : "primary") + " compact", provider.configured ? "编辑配置" : "开始配置");
+              button.type = "button";
+              button.dataset.providerConfigure = provider.id;
+              foot.append(button);
+            } else {
+              foot.append(makeElement("span", "provider-detail", "BUILT-IN"));
+            }
+            card.append(head, copy, foot);
+            grid.append(card);
+          });
+          group.append(grid);
+          providersPanel.append(group);
+        }
+      }
+
+      function providerDisplayName(provider) {
+        if (lang !== "zh") return provider.name;
+        if (provider.id === "openai_agent") return "OpenAI 托管智能体";
+        if (provider.id === "claude_managed_agent") return "Claude 托管智能体";
+        return provider.name.replace(/\bAgents?\b/g, "智能体");
+      }
+
+      function providerDisplayDescription(provider) {
+        if (lang !== "zh") return provider.description;
+        if (provider.id === "openai_agent") return "OpenAI 托管智能体 API Session/SSE。";
+        if (provider.id === "claude_managed_agent") return "Anthropic 托管智能体 + Environment Session/SSE。";
+        return provider.description.replace(/\bAgents?\b/g, "智能体");
+      }
+
+      function providerDisplayStatus(provider) {
+        if (lang !== "zh") return provider.status_detail;
+        return provider.status_detail.replace(/\bAgent ID\b/g, "智能体 ID");
+      }
+
+      const PROVIDER_FIELDS = Object.freeze({
+        codex_local: [["binary", "Codex 可执行文件", "text", true], ["default_model", "默认模型", "text", true]],
+        pi_local: [["binary", "Pi 可执行文件", "text", true], ["default_model", "默认模型", "text", true], ["finance_extension_path", "金融扩展路径", "text", false]],
+        opencode_local: [["binary", "OpenCode 可执行文件", "text", true], ["default_model", "默认模型（可留空）", "text", false]],
+        qwen_code_local: [["binary", "Qwen Code 可执行文件", "text", true], ["default_model", "默认模型（可留空）", "text", false]],
+        gemini_cli_local: [["binary", "Gemini CLI 可执行文件", "text", true], ["default_model", "默认模型", "text", false]],
+        openhands_local: [["binary", "OpenHands 可执行文件", "text", true], ["default_model", "默认模型（可留空）", "text", false]],
+        claude_code_local: [["enabled", "启用 Claude Code", "checkbox", false], ["binary", "Claude 可执行文件", "text", true], ["default_model", "默认模型", "text", true]],
+        gateway: [["base_url", "Gateway Base URL", "url", true], ["api_key", "API Key", "password", false], ["protocol", "协议", "select:anthropic,openai", true], ["model", "模型", "text", true], ["max_tokens", "最大输出 Token", "number", true], ["max_attempts", "最大尝试次数", "number", true], ["max_response_bytes", "响应字节上限", "number", true]],
+        deepseek_harness: [["binary", "dsh 可执行文件", "text", true], ["base_url", "Host（可选）", "url", false], ["api_key", "API Key", "password", false], ["model", "模型", "text", true]],
+        openai_agent: [["enabled", "启用 OpenAI 托管智能体", "checkbox", false], ["base_url", "API Base URL", "url", true], ["api_key", "API Key", "password", false], ["default_model", "默认模型", "text", true], ["reasoning_effort", "推理强度", "select:low,medium,high,xhigh,max", true], ["mcp_server_url", "MCP Server URL", "url", false], ["mcp_server_label", "MCP Label", "text", true], ["mcp_authorization", "MCP Authorization", "password", false], ["mcp_required", "MCP 必须可用", "checkbox", false], ["delete_session", "完成后删除 Session", "checkbox", false], ["max_response_bytes", "SSE 字节上限", "number", true]],
+        claude_managed_agent: [["enabled", "启用 Claude 托管智能体", "checkbox", false], ["base_url", "API Base URL", "url", true], ["api_key", "API Key", "password", false], ["workspace_id", "Workspace ID", "text", false], ["agent_id", "Anthropic 智能体 ID", "text", true], ["environment_id", "Environment ID", "text", true], ["vault_ids", "Vault IDs（每行一个）", "textarea", false], ["max_list_cost_cents", "单次预算（美分）", "number", false], ["delete_session", "完成后删除 Session", "checkbox", false], ["max_response_bytes", "SSE 字节上限", "number", true]]
+      });
+
+      function providerField(definition, provider) {
+        const [key, labelText, type, required] = definition;
+        const field = makeElement("div", "field" + (type === "textarea" ? " span-2" : ""));
+        const label = makeElement("label", "", labelText);
+        label.htmlFor = "provider-" + key;
+        const current = provider.config[key];
+        let control;
+        if (type === "checkbox") {
+          control = document.createElement("input");
+          control.type = "checkbox";
+          control.checked = Boolean(current);
+        } else if (type.startsWith("select:")) {
+          control = makeElement("select", "select");
+          type.slice(7).split(",").forEach((value) => {
+            const option = makeElement("option", "", value);
+            option.value = value;
+            control.append(option);
+          });
+          control.value = current == null ? "" : String(current);
+        } else if (type === "textarea") {
+          control = makeElement("textarea", "textarea mono");
+          control.value = Array.isArray(current) ? current.join("\n") : (current || "");
+        } else {
+          control = makeElement("input", "input mono");
+          control.type = type;
+          control.value = current == null ? "" : String(current);
+          if (type === "password") {
+            control.autocomplete = "new-password";
+            control.placeholder = provider.secret_configured || provider.config[key + "_configured"] ? "已配置；留空保持不变" : "输入密钥";
+          }
+          if (type === "number") control.min = "0";
+        }
+        control.id = "provider-" + key;
+        control.dataset.providerKey = key;
+        control.dataset.providerType = type;
+        control.required = Boolean(required);
+        field.append(label, control);
+        if (type === "password") field.append(makeElement("p", "field-help", "密钥加密保存，保存后不会回显。"));
+        return field;
+      }
+
+      function openProviderDrawer(provider) {
+        state.editingProvider = provider;
+        state.providerDrawerOpen = true;
+        providerFormFields.replaceChildren();
+        providerFormError.hidden = true;
+        providerFormError.textContent = "";
+        $("#provider-drawer-title").textContent = "配置 " + providerDisplayName(provider);
+        (PROVIDER_FIELDS[provider.id] || []).forEach((definition) => providerFormFields.append(providerField(definition, provider)));
+        providerDrawerLayer.hidden = false;
+        providerDrawerLayer.setAttribute("aria-hidden", "false");
+        appView.inert = true;
+        document.body.classList.add("overlay-open");
+        window.requestAnimationFrame(() => providerDrawerLayer.classList.add("open"));
+      }
+
+      function closeProviderDrawer(immediate = false) {
+        if (!state.providerDrawerOpen && providerDrawerLayer.hidden) return;
+        state.providerDrawerOpen = false;
+        state.editingProvider = null;
+        providerDrawerLayer.classList.remove("open");
+        const finish = () => {
+          providerDrawerLayer.hidden = true;
+          providerDrawerLayer.setAttribute("aria-hidden", "true");
+          if (!state.drawerOpen && !state.deleteOpen && !state.runPayloadOpen) {
+            appView.inert = false;
+            document.body.classList.remove("overlay-open");
+          }
+        };
+        window.setTimeout(finish, immediate || reducedMotion.matches ? 0 : 230);
+      }
+
+      function providerPayload() {
+        const payload = {};
+        $$("[data-provider-key]", providerFormFields).forEach((control) => {
+          const key = control.dataset.providerKey;
+          const type = control.dataset.providerType;
+          if (type === "checkbox") payload[key] = control.checked;
+          else if (type === "number") payload[key] = control.value.trim() === "" ? null : Number(control.value);
+          else if (type === "textarea") payload[key] = control.value.split(/[\n,]+/).map((value) => value.trim()).filter(Boolean);
+          else payload[key] = control.value.trim();
+        });
+        return payload;
+      }
+
+      async function saveProvider(event) {
+        event.preventDefault();
+        if (!state.editingProvider || !providerForm.reportValidity()) return;
+        setBusy(saveProviderButton, true);
+        providerFormError.hidden = true;
+        try {
+          await apiRequest(API.providers + "/" + encodeURIComponent(state.editingProvider.id), {
+            method: "PUT",
+            body: providerPayload()
+          });
+          closeProviderDrawer();
+          await loadProviders();
+          showToast("智能体配置已保存，可用于岗位创建。", "success");
+        } catch (error) {
+          providerFormError.textContent = error.message;
+          providerFormError.hidden = false;
+        } finally {
+          setBusy(saveProviderButton, false);
+        }
+      }
+
+      function configuredAssignments() {
+        return state.providers.filter((provider) => provider.configured).flatMap((provider) => provider.assignments);
+      }
+
+      function assignmentAvailable(executor, mode) {
+        return configuredAssignments().some((assignment) => assignment.executor_kind === executor && assignment.execution_mode === mode);
+      }
+
+      function syncExecutorOptions() {
+        const select = $("#agent-executor-kind");
+        if (!select) return;
+        const current = select.value;
+        const kinds = [...new Set(configuredAssignments().map((assignment) => assignment.executor_kind))];
+        select.replaceChildren();
+        kinds.forEach((kind) => {
+          const option = makeElement("option", "", executorLabel(kind));
+          option.value = kind;
+          select.append(option);
+        });
+        if (current && !kinds.includes(current)) ensureLegacyExecutorOption(current);
+        select.value = kinds.includes(current) ? current : (kinds[0] || "");
+        syncExecutionModeControl(false);
+      }
+
+      async function loadProviders() {
+        const epoch = state.authEpoch;
+        state.providersStatus = "loading";
+        renderSkeleton(providersPanel, 4);
+        try {
+          const data = await apiRequest(API.providers);
+          if (epoch !== state.authEpoch || !state.session) return false;
+          state.providers = collectionFromData(data, "providers").map(normalizeProvider);
+          state.providersStatus = "ready";
+          renderProviders();
+          syncExecutorOptions();
+          return true;
+        } catch (error) {
+          if (epoch !== state.authEpoch || !state.session) return false;
+          state.providersStatus = "error";
+          renderPanelState(providersPanel, "error", "智能体中心加载失败", error.message, t("retry"), loadProviders);
+          return false;
+        }
+      }
+
       async function loadAgents() {
         const epoch = state.authEpoch;
         state.agentsStatus = "loading";
@@ -1645,10 +1974,11 @@
       async function refreshAll(options = {}) {
         if (!state.session) return;
         setBusy(refreshButton, true);
+        const providersLoaded = await loadProviders();
         const agentsLoaded = await loadAgents();
         const runsLoaded = await loadRuns(state.runsFilter);
         setBusy(refreshButton, false);
-        const failed = !agentsLoaded || !runsLoaded;
+        const failed = !providersLoaded || !agentsLoaded || !runsLoaded;
         if (!options.silent && !failed && state.session) showToast(t("sync.refreshed"), "success");
       }
 
@@ -1692,24 +2022,31 @@
           codex: "Codex",
           reasonix: "Reasonix",
           pi: "Pi",
+          opencode: "OpenCode",
+          qwen_code: "Qwen Code",
+          gemini_cli: "Gemini CLI",
+          openhands: "OpenHands",
           deepseek_harness: "DeepSeek Harness",
-          goose: "Goose"
+          goose: "Goose",
+          openai_agent: lang === "zh" ? "OpenAI 托管智能体" : "OpenAI Agent",
+          claude_managed_agent: lang === "zh" ? "Claude 托管智能体" : "Claude Managed Agent"
         };
         return labels[kind] || kind || (lang === "zh" ? "未配置" : "Not configured");
       }
 
       function executionModeLetter(mode) {
-        return mode === "local" ? "L" : "G";
+        return mode === "local" ? "L" : mode === "managed" ? "M" : "G";
       }
 
       function agentExecutorElement(agent) {
-        const mode = agent.execution_mode === "local" ? "local" : "gateway";
+        const mode = ["local", "managed"].includes(agent.execution_mode) ? agent.execution_mode : "gateway";
         const wrapper = makeElement("span", "execution-agent");
         const kind = makeElement("span", "kind-pill", executorLabel(agent.executor_kind));
         const badge = makeElement("span", `execution-mode-badge ${mode}`, executionModeLetter(mode));
-        badge.title = mode === "local" ? "Local" : "Gateway";
-        badge.setAttribute("aria-label", mode === "local" ? "Local" : "Gateway");
-        wrapper.title = `${executorLabel(agent.executor_kind)} · ${mode === "local" ? "Local" : "Gateway"}`;
+        const modeLabel = mode === "local" ? "Local" : mode === "managed" ? "Managed" : "Gateway";
+        badge.title = modeLabel;
+        badge.setAttribute("aria-label", modeLabel);
+        wrapper.title = `${executorLabel(agent.executor_kind)} · ${modeLabel}`;
         wrapper.append(kind, badge);
         return wrapper;
       }
@@ -2109,7 +2446,7 @@
         const cell = document.createElement("td");
         if (entry.type !== "task") {
           const channel = makeElement("span", "execution-agent-unknown", lang === "zh" ? "通道事件" : "Channel event");
-          channel.title = lang === "zh" ? "Callback / Heartbeat 不会启动 Agent 执行器" : "Callback / Heartbeat does not start an Agent executor";
+          channel.title = lang === "zh" ? "Callback / Heartbeat 不会启动智能体执行器" : "Callback / Heartbeat does not start an Agent executor";
           cell.append(channel);
           return cell;
         }
@@ -2125,16 +2462,23 @@
           codex: "Codex",
           reasonix: "Reasonix",
           pi: "Pi",
+          opencode: "OpenCode",
+          qwen_code: "Qwen Code",
+          gemini_cli: "Gemini CLI",
+          openhands: "OpenHands",
           deepseek_harness: "DeepSeek",
-          goose: "Goose"
+          goose: "Goose",
+          openai_agent: lang === "zh" ? "OpenAI 托管智能体" : "OpenAI Agent",
+          claude_managed_agent: lang === "zh" ? "Claude 托管智能体" : "Claude Managed Agent"
         };
-        const mode = entry.executionMode === "local" ? "local" : "gateway";
+        const mode = ["local", "managed"].includes(entry.executionMode) ? entry.executionMode : "gateway";
         const wrapper = makeElement("span", "execution-agent");
         const name = makeElement("span", "execution-agent-name", names[entry.executorKind] || entry.executorKind);
-        const badge = makeElement("span", `execution-mode-badge ${mode}`, mode === "local" ? "L" : "G");
-        badge.title = mode === "local" ? "Local" : "Gateway";
-        badge.setAttribute("aria-label", mode === "local" ? "Local" : "Gateway");
-        wrapper.title = `${names[entry.executorKind] || entry.executorKind} · ${mode === "local" ? "Local" : "Gateway"}`;
+        const modeLabel = mode === "local" ? "Local" : mode === "managed" ? "Managed" : "Gateway";
+        const badge = makeElement("span", `execution-mode-badge ${mode}`, executionModeLetter(mode));
+        badge.title = modeLabel;
+        badge.setAttribute("aria-label", modeLabel);
+        wrapper.title = `${names[entry.executorKind] || entry.executorKind} · ${modeLabel}`;
         wrapper.append(name, badge);
         cell.append(wrapper);
         return cell;
@@ -2303,7 +2647,7 @@
         const caption = makeElement("caption", "sr-only", t("runs.caption"));
         const head = document.createElement("thead");
         const headRow = document.createElement("tr");
-        [t("th.runId"), t("th.type"), lang === "zh" ? "执行 Agent" : "Execution Agent", t("th.status"), t("th.duration"), t("th.responseCode"), t("th.input"), lang === "zh" ? "执行节点结果" : "Executor result", t("th.output"), t("th.started"), t("th.finished")].forEach((label) => headRow.append(makeElement("th", "", label)));
+        [t("th.runId"), t("th.type"), lang === "zh" ? "执行智能体" : "Execution Agent", t("th.status"), t("th.duration"), t("th.responseCode"), t("th.input"), lang === "zh" ? "执行节点结果" : "Executor result", t("th.output"), t("th.started"), t("th.finished")].forEach((label) => headRow.append(makeElement("th", "", label)));
         head.append(headRow);
         const body = document.createElement("tbody");
         populateAgentFilter();
@@ -2423,8 +2767,6 @@
         }
       }
 
-      const LOCAL_EXECUTORS = new Set(["pi", "reasonix", "codex", "claude_code"]);
-
       function ensureLegacyExecutorOption(executorKind) {
         const select = $("#agent-executor-kind");
         select.querySelector("[data-legacy-executor]")?.remove();
@@ -2441,27 +2783,60 @@
         const mode = $("#agent-execution-mode");
         const gatewayOption = $("#agent-execution-gateway-option");
         const localOption = $("#agent-execution-local-option");
+        const managedOption = $("#agent-execution-managed-option");
         const label = $("#agent-execution-mode-label");
-        const supportsLocal = LOCAL_EXECUTORS.has(executor);
-
-        if (resetToRemote || !supportsLocal) mode.value = "gateway";
-        mode.disabled = !supportsLocal;
-        localOption.hidden = !supportsLocal;
+        const availableModes = new Set(
+          configuredAssignments()
+            .filter((assignment) => assignment.executor_kind === executor)
+            .map((assignment) => assignment.execution_mode)
+        );
+        if (state.formMode === "edit" && state.editingSlug) {
+          const existing = findAgent(state.editingSlug);
+          if (existing && existing.executor_kind === executor) availableModes.add(existing.execution_mode);
+        }
+        const isOpenAIManaged = executor === "openai_agent";
+        const isClaudeManaged = executor === "claude_managed_agent";
+        gatewayOption.hidden = !availableModes.has("gateway");
+        localOption.hidden = !availableModes.has("local");
+        managedOption.hidden = !availableModes.has("managed");
+        const preferred = resetToRemote && availableModes.has("gateway")
+          ? "gateway"
+          : ["managed", "local", "gateway"].find((candidate) => availableModes.has(candidate));
+        if (!availableModes.has(mode.value)) mode.value = preferred || "";
+        mode.disabled = availableModes.size <= 1;
         label.textContent = lang === "zh" ? "执行位置" : "Execution location";
 
-        gatewayOption.textContent = lang === "zh" ? "远端网关（默认）" : "Remote gateway (default)";
-        if (!supportsLocal) return;
+        gatewayOption.textContent = executor === "rust"
+          ? (lang === "zh" ? "进程内置 Rust" : "Built-in Rust")
+          : (lang === "zh" ? "远端网关（默认）" : "Remote gateway (default)");
+        if (mode.value === "managed") {
+          managedOption.textContent = isClaudeManaged
+            ? (lang === "zh" ? "Claude 托管智能体 API" : "Claude Managed Agents API")
+            : (lang === "zh" ? "OpenAI 托管智能体 API" : "OpenAI managed Agents API");
+          const model = $("#agent-claude-model");
+          if (isOpenAIManaged && (!model.value || model.value.startsWith("deepseek-") || model.value === "dsk_4f" || model.value.startsWith("claude-"))) {
+            model.value = "gpt-6-astra";
+          }
+          if (isClaudeManaged && (!model.value || model.value.startsWith("deepseek-") || model.value === "dsk_4f" || model.value.startsWith("gpt"))) {
+            model.value = "claude-opus-5";
+          }
+          return;
+        }
+        if (mode.value !== "local") return;
 
-        const executorName = executor === "reasonix"
-          ? "Reasonix"
-          : executor === "pi"
-            ? "Pi"
-            : executor === "claude_code"
-              ? "Claude Code"
-              : "Codex";
+        const executorName = {
+          reasonix: "Reasonix",
+          pi: "Pi",
+          claude_code: "Claude Code",
+          opencode: "OpenCode",
+          qwen_code: "Qwen Code",
+          gemini_cli: "Gemini",
+          openhands: "OpenHands",
+          deepseek_harness: "DeepSeek Harness"
+        }[executor] || "Codex";
         localOption.textContent = lang === "zh"
-          ? `本机 Local（启动 ${executorName} CLI）`
-          : `Local (${executorName} CLI)`;
+          ? "本机 Local（启动 " + executorName + " CLI）"
+          : "Local (" + executorName + " CLI)";
       }
 
       function resetAgentForm() {
@@ -2473,8 +2848,9 @@
         setFormValue("queue_capacity", 10);
         setFormValue("enabled", true);
         $("#enabled-label").textContent = t("agent.enabled");
-        setFormValue("executor_kind", "pi");
-        setFormValue("execution_mode", "gateway");
+        const firstAssignment = configuredAssignments()[0];
+        setFormValue("executor_kind", firstAssignment ? firstAssignment.executor_kind : "");
+        setFormValue("execution_mode", firstAssignment ? firstAssignment.execution_mode : "");
         syncExecutionModeControl(false);
         setFormValue("claude_model", "deepseek-v4-flash");
         setFormValue("signature_encoding", "hex");
@@ -2487,7 +2863,7 @@
         $("#secret-required-mark").hidden = false;
         $("#toggle-secret-button").textContent = t("secret.toggle.show");
         $("#toggle-secret-button").setAttribute("aria-pressed", "false");
-        $("#toggle-secret-button").setAttribute("aria-label", t("secret.toggle.label"));
+        $("#toggle-secret-button").setAttribute("aria-label", fmt("secret.toggle.label", { action: t("secret.toggle.show") }));
         $("#secret-help").textContent = t("drawer.secret.help.create");
         agentFormError.hidden = true;
         agentFormError.textContent = "";
@@ -2497,6 +2873,11 @@
       }
 
       function openCreateDrawer() {
+        if (!configuredAssignments().length) {
+          showToast("请先在智能体中心配置至少一个可用智能体。", "error");
+          switchSection("providers-section");
+          return;
+        }
         state.formMode = "create";
         state.editingSlug = null;
         resetAgentForm();
@@ -2738,8 +3119,10 @@
 
       function switchSection(target) {
         if (appView.hidden) return;
+        const providersSection = $("#providers-section");
         const agentsSection = $("#agents-section");
         const runsSection = $("#runs-section");
+        if (providersSection) providersSection.hidden = target !== "providers-section";
         if (agentsSection) agentsSection.hidden = target !== "agents-section";
         if (runsSection) runsSection.hidden = target !== "runs-section";
         $$("[data-nav-target]").forEach((link) => link.classList.toggle("active", link.dataset.navTarget === target));
@@ -2802,6 +3185,7 @@
 
       retrySessionButton.addEventListener("click", bootstrap);
       refreshButton.addEventListener("click", () => refreshAll());
+      providersRefreshButton.addEventListener("click", loadProviders);
       $("#create-agent-button").addEventListener("click", openCreateDrawer);
       $("#agents-filters").addEventListener("change", (event) => {
         if (event.target.id === "agents-role-filter") {
@@ -2816,7 +3200,14 @@
         }
       });
       agentsPanel.addEventListener("click", handleAgentAction);
+      providersPanel.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-provider-configure]");
+        if (!button) return;
+        const provider = state.providers.find((item) => item.id === button.dataset.providerConfigure);
+        if (provider) openProviderDrawer(provider);
+      });
       agentForm.addEventListener("submit", submitAgentForm);
+      providerForm.addEventListener("submit", saveProvider);
       deleteForm.addEventListener("submit", submitDelete);
       // 切换到任一外部 LLM 执行器时,若未选模型则默认填网关模型 deepseek-v4-flash,
       // 避免留空后回退到默认模型名导致网关 404/超时。
@@ -2897,11 +3288,23 @@
       $$('[data-close-drawer]').forEach((element) => element.addEventListener("click", () => {
         if (!state.formSubmitting) closeAgentDrawer();
       }));
+      $$('[data-close-provider]').forEach((element) => element.addEventListener("click", () => {
+        closeProviderDrawer();
+      }));
       $$('[data-close-delete]').forEach((element) => element.addEventListener("click", () => {
         if (!state.deleteSubmitting) closeDeleteModal();
       }));
 
       document.addEventListener("keydown", (event) => {
+        if (state.providerDrawerOpen) {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            closeProviderDrawer();
+            return;
+          }
+          trapFocus(event, providerDrawer);
+          return;
+        }
         if (state.runPayloadOpen) {
           if (event.key === "Escape") {
             event.preventDefault();
@@ -3016,11 +3419,11 @@
         renderRuns();
       }));
 
-      bootstrap();
-    })();
       // 应用语言并初始化语言切换按钮
       applyI18n();
       setupLangToggle();
+      bootstrap();
+    })();
 
   </script>
 </body>

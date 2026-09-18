@@ -63,7 +63,7 @@ trusted_usage_reporting_enabled = false
 
 # --- 单体多 Agent 管理平台 ---
 # 管理页面、管理 API、动态 /agent/{slug} 接口、PostgreSQL 与执行器全部运行在
-# 当前 Rust 进程内。生产环境建议通过环境变量覆盖密码和 session secret。
+# 当前 Go 进程内。生产环境建议通过环境变量覆盖密码和 session secret。
 [platform]
 enabled = true
 public_base_url = "http://127.0.0.1:8080"
@@ -105,12 +105,40 @@ max_tokens = 16384
 max_attempts = 3
 max_response_bytes = 2097152
 
+[openai_agents]
+enabled = false
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-6-astra"
+reasoning_effort = "medium"
+environment = "none"
+mcp_server_label = "mota_tools"
+mcp_required = true
+delete_session = true
+max_response_bytes = 2097152
+
+[claude_managed]
+enabled = false
+base_url = "https://api.anthropic.com/v1"
+agent_id = ""
+environment_id = ""
+delete_session = true
+max_response_bytes = 2097152
+
 # --- 本机 Agent CLI ---
 # 可通过环境变量替换为绝对路径，便于 systemd/容器内稳定定位。
 [local_agents]
 codex_binary = "codex"
 pi_binary = "/usr/local/bin/pi"
 reasonix_binary = "/usr/local/bin/reasonix"
+deepseek_harness_binary = "dsh"
+opencode_binary = "opencode"
+opencode_default_model = ""
+qwen_code_binary = "qwen"
+qwen_code_default_model = ""
+gemini_cli_binary = "gemini"
+gemini_cli_default_model = "auto"
+openhands_binary = "openhands"
+openhands_default_model = ""
 # 可选：Pi 基本面/技术分析岗位的只读金融与行情数据扩展。生产环境建议通过
 # LOCAL_AGENT__FINANCE_EXTENSION_PATH 指向已审计的本地 TypeScript 文件。
 # finance_extension_path = "/home/ubuntu/mota-agent-server/extensions/pi/mota-finance-data.ts"
@@ -128,7 +156,11 @@ max_output_bytes = 1048576
 allowed_env = [
   "HOME", "PATH", "USER", "TMPDIR", "XDG_CONFIG_HOME", "CODEX_HOME",
   "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
-  "LITELLM_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY"
+  "LITELLM_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY",
+  "GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_CLOUD_PROJECT",
+  "DASHSCOPE_API_KEY", "QWEN_API_KEY",
+  "LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL",
+  "OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT"
 ]
 
 # --- A2A(Agent2Agent Protocol v1.0)接入 ---

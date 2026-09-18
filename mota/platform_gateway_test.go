@@ -653,7 +653,7 @@ func TestGatewaySuccessResponseHeadersAndRunRecord(t *testing.T) {
 		t.Errorf("Content-Type = %q", got)
 	}
 
-	// 响应体是 mota-agent-payload v1 三键信封,且**不含** usage(非受信通道)。
+	// 响应体是 mota-agent-payload v1 三个业务键 + 必填 usage。
 	var payload map[string]any
 	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("response is not JSON: %v", err)
@@ -663,8 +663,8 @@ func TestGatewaySuccessResponseHeadersAndRunRecord(t *testing.T) {
 			t.Errorf("response is missing %q", key)
 		}
 	}
-	if _, leaked := payload["usage"]; leaked {
-		t.Error("an untrusted channel must not report usage")
+	if _, present := payload["usage"]; !present {
+		t.Error("every successful result must report usage")
 	}
 
 	// 运行记录落库:原文与结果都要在。

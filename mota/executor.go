@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -83,8 +84,17 @@ type AgentExecutor struct {
 	processor Processor
 	http      *http.Client
 	config    *PlatformConfig
+	configMu  sync.RWMutex
 	// workspaceRoot 是已解析符号链接的绝对路径,用于逃逸检查的比较基准。
 	workspaceRoot string
+}
+
+// SetConfig 让 Provider 热更新从下一次执行开始生效；正在运行的任务继续使用
+// 更新前快照，避免一次任务内模型、Host 或密钥发生变化。
+func (e *AgentExecutor) SetConfig(config *PlatformConfig) {
+	e.configMu.Lock()
+	e.config = config
+	e.configMu.Unlock()
 }
 
 // NewAgentExecutor 组装执行器。workspace 根目录必须存在且可解析,否则直接失败 ——
@@ -113,6 +123,8 @@ func (e *AgentExecutor) Execute(
 	rawInput any,
 	timeout time.Duration,
 ) (*ProcessedOutput, error) {
+	e.configMu.RLock()
+	defer e.configMu.RUnlock()
 	output, execErr := e.execute(ctx, runtime, context_, rawInput, timeout)
 	if execErr != nil {
 		return nil, execErr
@@ -210,9 +222,14 @@ var gatewayAgentLabels = map[ExecutorKind]string{
 
 // localCLIKinds 把执行器种类映射到本机 CLI 种类。
 var localCLIKinds = map[ExecutorKind]LocalCliKind{
-	ExecutorKindCodex:    LocalCliCodex,
-	ExecutorKindReasonix: LocalCliReasonix,
-	ExecutorKindPi:       LocalCliPi,
+	ExecutorKindCodex:           LocalCliCodex,
+	ExecutorKindReasonix:        LocalCliReasonix,
+	ExecutorKindPi:              LocalCliPi,
+	ExecutorKindOpenCode:        LocalCliOpenCode,
+	ExecutorKindQwenCode:        LocalCliQwenCode,
+	ExecutorKindGeminiCLI:       LocalCliGeminiCLI,
+	ExecutorKindOpenHands:       LocalCliOpenHands,
+	ExecutorKindDeepseekHarness: LocalCliDeepseekHarness,
 }
 
 func (e *AgentExecutor) execute(
@@ -258,6 +275,16 @@ func (e *AgentExecutor) execute(
 		}
 		if cliKind, ok := localCLIKinds[kind]; ok {
 			return e.executeLocalCLI(ctx, runtime, rawInput, timeout, cliKind, policy)
+		}
+	}
+	if mode == ExecutionModeManaged {
+		switch kind {
+		case ExecutorKindOpenAIAgent:
+			return e.executeOpenAIAgent(ctx, runtime, rawInput, timeout, policy)
+		case ExecutorKindClaudeManaged:
+			return e.executeClaudeManaged(ctx, runtime, rawInput, timeout, policy)
+		default:
+			return nil, newExecutionError("executor_unavailable", "managed executor is unsupported")
 		}
 	}
 	if mode == ExecutionModeGateway && kind.SupportsGateway() {
@@ -499,8 +526,13 @@ func (e *AgentExecutor) runLocalAgentOnce(
 ) (any, *BoundRunUsage, *ExecutionError) {
 	_ = ctx
 	local := agentCommand(e.config, runtime, workspace, prompt, systemContract, cliKind)
+	defer func() {
+		for _, path := range local.CleanupPaths {
+			_ = os.Remove(path)
+		}
+	}()
 	capture := CaptureComplete
-	if local.OutputMode == LocalOutputPiJSONLines || local.OutputMode == LocalOutputCodexJSONLines {
+	if local.OutputMode == LocalOutputPiJSONLines || local.OutputMode == LocalOutputCodexJSONLines || local.OutputMode == LocalOutputOpenHandsJSONLines {
 		// JSONL 事件流只保留尾部:超限时降级而不是报错,收尾事件必须留住。
 		capture = CaptureEventStreamTail
 	}
@@ -523,6 +555,10 @@ func (e *AgentExecutor) runLocalAgentOnce(
 		candidate, usage, execErr = parsePiJSONLines(text)
 	case LocalOutputCodexJSONLines:
 		candidate, usage, execErr = parseCodexJSONLines(text)
+	case LocalOutputGeminiJSON:
+		candidate, usage, execErr = parseGeminiJSON(text)
+	case LocalOutputOpenHandsJSONLines:
+		candidate, usage, execErr = parseOpenHandsJSONLines(text)
 	default:
 		candidate, usage = parseTextCandidate(text), nil
 	}

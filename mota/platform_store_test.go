@@ -954,6 +954,33 @@ func TestStoreRecordAudit(t *testing.T) {
 	}
 }
 
+func TestStoreExecutorProviderIsEncryptedAtRest(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	providerID := unique("provider")
+	key := "executor_provider:" + providerID
+	t.Cleanup(func() { _, _ = store.pool.Exec(ctx, "DELETE FROM platform_settings WHERE key = $1", key) })
+
+	want := map[string]any{"enabled": true, "api_key": "provider-secret-0123456789", "model": "gpt-test"}
+	if err := store.PutExecutorProvider(ctx, providerID, want); err != nil {
+		t.Fatal(err)
+	}
+	var raw string
+	if err := store.pool.QueryRow(ctx, "SELECT value FROM platform_settings WHERE key = $1", key).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(raw, "provider-secret") || strings.Contains(raw, "gpt-test") {
+		t.Fatalf("provider configuration was stored in plaintext: %q", raw)
+	}
+	got, err := store.GetExecutorProvider(ctx, providerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["api_key"] != want["api_key"] || got["model"] != want["model"] {
+		t.Fatalf("provider roundtrip = %#v", got)
+	}
+}
+
 // claimPeriodicGC 在窗口内只放行一次。
 func TestClaimPeriodicGCThrottles(t *testing.T) {
 	var last atomic.Int64

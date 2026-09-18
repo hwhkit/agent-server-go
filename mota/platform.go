@@ -16,6 +16,7 @@ import (
 // PlatformState 是管理平台的共享状态。
 type PlatformState struct {
 	Config    *PlatformConfig
+	configMu  sync.RWMutex
 	Store     *AgentStore
 	Registry  *AgentRegistry
 	Processor Processor
@@ -66,9 +67,26 @@ type PlatformState struct {
 // Executor 返回共享的 Agent 执行器。首次调用时构造并缓存结果(含失败)。
 func (s *PlatformState) Executor() (*AgentExecutor, error) {
 	s.executorOnce.Do(func() {
-		s.executor, s.executorErr = NewAgentExecutor(s.Processor, s.HTTPClient, s.Config)
+		s.executor, s.executorErr = NewAgentExecutor(s.Processor, s.HTTPClient, s.ConfigSnapshot())
 	})
 	return s.executor, s.executorErr
+}
+
+// ConfigSnapshot 返回当前不可变配置快照。调用方不得修改返回值。
+func (s *PlatformState) ConfigSnapshot() *PlatformConfig {
+	s.configMu.RLock()
+	defer s.configMu.RUnlock()
+	return s.Config
+}
+
+// ApplyConfig 原子替换 Provider 配置，并让已构造执行器从下一次任务起使用新快照。
+func (s *PlatformState) ApplyConfig(config *PlatformConfig) {
+	s.configMu.Lock()
+	s.Config = config
+	s.configMu.Unlock()
+	if s.executor != nil {
+		s.executor.SetConfig(config)
+	}
 }
 
 // SetExecutor 注入一个已构造好的执行器(装配与测试用),并抑制按需构造。
@@ -155,6 +173,10 @@ func NewPlatformStateWithDependencies(
 	store, err := ConnectAgentStore(ctx, databaseURL, cipher)
 	if err != nil {
 		return nil, err
+	}
+	if err := LoadSavedProviders(ctx, store, cfg); err != nil {
+		_ = store.Close()
+		return nil, fmt.Errorf("load Agent Center providers: %w", err)
 	}
 	agents, err := store.ListAgents(ctx)
 	if err != nil {

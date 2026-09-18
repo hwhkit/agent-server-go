@@ -19,9 +19,12 @@ Go 版以 Rust 实现为行为基准，现已在同一进程内增加：
 
 - `GET /admin` 与 `/api/admin/*` 管理面（HttpOnly Session、CSRF、登录退避）
 - `POST /agent/{slug}` 动态 Agent 网关与热更新 Registry
-- SQLite Agent 配置、run、nonce、幂等 lease/缓存与管理 Session
+- PostgreSQL Agent 配置、Provider 配置、run、nonce、幂等 lease/缓存与管理 Session
 - AES-256-GCM 加密的 per-Agent Signing Secret，管理 API 永不回显明文
-- Agent/全局双层并发门与有界 admission，Go `Processor` / Claude Code 双执行器
+- 智能体中心：本地系统与远端托管智能体分组，配置完成后才能分配给岗位
+- 本地真实 Harness：Codex、Pi、OpenCode、Qwen Code、Gemini CLI、OpenHands、Claude Code、DeepSeek Harness
+- 远端托管运行时：OpenAI Agents API 与 Claude Managed Agents Session/SSE
+- Agent/全局双层并发门、有界 admission、运行日志和 Provider 热更新
 - Rust 同款 HMAC v1 canonical、防重放 5 分钟窗口和兼容 `X-MoTA-Signature`
 
 ```bash
@@ -29,11 +32,28 @@ export PLATFORM__ENABLED=true
 export ADMIN__PASSWORD='<强管理员密码>'
 export ADMIN__SESSION_SECRET='<至少 32 字节的稳定随机值>'
 export PLATFORM__PUBLIC_BASE_URL='http://127.0.0.1:8080'
+export DATABASE_URL='postgres://postgres:postgres@127.0.0.1:5432/mota_agent'
 ```
 
-Go 平台模式依赖系统 `libsqlite3` 与 CGO；`CGO_ENABLED=0` 仍可编译协议桥，但启用平台会
-返回明确的 SQLite 不可用错误。当前 Go 版管理员认证要求 `ADMIN__PASSWORD`；Argon2id
-登录是与 Rust/Python 的已知差异。
+浏览器打开 `http://127.0.0.1:8080/admin`。Provider 密钥与 MCP Authorization 会作为
+整份配置使用平台主密钥加密后写入 PostgreSQL，管理 API 只返回“已配置”状态，不回显明文。
+配置保存后立即对新任务生效；正在运行的任务继续使用启动时的配置快照。
+
+OpenAI 托管智能体启用示例：
+
+```bash
+export OPENAI_AGENTS__ENABLED=true
+export OPENAI_AGENTS__API_KEY='<OpenAI API key>'
+```
+
+Claude 托管智能体启用示例：
+
+```bash
+export CLAUDE_MANAGED__ENABLED=true
+export CLAUDE_MANAGED__API_KEY='<Anthropic API key>'
+export CLAUDE_MANAGED__AGENT_ID='agent_...'
+export CLAUDE_MANAGED__ENVIRONMENT_ID='env_...'
+```
 
 v1 canonical 与 Rust/Python 相同：
 
@@ -43,7 +63,7 @@ v1\nPOST\n/agent/{slug}\n{unix_timestamp}\n{nonce}\n{run_id}\n{idempotency_key}\
 
 ## 环境要求
 
-- **Go >= 1.23**(hwhkit-go 要求;本机默认 go1.22,已内置工具链到 `.tools/go1.23.12`)
+- **Go >= 1.25**
 - hwhkit-go 子模块的 go.mod 使用 workspace 内相对 `replace`(未随 tag 发布),
   因此依赖本地源码(`.hwhkit-go-src/`,由仓库根 sparse-checkout 生成)。
   `git pull` 后如源码缺失,重新执行:
@@ -65,8 +85,8 @@ mota-agent-server-go/
     ├── processor.go     # Processor 接口 + PlaceholderProcessor 占位实现
     ├── push.go          # Push handler(chi route)
     ├── worker.go        # PullWorker(claim/complete/renew/heartbeat)
-	├── platform_*.go     # 多 Agent 配置、SQLite、管理面、网关与执行器
-	├── sqlite_cgo.go     # 直接绑定系统 libsqlite3
+	├── platform_*.go     # 多智能体配置、PostgreSQL、智能体中心、管理面与网关
+	├── executor_*        # 本地 CLI、网关、OpenAI/Claude 托管执行器
     ├── types.go         # 协议数据结构
     └── *_test.go        # 单元 + 集成测试
 ```
@@ -172,7 +192,7 @@ processor := MyAnalysisProcessor{}   // 替换 PlaceholderProcessor{}
 ## 测试
 
 ```bash
-go test ./...        # 47 个测试:协议桥 + 平台安全/管理/幂等集成
+go test ./...        # 协议桥 + 智能体中心 + 执行器 + 平台安全/管理/幂等集成
 go vet ./...
 ```
 

@@ -100,11 +100,22 @@ func (a *AdminHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeAdminError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed")
 		}
 		return
+	case "/api/admin/providers":
+		a.route(w, r, http.MethodGet, a.listProviders)
+		return
 	case "/api/admin/runs":
 		a.route(w, r, http.MethodGet, a.listRuns)
 		return
 	case "/api/admin/channel-events":
 		a.route(w, r, http.MethodGet, a.listChannelEvents)
+		return
+	}
+	if providerID, ok := strings.CutPrefix(path, "/api/admin/providers/"); ok && providerID != "" {
+		if r.Method != http.MethodPut {
+			writeAdminError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed")
+			return
+		}
+		a.updateProvider(w, r, providerID)
 		return
 	}
 	if slug, ok := strings.CutPrefix(path, "/api/admin/agents/"); ok && slug != "" {
@@ -145,6 +156,57 @@ func (a *AdminHandler) adminPage(w http.ResponseWriter) {
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	_, _ = io.WriteString(w, adminHTML)
+}
+
+// ---------------------------------------------------------------------------
+// 智能体中心 Provider
+// ---------------------------------------------------------------------------
+
+func (a *AdminHandler) listProviders(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.requireSession(w, r, false); !ok {
+		return
+	}
+	writeAdminData(w, http.StatusOK, ListProviders(a.State.ConfigSnapshot()))
+}
+
+func (a *AdminHandler) updateProvider(w http.ResponseWriter, r *http.Request, providerID string) {
+	session, ok := a.requireSession(w, r, true)
+	if !ok {
+		return
+	}
+	config := a.State.ConfigSnapshot()
+	var payload map[string]any
+	if err := json.NewDecoder(io.LimitReader(r.Body,
+		int64(config.MaxRequestBodyBytes)+1)).Decode(&payload); err != nil {
+		writeAdminError(w, http.StatusBadRequest, "invalid_provider_config",
+			"智能体 Provider 配置格式不正确："+err.Error())
+		return
+	}
+
+	a.State.Mutation.Lock()
+	defer a.State.Mutation.Unlock()
+	next, stored, err := UpdateProvider(a.State.ConfigSnapshot(), providerID, payload)
+	if err != nil {
+		writeAdminError(w, http.StatusUnprocessableEntity, "invalid_provider_config", err.Error())
+		return
+	}
+	ctx := mutationContext(r)
+	if err := a.State.Store.PutExecutorProvider(ctx, providerID, stored); err != nil {
+		writeStorageError(w, err, "update provider")
+		return
+	}
+	a.State.ApplyConfig(next)
+	if err := a.State.Store.RecordAudit(ctx, session.Username, "provider.update", providerID,
+		map[string]any{"providerId": providerID}); err != nil {
+		slog.Warn("record provider audit failed", "provider", providerID, "error", err)
+	}
+	for _, view := range ListProviders(next) {
+		if view.ID == providerID {
+			writeAdminData(w, http.StatusOK, view)
+			return
+		}
+	}
+	writeAdminError(w, http.StatusNotFound, "provider_not_found", "智能体 Provider 不存在")
 }
 
 // ---------------------------------------------------------------------------
@@ -192,7 +254,7 @@ func (a *AdminHandler) login(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body,
-		int64(a.State.Config.MaxRequestBodyBytes)+1)).Decode(&payload); err != nil {
+		int64(a.State.ConfigSnapshot().MaxRequestBodyBytes)+1)).Decode(&payload); err != nil {
 		writeAdminError(w, http.StatusBadRequest, "invalid_request", "登录请求格式不正确")
 		return
 	}
@@ -287,7 +349,7 @@ func (a *AdminHandler) listAgents(w http.ResponseWriter, r *http.Request) {
 	}
 	views := make([]AgentView, 0, len(agents))
 	for _, agent := range agents {
-		views = append(views, agent.ToView(a.State.Config.PublicBaseURL))
+		views = append(views, agent.ToView(a.State.ConfigSnapshot().PublicBaseURL))
 	}
 	writeAdminData(w, http.StatusOK, views)
 }
@@ -305,7 +367,7 @@ func (a *AdminHandler) getAgent(w http.ResponseWriter, r *http.Request, slug str
 		writeAdminError(w, http.StatusNotFound, "agent_not_found", "Agent 不存在")
 		return
 	}
-	writeAdminData(w, http.StatusOK, agent.ToView(a.State.Config.PublicBaseURL))
+	writeAdminData(w, http.StatusOK, agent.ToView(a.State.ConfigSnapshot().PublicBaseURL))
 }
 
 // decodeAgentInput 解析并校验 Agent 配置。
@@ -320,7 +382,7 @@ func (a *AdminHandler) decodeAgentInput(
 ) (*AgentInput, bool) {
 	var input AgentInput
 	if err := json.NewDecoder(io.LimitReader(r.Body,
-		int64(a.State.Config.MaxRequestBodyBytes)+1)).Decode(&input); err != nil {
+		int64(a.State.ConfigSnapshot().MaxRequestBodyBytes)+1)).Decode(&input); err != nil {
 		writeAdminError(w, http.StatusBadRequest, "invalid_agent_config",
 			"Agent 配置格式不正确："+err.Error())
 		return nil, false
@@ -345,29 +407,49 @@ func (a *AdminHandler) decodeAgentInput(
 // 只有「本机 CLI 模式」才会真的在 workspace 里 spawn 子进程,所以只对这类组合
 // 要求目录存在且在根目录内;网关模式与进程内处理器只需路径合法(Validate 已保证)。
 func (a *AdminHandler) validateWorkspace(input *AgentInput) (int, string, string, bool) {
+	config := a.State.ConfigSnapshot()
+	if input.ExecutorKind == ExecutorKindOpenAIAgent {
+		if !config.OpenAIAgents.Enabled {
+			return http.StatusUnprocessableEntity, "openai_agent_executor_disabled",
+				"OpenAI 托管智能体执行器尚未在服务端显式启用", false
+		}
+	}
+	if input.ExecutorKind == ExecutorKindClaudeManaged {
+		if !config.ClaudeManaged.Enabled {
+			return http.StatusUnprocessableEntity, "claude_managed_executor_disabled",
+				"Claude 托管智能体执行器尚未在服务端显式启用", false
+		}
+		if input.PermissionMode == "manual" {
+			return http.StatusUnprocessableEntity, "interactive_permission_mode_unsupported",
+				"Claude 托管智能体的同步服务端执行不支持 manual 工具确认", false
+		}
+	}
 	localCLI := input.ExecutionMode == ExecutionModeLocal && input.ExecutorKind.SupportsLocalCLI()
-	if !localCLI {
-		return 0, "", "", true
+	if localCLI {
+		if input.ExecutorKind == ExecutorKindClaudeCode && !config.ClaudeEnabled {
+			return http.StatusUnprocessableEntity, "claude_executor_disabled",
+				"Claude Code 本地执行器尚未在服务端显式启用", false
+		}
+		root, err := canonicalizePath(config.WorkspaceRoot)
+		if err != nil {
+			return http.StatusUnprocessableEntity, "invalid_workspace",
+				"本地执行器工作区不存在或不可访问", false
+		}
+		resolved, err := canonicalizePath(filepath.Join(root, input.WorkspacePath))
+		if err != nil {
+			return http.StatusUnprocessableEntity, "invalid_workspace",
+				"本地执行器工作区不存在或不可访问", false
+		}
+		// 按路径分量比较,避免 /root-evil 被 /root 的字符串前缀误判为通过。
+		relative, err := filepath.Rel(root, resolved)
+		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return http.StatusUnprocessableEntity, "invalid_workspace",
+				"本地执行器工作区必须位于配置的根目录内", false
+		}
 	}
-	if input.ExecutorKind == ExecutorKindClaudeCode && !a.State.Config.ClaudeEnabled {
-		return http.StatusUnprocessableEntity, "claude_executor_disabled",
-			"Claude Code 本地执行器尚未在服务端显式启用", false
-	}
-	root, err := canonicalizePath(a.State.Config.WorkspaceRoot)
-	if err != nil {
-		return http.StatusUnprocessableEntity, "invalid_workspace",
-			"本地执行器工作区不存在或不可访问", false
-	}
-	resolved, err := canonicalizePath(filepath.Join(root, input.WorkspacePath))
-	if err != nil {
-		return http.StatusUnprocessableEntity, "invalid_workspace",
-			"本地执行器工作区不存在或不可访问", false
-	}
-	// 按路径分量比较,避免 /root-evil 被 /root 的字符串前缀误判为通过。
-	relative, err := filepath.Rel(root, resolved)
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return http.StatusUnprocessableEntity, "invalid_workspace",
-			"本地执行器工作区必须位于配置的根目录内", false
+	if !IsAssignmentConfigured(config, input.ExecutorKind, input.ExecutionMode) {
+		return http.StatusUnprocessableEntity, "executor_provider_not_configured",
+			"请先在智能体中心完成对应执行器配置，再创建或更新岗位智能体", false
 	}
 	return 0, "", "", true
 }
@@ -403,7 +485,7 @@ func (a *AdminHandler) createAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	a.State.Registry.Replace(agent)
 	a.recordAgentAudit(ctx, session.Username, "agent.create", agent, true)
-	writeAdminData(w, http.StatusCreated, agent.ToView(a.State.Config.PublicBaseURL))
+	writeAdminData(w, http.StatusCreated, agent.ToView(a.State.ConfigSnapshot().PublicBaseURL))
 }
 
 func (a *AdminHandler) updateAgent(w http.ResponseWriter, r *http.Request, slug string) {
@@ -433,7 +515,7 @@ func (a *AdminHandler) updateAgent(w http.ResponseWriter, r *http.Request, slug 
 	}
 	a.State.Registry.Replace(agent)
 	a.recordAgentAudit(ctx, session.Username, "agent.update", agent, secretRotated)
-	writeAdminData(w, http.StatusOK, agent.ToView(a.State.Config.PublicBaseURL))
+	writeAdminData(w, http.StatusOK, agent.ToView(a.State.ConfigSnapshot().PublicBaseURL))
 }
 
 func (a *AdminHandler) deleteAgent(w http.ResponseWriter, r *http.Request, slug string) {

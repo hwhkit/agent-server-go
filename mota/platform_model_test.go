@@ -17,7 +17,9 @@ import (
 func TestParseExecutorKindRoundtripsAllVariants(t *testing.T) {
 	for _, kind := range []ExecutorKind{
 		ExecutorKindRust, ExecutorKindClaudeCode, ExecutorKindCodex,
-		ExecutorKindReasonix, ExecutorKindPi, ExecutorKindDeepseekHarness, ExecutorKindGoose,
+		ExecutorKindReasonix, ExecutorKindPi, ExecutorKindOpenCode, ExecutorKindQwenCode,
+		ExecutorKindGeminiCLI, ExecutorKindOpenHands, ExecutorKindDeepseekHarness,
+		ExecutorKindGoose, ExecutorKindOpenAIAgent, ExecutorKindClaudeManaged,
 	} {
 		got, err := ParseExecutorKind(kind.String())
 		if err != nil {
@@ -34,7 +36,7 @@ func TestParseExecutorKindRoundtripsAllVariants(t *testing.T) {
 
 // 对应 rs execution_mode_capability_matrix_is_enforced。
 func TestExecutionModeCapabilityMatrixIsEnforced(t *testing.T) {
-	for _, mode := range []ExecutionMode{ExecutionModeGateway, ExecutionModeLocal} {
+	for _, mode := range []ExecutionMode{ExecutionModeGateway, ExecutionModeLocal, ExecutionModeManaged} {
 		got, err := ParseExecutionMode(mode.String())
 		if err != nil || got != mode {
 			t.Errorf("ParseExecutionMode(%q) = (%q, %v)", mode, got, err)
@@ -51,11 +53,21 @@ func TestExecutionModeCapabilityMatrixIsEnforced(t *testing.T) {
 			t.Errorf("%s should support gateway", kind)
 		}
 	}
-	if ExecutorKindDeepseekHarness.SupportsLocalCLI() {
-		t.Error("deepseek_harness must not support local CLI")
+	if !ExecutorKindDeepseekHarness.SupportsLocalCLI() {
+		t.Error("deepseek_harness should support local CLI")
 	}
 	if !ExecutorKindDeepseekHarness.SupportsGateway() {
 		t.Error("deepseek_harness should support gateway")
+	}
+	for _, kind := range []ExecutorKind{ExecutorKindOpenCode, ExecutorKindQwenCode, ExecutorKindGeminiCLI, ExecutorKindOpenHands} {
+		if !kind.SupportsLocalCLI() || kind.SupportsGateway() {
+			t.Errorf("%s must be local-only", kind)
+		}
+	}
+	for _, kind := range []ExecutorKind{ExecutorKindOpenAIAgent, ExecutorKindClaudeManaged} {
+		if !kind.SupportsExecutionMode(ExecutionModeManaged) || kind.SupportsLocalCLI() || kind.SupportsGateway() {
+			t.Errorf("%s must be managed-only", kind)
+		}
 	}
 	if ExecutorKindRust.SupportsLocalCLI() || ExecutorKindRust.SupportsGateway() {
 		t.Error("rust (embedded processor) supports neither local CLI nor gateway proper")

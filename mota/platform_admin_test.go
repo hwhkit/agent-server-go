@@ -677,6 +677,10 @@ func auditDetail(t *testing.T, state *PlatformState, action, key string) any {
 // 只有「本机 CLI 模式」才要求 workspace 真实存在;网关模式与进程内处理器不校验。
 func TestAdminValidateWorkspaceOnlyForLocalCLI(t *testing.T) {
 	fixture := newAdminFixture(t)
+	configured := clonePlatformConfig(fixture.state.ConfigSnapshot())
+	configured.Gateway.BaseURL = "https://gateway.example.com"
+	configured.LocalAgents.PiBinary = executableFile(t, "pi")
+	fixture.state.ApplyConfig(configured)
 
 	// 本机 Pi + 不存在的目录 → 422 invalid_workspace。
 	body := agentPayload(uniqueSlug("badws"), map[string]any{
@@ -737,7 +741,7 @@ func TestAdminValidateWorkspaceRejectsEscape(t *testing.T) {
 // Claude 本机执行器未启用时不许配置。
 func TestAdminRejectsClaudeLocalWhenDisabled(t *testing.T) {
 	fixture := newAdminFixture(t)
-	if fixture.state.Config.ClaudeEnabled {
+	if fixture.state.ConfigSnapshot().ClaudeEnabled {
 		t.Fatal("this test assumes claude is disabled by default")
 	}
 	body := agentPayload(uniqueSlug("claude"), map[string]any{
@@ -750,7 +754,11 @@ func TestAdminRejectsClaudeLocalWhenDisabled(t *testing.T) {
 	}
 
 	// 启用后放行。
-	fixture.state.Config.ClaudeEnabled = true
+	configured := clonePlatformConfig(fixture.state.ConfigSnapshot())
+	configured.ClaudeEnabled = true
+	configured.ClaudeBinary = executableFile(t, "claude")
+	configured.Gateway.BaseURL = "https://gateway.example.com"
+	fixture.state.ApplyConfig(configured)
 	slug := uniqueSlug("claudeok")
 	t.Cleanup(func() { _, _ = fixture.state.Store.DeleteAgent(context.Background(), slug) })
 	body = agentPayload(slug, map[string]any{
@@ -760,7 +768,9 @@ func TestAdminRejectsClaudeLocalWhenDisabled(t *testing.T) {
 	adminData(t, recorder, http.StatusCreated)
 
 	// 网关模式的 Claude 不受该开关限制。
-	fixture.state.Config.ClaudeEnabled = false
+	configured = clonePlatformConfig(fixture.state.ConfigSnapshot())
+	configured.ClaudeEnabled = false
+	fixture.state.ApplyConfig(configured)
 	gwSlug := uniqueSlug("claudegw")
 	t.Cleanup(func() { _, _ = fixture.state.Store.DeleteAgent(context.Background(), gwSlug) })
 	body = agentPayload(gwSlug, map[string]any{

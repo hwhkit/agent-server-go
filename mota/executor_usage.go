@@ -112,6 +112,95 @@ func parseTextCandidate(text string) any {
 	return value
 }
 
+// parseGeminiJSON 解开 Gemini CLI --output-format json 的 response 字段。
+func parseGeminiJSON(text string) (any, *BoundRunUsage, *ExecutionError) {
+	value, err := decodeJSONNumbers([]byte(strings.TrimSpace(text)))
+	if err != nil {
+		return nil, nil, newExecutionError("invalid_executor_output", "Gemini CLI returned invalid JSON")
+	}
+	response, ok := jsonStringField(value, "response")
+	if !ok || strings.TrimSpace(response) == "" {
+		return nil, nil, newExecutionError("invalid_executor_output", "Gemini CLI response was empty").WithExecutorOutput(value)
+	}
+	return parseTextCandidate(response), usageFromGemini(value), nil
+}
+
+func usageFromGemini(value any) *BoundRunUsage {
+	stats, ok := jsonField(value, "stats")
+	if !ok {
+		return nil
+	}
+	models, ok := jsonField(stats, "models")
+	modelMap, ok := asJSONObject(models)
+	if !ok || len(modelMap) == 0 {
+		return nil
+	}
+	var prompt, completion, reasoning uint64
+	for _, model := range modelMap {
+		tokens, ok := jsonField(model, "tokens")
+		if !ok {
+			return nil
+		}
+		p, ok := usageNumber(tokens, "prompt")
+		if !ok {
+			return nil
+		}
+		c, ok := usageNumber(tokens, "candidates")
+		if !ok {
+			return nil
+		}
+		r, _ := usageNumber(tokens, "thoughts")
+		var sumOK bool
+		prompt, sumOK = checkedSum(prompt, p)
+		if !sumOK {
+			return nil
+		}
+		completion, sumOK = checkedSum(completion, c)
+		if !sumOK {
+			return nil
+		}
+		reasoning, sumOK = checkedSum(reasoning, r)
+		if !sumOK {
+			return nil
+		}
+	}
+	usage := FinalReportedUsage(prompt, nil, completion, optionalUint(reasoning), uint64(len(modelMap)))
+	return usage
+}
+
+func optionalUint(value uint64) *uint64 {
+	if value == 0 {
+		return nil
+	}
+	return &value
+}
+
+// parseOpenHandsJSONLines 取 OpenHands headless JSONL 中最后一条 assistant/message 内容。
+func parseOpenHandsJSONLines(text string) (any, *BoundRunUsage, *ExecutionError) {
+	var final any
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		value, err := decodeJSONNumbers([]byte(line))
+		if err != nil {
+			continue
+		}
+		typeName, _ := jsonStringField(value, "type")
+		if typeName != "message" && typeName != "assistant" && typeName != "agent_message" {
+			continue
+		}
+		if content, ok := jsonStringField(value, "content"); ok && strings.TrimSpace(content) != "" {
+			final = parseTextCandidate(content)
+		}
+	}
+	if final == nil {
+		return nil, nil, newExecutionError("invalid_executor_output", "OpenHands JSONL did not contain a final assistant message")
+	}
+	return final, nil, nil
+}
+
 // ---------------------------------------------------------------------------
 // 用量数字读取
 // ---------------------------------------------------------------------------

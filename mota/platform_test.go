@@ -103,11 +103,13 @@ func TestPlatformAdminAndGateway(t *testing.T) {
 	}
 	pageBody, _ := io.ReadAll(page.Body)
 	page.Body.Close()
-	// 与 Rust 侧同一份 web/admin.html:必须带执行方式选择器与执行器选项。
+	// 与 Rust 侧同一份 web/admin.html：必须带智能体中心、岗位配置与托管模式。
 	for _, marker := range []string{
+		`id="providers-section"`,
 		`id="agent-execution-mode"`,
-		`<option value="pi">Pi</option>`,
-		`<option value="claude_code">Claude Code</option>`,
+		`<option value="opencode">OpenCode</option>`,
+		`<option value="openai_agent">OpenAI 托管智能体</option>`,
+		`<h2 id="runs-title" data-i18n="runs.title">运行日志</h2>`,
 	} {
 		if !strings.Contains(string(pageBody), marker) {
 			t.Fatalf("embedded admin console is missing %s", marker)
@@ -117,6 +119,23 @@ func TestPlatformAdminAndGateway(t *testing.T) {
 		t.Fatalf("admin page status=%d", page.StatusCode)
 	}
 	csrf := loginAdmin(t, server, client)
+	providersResponse, err := client.Get(server.URL + "/api/admin/providers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer providersResponse.Body.Close()
+	if providersResponse.StatusCode != http.StatusOK {
+		t.Fatalf("providers status=%d", providersResponse.StatusCode)
+	}
+	var providersEnvelope struct {
+		Data []ProviderView `json:"data"`
+	}
+	if err := json.NewDecoder(providersResponse.Body).Decode(&providersEnvelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(providersEnvelope.Data) != len(providerIDs) {
+		t.Fatalf("providers=%d want=%d", len(providersEnvelope.Data), len(providerIDs))
+	}
 	// PostgreSQL 是跨测试运行共享的,slug / runId / nonce / 幂等键都必须唯一。
 	slug := uniqueSlug("research-one")
 	createTestAgent(t, server, client, csrf, slug)

@@ -236,8 +236,8 @@ func TestExecuteTimesOutStuckProcessor(t *testing.T) {
 func TestExecuteRejectsUnsupportedCombinations(t *testing.T) {
 	t.Parallel()
 	executor := newTestExecutor(t, executorTestConfig(t), &stubProcessor{})
-	// deepseek_harness / goose 都没有本机 CLI 实现。
-	for _, kind := range []ExecutorKind{ExecutorKindDeepseekHarness, ExecutorKindGoose} {
+	// Goose 没有本机 CLI 实现；DeepSeek Harness 已同步 Rust 版 dsh headless。
+	for _, kind := range []ExecutorKind{ExecutorKindGoose} {
 		_, err := executor.Execute(context.Background(),
 			executorRuntime("", kind, ExecutionModeLocal),
 			&TaskContext{}, map[string]any{}, time.Minute)
