@@ -21,6 +21,9 @@ func TestA2AConfigDisabledByDefault(t *testing.T) {
 	if !cfg.RequireBearerAuth {
 		t.Error("require_bearer_auth should default to true")
 	}
+	if cfg.AgentVersion != "1.2.0" {
+		t.Errorf("agent_version = %q, want Rust package version 1.2.0", cfg.AgentVersion)
+	}
 }
 
 func TestA2AConfigBasePathTrailingSlashIsTrimmed(t *testing.T) {

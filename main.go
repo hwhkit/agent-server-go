@@ -20,7 +20,8 @@ import (
 	"mota-agent-server/mota"
 )
 
-// App 组装 HTTP 路由。Push 与动态 Agent 网关(/agent/{slug})、管理台三组路由
+// App 组装 HTTP 路由。Push、动态 Agent 网关(/agent/{slug} 与外部前缀别名)、
+// 管理台三组路由
 // 共用同一份 MOTA 配置与(如启用平台)同一个执行后端。
 // 对应 Rust 侧 src/app.rs 的 MotaAgentApp。
 type App struct {
@@ -63,6 +64,8 @@ func (a App) BuildRouter(
 	}
 	if a.platform != nil {
 		r.Post("/agent/{slug}", a.platform.Gateway)
+		// 外部前缀别名；签名 canonical 仍固定为 /agent/{slug}。
+		r.Post("/agent-center-go/{slug}", a.platform.Gateway)
 		admin := &mota.AdminHandler{State: a.platform}
 		// AdminHandler dispatches on the complete path. Mount would strip the
 		// prefix before forwarding and make every management route look unknown.

@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/go-chi/chi/v5"
 )
 
 // ---------------------------------------------------------------------------
@@ -208,7 +210,16 @@ type agentRequest struct {
 // 任何一步失败都必须把已获得的幂等租约释放掉,否则同一个键会被永久占住。
 func (s *PlatformState) Gateway(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
-	slug := strings.TrimPrefix(r.URL.Path, "/agent/")
+	slug := chi.URLParam(r, "slug")
+	if slug == "" {
+		// 直接单测/嵌入调用没有 chi 路由上下文时仍兼容按路径解析。
+		for _, prefix := range []string{"/agent/", "/agent-center-go/"} {
+			if strings.HasPrefix(r.URL.Path, prefix) {
+				slug = strings.TrimPrefix(r.URL.Path, prefix)
+				break
+			}
+		}
+	}
 
 	runtime := s.Registry.Get(slug)
 	if runtime == nil || !runtime.Config.Enabled {

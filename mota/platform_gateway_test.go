@@ -194,6 +194,8 @@ func (f *gatewayFixture) runtime(t *testing.T) *AgentRuntime {
 // gatewayCall 描述一次网关请求。
 type gatewayCall struct {
 	body []byte
+	// path 可覆盖默认 /agent/{slug}，用于验证外部前缀别名。
+	path string
 	// signWith 为空时用 fixture 的密钥;设成别的值可以模拟签名不匹配。
 	signWith string
 	// mode 决定签名方式:"v1"(默认)、"mota"、"none"。
@@ -219,7 +221,11 @@ func (f *gatewayFixture) do(t *testing.T, call gatewayCall) *httptest.ResponseRe
 	if secret == "" {
 		secret = f.secret
 	}
-	request := httptest.NewRequest(http.MethodPost, "/agent/"+f.slug, strings.NewReader(string(call.body)))
+	path := call.path
+	if path == "" {
+		path = "/agent/" + f.slug
+	}
+	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(string(call.body)))
 	if call.runID != "" {
 		request.Header.Set("X-Agent-Run-Id", call.runID)
 	}
@@ -323,6 +329,22 @@ func TestGatewayUnknownAndDisabledAgentBothLookAbsent(t *testing.T) {
 	fixture.state.Registry.Replace(updated)
 	recorder = fixture.do(t, gatewayCall{body: minimalTaskBody(unique("run"))})
 	wantGatewayError(t, recorder, http.StatusNotFound, "agent_not_found")
+}
+
+func TestGatewayExternalAliasUsesAgentCanonicalSignature(t *testing.T) {
+	fixture := newGatewayFixture(t, PlaceholderProcessor{})
+	runID := unique("alias-run")
+	recorder := fixture.do(t, gatewayCall{
+		body:  minimalTaskBody(runID),
+		path:  "/agent-center-go/" + fixture.slug,
+		runID: runID,
+	})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", recorder.Code, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("X-Agent-Slug"); got != fixture.slug {
+		t.Fatalf("X-Agent-Slug = %q, want %q", got, fixture.slug)
+	}
 }
 
 func TestGatewayRejectsDuplicateAndAmbiguousHeaders(t *testing.T) {

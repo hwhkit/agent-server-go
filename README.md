@@ -18,7 +18,8 @@ SIGTERM 优雅退出(先广播 `ShutdownToken` 再 drain)。
 Go 版以 Rust 实现为行为基准，现已在同一进程内增加：
 
 - `GET /admin` 与 `/api/admin/*` 管理面（HttpOnly Session、CSRF、登录退避）
-- `POST /agent/{slug}` 动态 Agent 网关与热更新 Registry
+- `POST /agent/{slug}` 动态 Agent 网关与热更新 Registry；外部前缀别名为
+  `POST /agent-center-go/{slug}`，两者签名 canonical 都固定使用 `/agent/{slug}`
 - PostgreSQL Agent 配置、Provider 配置、run、nonce、幂等 lease/缓存与管理 Session
 - AES-256-GCM 加密的 per-Agent Signing Secret，管理 API 永不回显明文
 - 智能体中心：本地系统与远端托管智能体分组，配置完成后才能分配给岗位
@@ -89,7 +90,7 @@ mota-agent-server-go/
 ├── go.mod               # require + replace(指向 ../.hwhkit-go-src)
 ├── main.go              # Application impl + hwhkit.Run + Pull worker + production.Serve
 └── mota/
-    ├── config.go        # MotaConfig(MOTA_* 环境变量 + 启动校验)
+    ├── config.go        # MotaConfig(MOTA__* 环境变量 + 启动校验)
     ├── signature.go     # HMAC-SHA256(hex | base64,常数时间比较)
     ├── processor.go     # Processor 接口 + PlaceholderProcessor 占位实现
     ├── push.go          # Push handler(chi route)
@@ -103,13 +104,12 @@ mota-agent-server-go/
 ## 快速开始
 
 ```bash
-export PATH="$PWD/.tools/go1.23.12/bin:$PATH"
 cd mota-agent-server-go
-go build -o mota-agent-server .
+make build
 
 # 注入 MOTA 平台签发的签名密钥(占位值 change-me 会被启动校验拒绝,防伪造)
-export MOTA_SIGNING_SECRET="<平台签发的 signing secret>"
-MOTA_SIGNING_SECRET=$MOTA_SIGNING_SECRET ./mota-agent-server
+export MOTA__SIGNING_SECRET="<平台签发的 signing secret>"
+./dist/mota-agent-server
 ```
 
 验证:
@@ -118,7 +118,7 @@ MOTA_SIGNING_SECRET=$MOTA_SIGNING_SECRET ./mota-agent-server
 curl -s http://127.0.0.1:8080/health          # {"status":"healthy"}
 
 BODY='{"taskBrief":"assess AAPL","params":{"symbols":["AAPL"]}}'
-SIG=$(python3 -c "import hmac,hashlib,sys,os; print(hmac.new(os.environ['MOTA_SIGNING_SECRET'].encode(), sys.argv[1].encode(), hashlib.sha256).hexdigest())" "$BODY")
+SIG=$(python3 -c "import hmac,hashlib,sys,os; print(hmac.new(os.environ['MOTA__SIGNING_SECRET'].encode(), sys.argv[1].encode(), hashlib.sha256).hexdigest())" "$BODY")
 curl -s -X POST http://127.0.0.1:8080/mota/push \
   -H 'Content-Type: application/json' \
   -H "X-MoTA-Signature: $SIG" \
@@ -131,14 +131,14 @@ curl -s -X POST http://127.0.0.1:8080/mota/push \
 
 MOTA 用 HTTPS POST 把任务推送到登记 endpoint,本服务从响应体取结果。
 
-- 请求: `POST <your endpoint>`(默认 `/mota/push`,可用 `MOTA_PUSH_PATH` 改)
+- 请求: `POST <your endpoint>`(默认 `/mota/push`,可用 `MOTA__PUSH_PATH` 改)
   - 头: `X-MoTA-Signature: <hmac-sha256(body, signing secret)>`、`X-MoTA-Run-Id`
   - 体: `{ "taskBrief": …, "params": { symbols, financial_analysis, company_announcement, consensus_estimate, research_report } }`
 - 响应(200): `{ "assessments": …, "summary": …, "extensions": … }`
 - 签名缺失 / 不匹配一律 `401`(RFC 7807 problem+json);body 非法 JSON 返回 `422`;
   处理器异常返回 `500`(内部细节只记日志,不回显)。
 
-签名编码默认为 **hex 小写**;若平台签发 base64,设 `MOTA_SIGNATURE_ENCODING=base64`。
+签名编码默认为 **hex 小写**;若平台签发 base64,设 `MOTA__SIGNATURE_ENCODING=base64`。
 校验用 `crypto/subtle.ConstantTimeCompare` 常数时间比较。
 
 ## Pull 接入
@@ -146,35 +146,37 @@ MOTA 用 HTTPS POST 把任务推送到登记 endpoint,本服务从响应体取�
 worker 随进程启动(main 里在 `production.Serve` 前 `Start()`,退出时 `Stop()`),
 轮询由平台签发的队列地址,`Authorization: Bearer <bind token>` 认证。
 
-- `claim`: 长轮询 `POST {queue}/claim?workerId=<id>`,HTTP 读超时由 `MOTA_CLAIM_TIMEOUT_SECS`
+- `claim`: 长轮询 `POST {queue}/claim?workerId=<id>`,HTTP 读超时由 `MOTA__CLAIM_TIMEOUT_SECS`
   控制(默认 60s,校验强制 >= 35s);收到 `204` 立即重新 claim。
 - `complete`: 处理完 `POST {queue}/complete`(带 `X-MoTA-Run-ID`),回执
   `{ code, accepted, runStatus, runMsg }`;仅 `accepted=true` 视为被采纳。
-- `renew`: 任务处理期间每 `MOTA_RENEW_INTERVAL_SECS` 续租一次;收到 `409 BOUND_CLAIM_CONFLICT`
+- `renew`: 任务处理期间每 `MOTA__RENEW_INTERVAL_SECS` 续租一次;收到 `409 BOUND_CLAIM_CONFLICT`
   立即放弃该任务(租约已被抢走)。
 - `heartbeat`: 独立 goroutine 按回执 `heartbeatIntervalSeconds`(默认 60s)上报存活;
   心跳与 claim **各跑一条循环**(协议要求)。
 
-启用 Pull: 设 `MOTA_PULL_ENABLED=true` 并配置 `MOTA_QUEUE_URL` / `MOTA_BIND_TOKEN` / `MOTA_WORKER_ID`。
+启用 Pull: 设 `MOTA__PULL_ENABLED=true` 并配置 `MOTA__QUEUE_URL` /
+`MOTA__BIND_TOKEN` / `MOTA__WORKER_ID`。
 
 ## 配置
 
-全部来自环境变量 `MOTA_*`(hwhkit-go 的 `AppConfig` 是固定结构,不支持自定义段)。
+加载优先级为 `config/default.toml` → `config/{MOTA_ENV}.toml` → 环境变量
+`MOTA__*`；空环境变量不会覆盖文件层。
 
 | 环境变量 | 默认 | 说明 |
 |---|---|---|
-| `MOTA_PUSH_ENABLED` | `true` | 是否挂载 Push endpoint |
-| `MOTA_PUSH_PATH` | `/mota/push` | Push endpoint 路径 |
-| `MOTA_SIGNING_SECRET` | — | HMAC-SHA256 签名密钥;空或占位 `change-me` 拒绝启动 |
-| `MOTA_SIGNATURE_ENCODING` | `hex` | `hex` 或 `base64` |
-| `MOTA_PULL_ENABLED` | `false` | 是否启动 Pull worker |
-| `MOTA_QUEUE_URL` | — | 绑定后由平台签发的队列地址 |
-| `MOTA_BIND_TOKEN` | — | 绑定令牌 |
-| `MOTA_WORKER_ID` | — | worker 标识 |
-| `MOTA_CLAIM_TIMEOUT_SECS` | `60` | claim 读超时,强制 >= 35 |
-| `MOTA_HEARTBEAT_INTERVAL_SECS` | `60` | 心跳间隔(回执可覆盖) |
-| `MOTA_RENEW_INTERVAL_SECS` | `30` | 续租间隔 |
-| `MOTA_TASK_TIMEOUT_SECS` | `600` | 单任务处理超时,超时放弃 |
+| `MOTA__PUSH_ENABLED` | `true` | 是否挂载 Push endpoint |
+| `MOTA__PUSH_PATH` | `/mota/push` | Push endpoint 路径 |
+| `MOTA__SIGNING_SECRET` | — | HMAC-SHA256 签名密钥;空或占位 `change-me` 拒绝启动 |
+| `MOTA__SIGNATURE_ENCODING` | `hex` | `hex` 或 `base64` |
+| `MOTA__PULL_ENABLED` | `false` | 是否启动 Pull worker |
+| `MOTA__QUEUE_URL` | — | 绑定后由平台签发的队列地址 |
+| `MOTA__BIND_TOKEN` | — | 绑定令牌 |
+| `MOTA__WORKER_ID` | — | worker 标识 |
+| `MOTA__CLAIM_TIMEOUT_SECS` | `60` | claim 读超时,强制 >= 35 |
+| `MOTA__HEARTBEAT_INTERVAL_SECS` | `60` | 心跳间隔(回执可覆盖) |
+| `MOTA__RENEW_INTERVAL_SECS` | `30` | 续租间隔 |
+| `MOTA__TASK_TIMEOUT_SECS` | `600` | 单任务处理超时,超时放弃 |
 
 启动校验: Push 启用但签名密钥为空/占位、Pull 启用但缺队列/令牌/workerId、claim 超时 < 35 均拒绝启动。
 

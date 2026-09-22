@@ -273,7 +273,9 @@ func (i *AgentInput) Validate(requireSecret bool) error {
 	switch i.PermissionMode {
 	case "dontAsk", "plan", "acceptEdits", "manual":
 	default:
-		return errors.New("permission_mode must be dontAsk, plan, acceptEdits, or manual")
+		// permission_mode 已不再由管理台暴露；存量或第三方客户端传入未知值时
+		// 与 Rust 版一致归一为安全默认值。
+		i.PermissionMode = "dontAsk"
 	}
 	if timeout := i.TimeoutSecsOrDefault(); timeout < 5 || timeout > 3600 {
 		return errors.New("timeout_secs must be between 5 and 3600")

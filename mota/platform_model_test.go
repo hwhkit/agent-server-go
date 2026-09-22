@@ -247,11 +247,14 @@ func TestAgentInputValidateRejectsBadWorkspacePath(t *testing.T) {
 	}
 }
 
-func TestAgentInputValidateRejectsBadPermissionMode(t *testing.T) {
+func TestAgentInputValidateNormalizesBadPermissionMode(t *testing.T) {
 	input := validAgentInput()
 	input.PermissionMode = "yolo"
-	if err := input.Validate(true); err == nil {
-		t.Error("unknown permission_mode should be rejected")
+	if err := input.Validate(true); err != nil {
+		t.Fatalf("unknown permission_mode should normalize, got %v", err)
+	}
+	if input.PermissionMode != "dontAsk" {
+		t.Fatalf("permission_mode = %q, want dontAsk", input.PermissionMode)
 	}
 	for _, mode := range []string{"dontAsk", "plan", "acceptEdits", "manual"} {
 		input := validAgentInput()

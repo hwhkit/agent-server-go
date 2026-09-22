@@ -20,7 +20,7 @@ import (
 
 // a2aAppVersion 是 Cargo.toml 里 env!("CARGO_PKG_VERSION") 的 Go 侧对应常量,
 // 用作 agent_version 缺省值。
-const a2aAppVersion = "0.1.0"
+const a2aAppVersion = "1.2.0"
 
 // A2AConfig 是解析后的 A2A 配置。
 type A2AConfig struct {
