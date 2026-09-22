@@ -6,6 +6,14 @@
   <meta name="color-scheme" content="dark">
   <meta name="theme-color" content="#07110f">
   <title data-i18n="title.page">MOTA 智能体控制台</title>
+  <script>
+    (() => {
+      let theme = "dark";
+      try { theme = localStorage.getItem("mota.admin.theme") || "dark"; } catch (e) {}
+      if (theme !== "light" && theme !== "dark") theme = "dark";
+      document.documentElement.dataset.theme = theme;
+    })();
+  </script>
   <style>
     :root {
       color-scheme: dark;
@@ -37,6 +45,32 @@
       --page-heading-height: 60px;
       --sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
       --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+    html[data-theme="light"] {
+      color-scheme: light;
+      --bg: #f4f8f6;
+      --bg-deep: #e8f1ed;
+      --surface: rgba(255, 255, 255, 0.9);
+      --surface-solid: #ffffff;
+      --surface-raised: #f8fbf9;
+      --surface-soft: rgba(255, 255, 255, 0.72);
+      --text: #132720;
+      --text-soft: #38584c;
+      --muted: #607b70;
+      --faint: #82988f;
+      --line: rgba(28, 76, 59, 0.13);
+      --line-strong: rgba(28, 76, 59, 0.24);
+      --mint: #147a57;
+      --mint-strong: #079668;
+      --mint-ink: #f5fff9;
+      --cyan: #17778a;
+      --violet: #6656b8;
+      --amber: #9b6712;
+      --danger: #c73e49;
+      --danger-strong: #ae2733;
+      --shadow-lg: 0 28px 80px rgba(31, 64, 52, 0.15);
+      --shadow-md: 0 14px 36px rgba(31, 64, 52, 0.1);
     }
 
     * { box-sizing: border-box; }
@@ -78,6 +112,14 @@
       box-shadow: 0 0 0 7rem rgba(117, 239, 186, 0.018), 0 0 0 14rem rgba(117, 239, 186, 0.012);
       pointer-events: none;
     }
+    html[data-theme="light"] body {
+      background:
+        radial-gradient(circle at 8% -8%, rgba(20, 122, 87, 0.12), transparent 30rem),
+        radial-gradient(circle at 98% 14%, rgba(23, 119, 138, 0.08), transparent 30rem),
+        linear-gradient(155deg, var(--bg) 0%, var(--bg-deep) 100%);
+    }
+    html[data-theme="light"] body::before { opacity: 0.32; }
+    html[data-theme="light"] body::after { opacity: 0.34; }
 
     button, input, textarea, select { font: inherit; }
     button, a { -webkit-tap-highlight-color: transparent; }
@@ -350,8 +392,38 @@
     .side-nav a:hover, .side-nav a.active { color: var(--text); border-color: var(--line); background: rgba(117, 239, 186, 0.055); }
     .side-nav a.active::after { background: var(--mint); box-shadow: 0 0 9px rgba(117, 239, 186, 0.6); }
     .sidebar-spacer { flex: 1; }
+    .sidebar-preferences {
+      display: grid;
+      gap: 9px;
+      margin: 16px 3px 0;
+      padding: 11px 12px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: rgba(14, 32, 27, 0.54);
+    }
+    .preference-row { display: flex; align-items: center; justify-content: space-between; gap: 9px; }
+    .preference-label { color: var(--muted); font: 700 9px/1 var(--mono); letter-spacing: 0.04em; white-space: nowrap; }
+    .preference-options { display: inline-flex; align-items: center; gap: 3px; padding: 2px; border: 1px solid var(--line); border-radius: 7px; background: rgba(4, 14, 11, 0.42); }
+    .preference-button {
+      min-width: 34px;
+      min-height: 25px;
+      display: inline-grid;
+      place-items: center;
+      padding: 4px 7px;
+      border: 0;
+      border-radius: 5px;
+      color: var(--muted);
+      background: transparent;
+      font: 700 9px/1 var(--mono);
+      cursor: pointer;
+      transition: color 150ms ease, background 150ms ease, box-shadow 150ms ease;
+    }
+    .preference-button:hover { color: var(--text); background: rgba(117, 239, 186, 0.06); }
+    .preference-button[aria-pressed="true"] { color: var(--text); background: rgba(117, 239, 186, 0.13); box-shadow: inset 0 0 0 1px rgba(117, 239, 186, 0.18); }
+    .preference-button.theme-icon { min-width: 27px; width: 27px; padding: 4px; }
+    .preference-button svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
     .sidebar-status {
-      margin: 16px 3px;
+      margin: 8px 3px 16px;
       padding: 13px;
       border: 1px solid var(--line);
       border-radius: 11px;
@@ -366,6 +438,47 @@
     .user-meta strong { display: block; overflow: hidden; text-overflow: ellipsis; color: var(--text-soft); font-size: 11px; white-space: nowrap; }
     .user-meta span { display: block; margin-top: 3px; color: var(--muted); font: 9px/1.2 var(--mono); }
     .logout-button { width: auto; min-width: 44px; min-height: 30px; padding: 4px 10px; border-radius: 7px; white-space: nowrap; }
+
+    html[data-theme="light"] .login-shell,
+    html[data-theme="light"] .login-panel,
+    html[data-theme="light"] .sidebar,
+    html[data-theme="light"] .topbar,
+    html[data-theme="light"] .drawer,
+    html[data-theme="light"] .modal-card,
+    html[data-theme="light"] .toast { background: rgba(250, 253, 251, 0.94); }
+    html[data-theme="light"] .login-story {
+      background: linear-gradient(150deg, rgba(218, 239, 229, 0.9), rgba(247, 251, 249, 0.94));
+    }
+    html[data-theme="light"] .input,
+    html[data-theme="light"] .select,
+    html[data-theme="light"] .textarea,
+    html[data-theme="light"] .filter-select-wrap .select,
+    html[data-theme="light"] .runs-success-rate,
+    html[data-theme="light"] .runs-page-button,
+    html[data-theme="light"] .runs-page-size,
+    html[data-theme="light"] .provider-tabs,
+    html[data-theme="light"] .provider-option span,
+    html[data-theme="light"] .drawer-runtime-status,
+    html[data-theme="light"] .switch-row,
+    html[data-theme="light"] .delete-target,
+    html[data-theme="light"] .agent-card-route,
+    html[data-theme="light"] .preference-options { background-color: rgba(255, 255, 255, 0.82); }
+    html[data-theme="light"] .sidebar-preferences,
+    html[data-theme="light"] .sidebar-status,
+    html[data-theme="light"] .agent-card,
+    html[data-theme="light"] .payload-json,
+    html[data-theme="light"] .runs-pagination { background: rgba(255, 255, 255, 0.68); }
+    html[data-theme="light"] .button { background: rgba(247, 251, 249, 0.92); }
+    html[data-theme="light"] .button.ghost { background: transparent; }
+    html[data-theme="light"] .button:hover:not(:disabled) { background: rgba(20, 122, 87, 0.08); }
+    html[data-theme="light"] .button.primary,
+    html[data-theme="light"] .button.primary:hover:not(:disabled) { color: var(--mint-ink); background: linear-gradient(135deg, var(--mint), var(--mint-strong)); }
+    html[data-theme="light"] .stat-card { background: linear-gradient(145deg, rgba(255, 255, 255, 0.94), rgba(242, 249, 246, 0.9)); }
+    html[data-theme="light"] th,
+    html[data-theme="light"] .drawer-head,
+    html[data-theme="light"] .form-footer { background: rgba(235, 244, 240, 0.94); }
+    html[data-theme="light"] .switch-track,
+    html[data-theme="light"] .provider-option span::before { background: #dfeae5; }
 
     .app-main { min-width: 0; grid-column: 1; padding: 0 34px 64px; }
     .topbar {
@@ -810,7 +923,7 @@
       <div class="login-story" aria-hidden="true">
         <div class="story-brand">
           <span class="boot-mark"></span>
-          <div><strong>MOTA / 智能体控制</strong><span>本地管理平面</span></div>
+          <div><strong data-i18n="brand.product">MOTA / 智能体控制</strong><span data-i18n="brand.plane">本地管理平面</span></div>
         </div>
         <div class="story-copy">
           <h1><span data-i18n="login.hero.h1a">管理运行中的</span><br><span data-i18n="login.hero.h1b">智能体网络。</span></h1>
@@ -852,16 +965,36 @@
     <aside class="sidebar" aria-label="控制台导航" data-i18n-aria="sidebar.label">
       <a class="sidebar-brand" href="#providers-section" aria-label="返回执行职能体" data-i18n-aria="sidebar.brand.label">
         <span class="brand-mark" aria-hidden="true"></span>
-        <span><strong>智能体控制台</strong><small>Copyright @ MoTA</small></span>
+        <span><strong data-i18n="brand.console">智能体控制台</strong><small>Copyright @ MoTA</small></span>
       </a>
       <nav class="side-nav">
-        <a class="active" href="#providers-section" data-nav-target="providers-section">执行职能体</a>
+        <a class="active" href="#providers-section" data-nav-target="providers-section" data-i18n="sidebar.nav.providers">执行职能体</a>
         <a href="#agents-section" data-nav-target="agents-section" data-i18n="sidebar.nav.agents">岗位职能体</a>
         <a href="#runs-section" data-nav-target="runs-section" data-i18n="sidebar.nav.runs">运行日志</a>
-        <a href="#audit-section" data-nav-target="audit-section">审计日志</a>
-        <a href="#users-section" data-nav-target="users-section" data-admin-only hidden>账号管理</a>
+        <a href="#audit-section" data-nav-target="audit-section" data-i18n="sidebar.nav.audit">审计日志</a>
+        <a href="#users-section" data-nav-target="users-section" data-admin-only hidden data-i18n="sidebar.nav.users">账号管理</a>
       </nav>
       <div class="sidebar-spacer"></div>
+      <div id="sidebar-preferences" class="sidebar-preferences" aria-label="界面偏好">
+        <div class="preference-row">
+          <span id="language-preference-label" class="preference-label">语言</span>
+          <span id="language-preference-options" class="preference-options" role="group" aria-label="语言">
+            <button class="preference-button" type="button" data-locale="zh" aria-pressed="true">中文</button>
+            <button class="preference-button" type="button" data-locale="en" aria-pressed="false">English</button>
+          </span>
+        </div>
+        <div class="preference-row">
+          <span id="theme-preference-label" class="preference-label">主题</span>
+          <span id="theme-preference-options" class="preference-options" role="group" aria-label="主题">
+            <button class="preference-button theme-icon" type="button" data-theme-option="light" aria-pressed="false" aria-label="浅色主题" title="浅色主题">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.5"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.65 17.65l1.42 1.42M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.65 6.35l1.42-1.42"></path></svg>
+            </button>
+            <button class="preference-button theme-icon" type="button" data-theme-option="dark" aria-pressed="true" aria-label="深色主题" title="深色主题">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 15.2A8.2 8.2 0 0 1 8.8 4 8.2 8.2 0 1 0 20 15.2Z"></path></svg>
+            </button>
+          </span>
+        </div>
+      </div>
       <div class="sidebar-status">
         <div class="network-line"><span id="network-dot" class="network-dot" aria-hidden="true"></span><span id="network-label" data-i18n="state.online">服务连接可用</span></div>
       </div>
@@ -874,13 +1007,13 @@
 
     <main id="main-content" class="app-main" tabindex="-1">
       <header class="topbar">
-        <a class="mobile-brand" href="#providers-section"><span class="brand-mark" aria-hidden="true"></span><span>智能体控制台</span></a>
-        <nav class="mobile-nav" aria-label="移动端导航">
-          <a class="active" href="#providers-section" data-nav-target="providers-section">执行器</a>
-          <a href="#agents-section" data-nav-target="agents-section">岗位</a>
-          <a href="#runs-section" data-nav-target="runs-section">运行</a>
-          <a href="#audit-section" data-nav-target="audit-section">审计</a>
-          <a href="#users-section" data-nav-target="users-section" data-admin-only hidden>账号</a>
+        <a class="mobile-brand" href="#providers-section"><span class="brand-mark" aria-hidden="true"></span><span data-i18n="brand.console">智能体控制台</span></a>
+        <nav class="mobile-nav" aria-label="移动端导航" data-i18n-aria="mobile.nav.label">
+          <a class="active" href="#providers-section" data-nav-target="providers-section" data-i18n="mobile.nav.providers">执行器</a>
+          <a href="#agents-section" data-nav-target="agents-section" data-i18n="mobile.nav.agents">岗位</a>
+          <a href="#runs-section" data-nav-target="runs-section" data-i18n="mobile.nav.runs">运行</a>
+          <a href="#audit-section" data-nav-target="audit-section" data-i18n="mobile.nav.audit">审计</a>
+          <a href="#users-section" data-nav-target="users-section" data-admin-only hidden data-i18n="mobile.nav.users">账号</a>
         </nav>
         <button id="mobile-logout-button" class="button ghost mobile-logout" type="button" aria-label="退出登录" data-i18n-aria="sidebar.logout.label" data-i18n="sidebar.logout">退出</button>
       </header>
@@ -890,16 +1023,16 @@
           <div class="section-head">
             <div class="section-title">
               <div class="provider-heading-row">
-                <h2 id="providers-title" class="page-title">执行职能体</h2>
-                <div id="provider-tabs" class="provider-tabs" role="tablist" aria-label="智能体类型">
-                  <button id="provider-tab-local" class="provider-tab" type="button" role="tab" aria-selected="true" aria-controls="providers-panel" tabindex="0" data-provider-category="local">本地系统</button>
-                  <button id="provider-tab-remote" class="provider-tab" type="button" role="tab" aria-selected="false" aria-controls="providers-panel" tabindex="-1" data-provider-category="remote">远端智能体</button>
+                <h2 id="providers-title" class="page-title" data-i18n="providers.title">执行职能体</h2>
+                <div id="provider-tabs" class="provider-tabs" role="tablist" aria-label="智能体类型" data-i18n-aria="providers.tabs.label">
+                  <button id="provider-tab-local" class="provider-tab" type="button" role="tab" aria-selected="true" aria-controls="providers-panel" tabindex="0" data-provider-category="local" data-i18n="providers.local">本地系统</button>
+                  <button id="provider-tab-remote" class="provider-tab" type="button" role="tab" aria-selected="false" aria-controls="providers-panel" tabindex="-1" data-provider-category="remote" data-i18n="providers.remote">远端智能体</button>
                 </div>
               </div>
-              <p>先配置本地或远端执行智能体，配置完成后才能分配给岗位。</p>
+              <p data-i18n="providers.desc">先配置本地或远端执行智能体，配置完成后才能分配给岗位。</p>
             </div>
             <div class="section-actions">
-              <button id="providers-refresh-button" class="button ghost" type="button">刷新状态</button>
+              <button id="providers-refresh-button" class="button ghost" type="button" data-i18n="providers.refresh">刷新状态</button>
             </div>
           </div>
           <div id="providers-panel" role="tabpanel" aria-labelledby="provider-tab-local" aria-live="polite" aria-busy="true" tabindex="0"></div>
@@ -916,28 +1049,28 @@
           <div class="agents-toolbar">
             <div id="agents-filters" class="agents-filters">
               <div class="runs-filter-group">
-                <span id="agents-role-filter-label" class="runs-filter-label">岗位</span>
+                <span id="agents-role-filter-label" class="runs-filter-label" data-i18n="agents.filter.role">岗位</span>
                 <div class="filter-select-wrap">
                   <select id="agents-role-filter" class="select" aria-labelledby="agents-role-filter-label">
-                    <option value="">全部</option>
+                    <option value="" data-i18n="common.all">全部</option>
                   </select>
                 </div>
               </div>
               <div class="runs-filter-group">
-                <span id="agents-executor-filter-label" class="runs-filter-label">执行器</span>
+                <span id="agents-executor-filter-label" class="runs-filter-label" data-i18n="agents.filter.executor">执行器</span>
                 <div class="filter-select-wrap">
                   <select id="agents-executor-filter" class="select" aria-labelledby="agents-executor-filter-label">
-                    <option value="">全部</option>
+                    <option value="" data-i18n="common.all">全部</option>
                   </select>
                 </div>
               </div>
               <div class="runs-filter-group">
-                <span id="agents-status-filter-label" class="runs-filter-label">状态</span>
+                <span id="agents-status-filter-label" class="runs-filter-label" data-i18n="agents.filter.status">状态</span>
                 <div class="filter-select-wrap">
                   <select id="agents-status-filter" class="select" aria-labelledby="agents-status-filter-label">
-                    <option value="">全部</option>
-                    <option value="enabled">已启用</option>
-                    <option value="disabled">已停用</option>
+                    <option value="" data-i18n="common.all">全部</option>
+                    <option value="enabled" data-i18n="common.enabled">已启用</option>
+                    <option value="disabled" data-i18n="common.disabled">已停用</option>
                   </select>
                 </div>
               </div>
@@ -959,10 +1092,10 @@
           <div class="runs-toolbar">
             <div class="runs-filters">
               <div class="runs-filter-group">
-                <span id="runs-role-filter-label" class="runs-filter-label">岗位</span>
+                <span id="runs-role-filter-label" class="runs-filter-label" data-i18n="agents.filter.role">岗位</span>
                 <div class="filter-select-wrap">
                   <select id="runs-role-filter" class="select" aria-labelledby="runs-role-filter-label">
-                    <option value="">全部</option>
+                    <option value="" data-i18n="common.all">全部</option>
                   </select>
                 </div>
               </div>
@@ -1008,28 +1141,28 @@
         <section id="audit-section" class="section" aria-labelledby="audit-title" hidden>
           <div class="section-head">
             <div class="section-title">
-              <h2 id="audit-title" class="page-title">审计日志</h2>
-              <p id="audit-scope-text">记录管理员登录、执行配置变更及岗位职能体的创建、修改和删除操作。</p>
+              <h2 id="audit-title" class="page-title" data-i18n="audit.title">审计日志</h2>
+              <p id="audit-scope-text" data-i18n="audit.desc">记录管理员登录、执行配置变更及岗位职能体的创建、修改和删除操作。</p>
             </div>
             <div class="section-actions">
-              <button id="audit-refresh-button" class="button ghost" type="button">刷新日志</button>
+              <button id="audit-refresh-button" class="button ghost" type="button" data-i18n="audit.refresh">刷新日志</button>
             </div>
           </div>
           <div class="agents-toolbar">
             <div id="audit-filters" class="agents-filters">
               <div class="runs-filter-group">
-                <span id="audit-user-filter-label" class="runs-filter-label">用户</span>
+                <span id="audit-user-filter-label" class="runs-filter-label" data-i18n="audit.filter.user">用户</span>
                 <div class="filter-select-wrap">
                   <select id="audit-user-filter" class="select" aria-labelledby="audit-user-filter-label">
-                    <option value="">全部</option>
+                    <option value="" data-i18n="common.all">全部</option>
                   </select>
                 </div>
               </div>
               <div class="runs-filter-group">
-                <span id="audit-action-filter-label" class="runs-filter-label">操作</span>
+                <span id="audit-action-filter-label" class="runs-filter-label" data-i18n="audit.filter.action">操作</span>
                 <div class="filter-select-wrap">
                   <select id="audit-action-filter" class="select" aria-labelledby="audit-action-filter-label">
-                    <option value="">全部</option>
+                    <option value="" data-i18n="common.all">全部</option>
                   </select>
                 </div>
               </div>
@@ -1041,33 +1174,33 @@
         <section id="users-section" class="section" aria-labelledby="users-title" data-admin-only hidden>
           <div class="section-head">
             <div class="section-title">
-              <h2 id="users-title" class="page-title">账号管理</h2>
-              <p>维护管理员与普通用户账号；系统始终保留至少一个可用管理员。</p>
+              <h2 id="users-title" class="page-title" data-i18n="users.title">账号管理</h2>
+              <p data-i18n="users.desc">维护管理员与普通用户账号；系统始终保留至少一个可用管理员。</p>
             </div>
             <div class="section-actions">
-              <button id="users-refresh-button" class="button ghost" type="button">刷新账号</button>
-              <button id="create-user-button" class="button primary" type="button">创建账号</button>
+              <button id="users-refresh-button" class="button ghost" type="button" data-i18n="users.refresh">刷新账号</button>
+              <button id="create-user-button" class="button primary" type="button" data-i18n="users.create">创建账号</button>
             </div>
           </div>
           <div class="agents-toolbar">
             <div id="users-filters" class="agents-filters">
               <div class="runs-filter-group">
-                <span id="users-role-filter-label" class="runs-filter-label">角色</span>
+                <span id="users-role-filter-label" class="runs-filter-label" data-i18n="users.filter.role">角色</span>
                 <div class="filter-select-wrap">
                   <select id="users-role-filter" class="select" aria-labelledby="users-role-filter-label">
-                    <option value="">全部</option>
+                    <option value="" data-i18n="common.all">全部</option>
                     <option value="admin">admin</option>
                     <option value="user">user</option>
                   </select>
                 </div>
               </div>
               <div class="runs-filter-group">
-                <span id="users-status-filter-label" class="runs-filter-label">状态</span>
+                <span id="users-status-filter-label" class="runs-filter-label" data-i18n="users.filter.status">状态</span>
                 <div class="filter-select-wrap">
                   <select id="users-status-filter" class="select" aria-labelledby="users-status-filter-label">
-                    <option value="">全部</option>
-                    <option value="enabled">已启用</option>
-                    <option value="disabled">已停用</option>
+                    <option value="" data-i18n="common.all">全部</option>
+                    <option value="enabled" data-i18n="common.enabled">已启用</option>
+                    <option value="disabled" data-i18n="common.disabled">已停用</option>
                   </select>
                 </div>
               </div>
@@ -1083,36 +1216,36 @@
     <div class="drawer-backdrop" data-close-user></div>
     <section id="user-drawer" class="drawer" role="dialog" aria-modal="true" aria-labelledby="user-drawer-title" tabindex="-1">
       <header class="drawer-head">
-        <div><h2 id="user-drawer-title">创建账号</h2></div>
-        <button class="button ghost drawer-close" type="button" data-close-user aria-label="关闭账号表单">关闭</button>
+        <div><h2 id="user-drawer-title" data-i18n="users.create">创建账号</h2></div>
+        <button class="button ghost drawer-close" type="button" data-close-user aria-label="关闭账号表单" data-i18n-aria="users.drawer.close" data-i18n="common.close">关闭</button>
       </header>
       <form id="user-form" class="agent-form">
         <div class="form-scroll">
           <div id="user-form-error" class="form-error" role="alert" hidden></div>
           <section class="form-section" aria-labelledby="user-basic-title">
-            <div class="form-section-head"><h3 id="user-basic-title">账号信息</h3><p>管理员可以管理账号并查看全部审计；普通用户只能查看自己的审计。</p></div>
+            <div class="form-section-head"><h3 id="user-basic-title" data-i18n="users.basic.title">账号信息</h3><p data-i18n="users.basic.desc">管理员可以管理账号并查看全部审计；普通用户只能查看自己的审计。</p></div>
             <div class="form-grid">
               <div class="field span-2">
-                <label for="user-username">用户名 <span class="required" aria-hidden="true">*</span></label>
+                <label for="user-username"><span data-i18n="users.username">用户名</span> <span class="required" aria-hidden="true">*</span></label>
                 <input id="user-username" class="input mono" name="username" type="text" required minlength="2" maxlength="64" pattern="[A-Za-z0-9._-]+" autocomplete="off" spellcheck="false" placeholder="operator-01">
-                <p class="field-help">2–64 位字母、数字、点、下划线或连字符；创建后不可修改。</p>
+                <p class="field-help" data-i18n="users.username.help">2–64 位字母、数字、点、下划线或连字符；创建后不可修改。</p>
               </div>
               <div class="field">
-                <label for="user-role">角色</label>
+                <label for="user-role" data-i18n="users.role">角色</label>
                 <select id="user-role" class="select" name="role">
-                  <option value="user">user · 普通用户</option>
-                  <option value="admin">admin · 管理员</option>
+                  <option value="user" data-i18n="users.role.user">user · 普通用户</option>
+                  <option value="admin" data-i18n="users.role.admin">admin · 管理员</option>
                 </select>
               </div>
               <div class="field">
-                <label for="user-password">密码 <span id="user-password-required" class="required" aria-hidden="true">*</span></label>
-                <input id="user-password" class="input mono" name="password" type="password" minlength="12" maxlength="512" autocomplete="new-password" placeholder="至少 12 个字符">
+                <label for="user-password"><span data-i18n="users.password">密码</span> <span id="user-password-required" class="required" aria-hidden="true">*</span></label>
+                <input id="user-password" class="input mono" name="password" type="password" minlength="12" maxlength="512" autocomplete="new-password" placeholder="至少 12 个字符" data-i18n-placeholder="users.password.placeholder">
                 <p id="user-password-help" class="field-help" hidden></p>
               </div>
               <div id="user-enabled-field" class="field span-2" hidden>
                 <div class="switch-row">
-                  <div class="switch-copy"><strong id="user-enabled-label">账号已启用</strong><span>停用后现有会话立即失效</span></div>
-                  <label class="switch" aria-label="账号启用状态">
+                  <div class="switch-copy"><strong id="user-enabled-label" data-i18n="users.enabled">账号已启用</strong><span data-i18n="users.enabled.desc">停用后现有会话立即失效</span></div>
+                  <label class="switch" aria-label="账号启用状态" data-i18n-aria="users.enabled.label">
                     <input id="user-enabled" name="enabled" type="checkbox" checked aria-labelledby="user-enabled-label">
                     <span class="switch-track"><span class="switch-thumb"></span></span>
                   </label>
@@ -1122,10 +1255,10 @@
           </section>
         </div>
         <footer class="form-footer">
-          <span class="form-footer-note">角色与账号变更会写入审计日志</span>
+          <span class="form-footer-note" data-i18n="users.footer.note">角色与账号变更会写入审计日志</span>
           <div class="form-footer-actions">
-            <button class="button ghost" type="button" data-close-user>取消</button>
-            <button id="save-user-button" class="button primary" type="submit">创建账号</button>
+            <button class="button ghost" type="button" data-close-user data-i18n="common.cancel">取消</button>
+            <button id="save-user-button" class="button primary" type="submit" data-i18n="users.create">创建账号</button>
           </div>
         </footer>
       </form>
@@ -1160,10 +1293,11 @@
 
           <section class="form-section" aria-labelledby="basic-section-title">
             <div class="form-section-head"><h3 id="basic-section-title" data-i18n="drawer.basic.title">基础信息</h3><p data-i18n="drawer.basic.desc">定义稳定路由标识、展示信息与执行器类型。</p></div>
-            <div class="form-grid">
+            <!-- Slug / 名称 / 执行器 三列同行 -->
+            <div class="form-grid" style="grid-template-columns: repeat(3, 1fr);">
               <div class="field">
-                <label for="agent-slug">Slug <span class="required" aria-hidden="true">*</span></label>
-                <input id="agent-slug" class="input mono" name="slug" type="text" required minlength="2" maxlength="64" pattern="[a-z0-9](?:[a-z0-9\-]{0,62}[a-z0-9])?" autocapitalize="none" spellcheck="false" placeholder="2–64 位小写字母、数字或单个连字符；创建后不可修改">
+                <label for="agent-slug"><span data-i18n="drawer.slug.label">标识</span> <span class="required" aria-hidden="true">*</span></label>
+                <input id="agent-slug" class="input mono" name="slug" type="text" required minlength="2" maxlength="64" pattern="[a-z0-9](?:[a-z0-9\-]{0,62}[a-z0-9])?" autocapitalize="none" spellcheck="false" placeholder="2–64 位小写字母、数字或连字符" data-i18n-placeholder="drawer.slug.placeholder">
               </div>
               <div class="field">
                 <label for="agent-name"><span data-i18n="drawer.name.label">名称</span> <span class="required" aria-hidden="true">*</span></label>
@@ -1180,76 +1314,24 @@
                   <option value="openhands">OpenHands</option>
                   <option value="reasonix">Reasonix</option>
                   <option value="claude_code">Claude Code</option>
-                  <option value="openai_agent">OpenAI 托管智能体</option>
-                  <option value="claude_managed_agent">Claude 托管智能体</option>
-                </select>
-              </div>
-              <div id="agent-execution-mode-field" class="field">
-                <label id="agent-execution-mode-label" for="agent-execution-mode">执行位置</label>
-                <select id="agent-execution-mode" class="select agent-execution-select" name="execution_mode">
-                  <option id="agent-execution-gateway-option" value="gateway">远端网关（默认）</option>
-                  <option id="agent-execution-local-option" value="local">本机 Local</option>
-                  <option id="agent-execution-managed-option" value="managed">OpenAI 托管</option>
-                </select>
-              </div>
-              <div class="field">
-                <label for="agent-claude-model" data-i18n="drawer.model.label">模型选择</label>
-                <select id="agent-claude-model" class="select" name="claude_model">
-                  <option value="">留空（服务端默认）</option>
-                  <optgroup label="Claude">
-                    <option value="claude-opus-5">claude-opus-5</option>
-                    <option value="claude-opus-4-8">claude-opus-4-8</option>
-                    <option value="claude-sonnet-5">claude-sonnet-5</option>
-                    <option value="claude-opus5">claude-opus5</option>
-                    <option value="claude-opus4.8">claude-opus4.8</option>
-                    <option value="claude-sonnet5">claude-sonnet5</option>
-                  </optgroup>
-                  <optgroup label="DeepSeek">
-                    <option value="deepseek-v4-pro">deepseek-v4-pro</option>
-                    <option value="deepseek-v4-flash">deepseek-v4-flash</option>
-                  </optgroup>
-                  <optgroup label="GLM">
-                    <option value="glm5.2">glm5.2</option>
-                    <option value="glm5.3">glm5.3</option>
-                  </optgroup>
-                  <optgroup label="GPT">
-                    <option value="gpt-6-astra">gpt-6-astra</option>
-                    <option value="gpt-5.6-sol">gpt-5.6-sol</option>
-                    <option value="gpt-5.6-luna">gpt-5.6-luna</option>
-                    <option value="gpt-5.6-terra">gpt-5.6-terra</option>
-                    <option value="gpt5.6-sol">gpt5.6-sol</option>
-                    <option value="gpt5.6-luna">gpt5.6-luna</option>
-                    <option value="gpt5.6-terra">gpt5.6-terra</option>
-                  </optgroup>
-                  <optgroup label="Kimi">
-                    <option value="kimi-k3">kimi-k3</option>
-                  </optgroup>
-                  <optgroup label="Qwen">
-                    <option value="qwen3.7-max">qwen3.7-max</option>
-                    <option value="qwen3.8-max">qwen3.8-max</option>
-                    <option value="qwen3.6-plus">qwen3.6-plus</option>
-                  </optgroup>
-                </select>
-              </div>
-              <div class="field">
-                <label for="agent-permission-mode" data-i18n="drawer.permission.label">权限模式</label>
-                <select id="agent-permission-mode" class="select" name="permission_mode">
-                  <option value="dontAsk">dontAsk</option>
-                  <option value="plan">plan</option>
-                  <option value="acceptEdits">acceptEdits</option>
-                  <option value="manual">manual</option>
+                  <option value="openai_agent" data-i18n="drawer.executor.openai">OpenAI 托管智能体</option>
+                  <option value="claude_managed_agent" data-i18n="drawer.executor.claude">Claude 托管智能体</option>
                 </select>
               </div>
             </div>
+            <!-- hidden fields kept for backend compatibility -->
+            <input id="agent-execution-mode" name="execution_mode" type="hidden" value="gateway">
+            <input id="agent-claude-model" name="claude_model" type="hidden" value="">
+            <input id="agent-permission-mode" name="permission_mode" type="hidden" value="dontAsk">
           </section>
 
           <section class="form-section" aria-labelledby="security-section-title">
             <div class="form-section-head"><h3 id="security-section-title" data-i18n="drawer.security.title">签名与密钥</h3><p data-i18n="drawer.security.desc">已保存的密钥不会回显。编辑时保持空白即可沿用当前值。</p></div>
             <div class="form-grid">
               <div class="field span-2">
-                <label for="agent-signing-secret">签名密钥 <span id="secret-required-mark" class="required" aria-hidden="true">*</span></label>
+                <label for="agent-signing-secret"><span data-i18n="drawer.secret.label">签名密钥</span> <span id="secret-required-mark" class="required" aria-hidden="true">*</span></label>
                 <div class="input-group">
-                  <input id="agent-signing-secret" class="input mono" name="signing_secret" type="password" maxlength="512" autocomplete="new-password" autocapitalize="none" spellcheck="false" placeholder="创建时必填；至少 16 个字符">
+                  <input id="agent-signing-secret" class="input mono" name="signing_secret" type="password" maxlength="512" autocomplete="new-password" autocapitalize="none" spellcheck="false" placeholder="创建时必填；至少 16 个字符" data-i18n-placeholder="drawer.secret.placeholder">
                   <button id="toggle-secret-button" class="button ghost" type="button" aria-label="显示签名密钥" aria-pressed="false" data-i18n-aria="drawer.secret.toggle.label" data-i18n="drawer.secret.toggle">显示</button>
                 </div>
                 <div class="secret-actions">
@@ -1264,17 +1346,17 @@
             <div class="form-section-head"><h3 id="runtime-section-title" data-i18n="drawer.runtime.title">岗位配置</h3><p data-i18n="drawer.runtime.desc">设置岗位提示词。</p></div>
             <div class="form-grid">
               <div class="field span-2">
-                <label for="agent-system-prompt">提示词（岗位）</label>
+                <label for="agent-system-prompt" data-i18n="drawer.prompt.label">提示词（岗位）</label>
                 <select id="agent-system-prompt" class="select" name="system_prompt">
-                  <option value="fundamental_analyst">基本面分析师</option>
-                  <option value="technical_analyst">技术分析师</option>
-                  <option value="strategist">策略分析师</option>
-                  <option value="risk_manager">风控经理</option>
-                  <option value="execution_trader">执行交易员</option>
-                  <option value="portfolio_manager">组合经理</option>
-                  <option id="custom-prompt-option" value="" hidden>自定义（已保存）</option>
+                  <option value="fundamental_analyst" data-i18n="drawer.prompt.fundamental">基本面分析师</option>
+                  <option value="technical_analyst" data-i18n="drawer.prompt.technical">技术分析师</option>
+                  <option value="strategist" data-i18n="drawer.prompt.strategist">策略分析师</option>
+                  <option value="risk_manager" data-i18n="drawer.prompt.risk">风控经理</option>
+                  <option value="execution_trader" data-i18n="drawer.prompt.execution">执行交易员</option>
+                  <option value="portfolio_manager" data-i18n="drawer.prompt.portfolio">组合经理</option>
+                  <option id="custom-prompt-option" value="" hidden data-i18n="drawer.prompt.custom">自定义（已保存）</option>
                 </select>
-                <p class="field-help">提示词由服务端预置（对齐评测 schema），仅可选择，不可编辑。</p>
+                <p class="field-help" data-i18n="drawer.prompt.help">提示词由服务端预置（对齐评测 schema），仅可选择，不可编辑。</p>
               </div>
             </div>
           </section>
@@ -1314,9 +1396,9 @@
     <section id="provider-drawer" class="drawer" role="dialog" aria-modal="true" aria-labelledby="provider-drawer-title" tabindex="-1">
       <header class="drawer-head">
         <div>
-          <h2 id="provider-drawer-title">配置智能体</h2>
+          <h2 id="provider-drawer-title" data-i18n="providers.drawer.title">配置智能体</h2>
         </div>
-        <button class="button ghost drawer-close" type="button" data-close-provider aria-label="关闭智能体配置">关闭</button>
+        <button class="button ghost drawer-close" type="button" data-close-provider aria-label="关闭智能体配置" data-i18n-aria="providers.drawer.close" data-i18n="common.close">关闭</button>
       </header>
       <form id="provider-form" class="agent-form">
         <div class="form-scroll">
@@ -1324,10 +1406,10 @@
           <div id="provider-form-fields" class="provider-form-fields"></div>
         </div>
         <footer class="form-footer">
-          <span class="form-footer-note">Secret 留空表示保留；保存后立即对新任务生效</span>
+          <span class="form-footer-note" data-i18n="providers.drawer.note">Secret 留空表示保留；保存后立即对新任务生效</span>
           <div class="form-footer-actions">
-            <button class="button ghost" type="button" data-close-provider>取消</button>
-            <button id="save-provider-button" class="button primary" type="submit">保存配置</button>
+            <button class="button ghost" type="button" data-close-provider data-i18n="common.cancel">取消</button>
+            <button id="save-provider-button" class="button primary" type="submit" data-i18n="providers.drawer.save">保存配置</button>
           </div>
         </footer>
       </form>
@@ -1362,8 +1444,8 @@
       <h2 id="run-payload-title" data-i18n="runPayload.title">运行详情</h2>
       <pre id="run-payload-content" class="payload-json"></pre>
       <div class="modal-actions">
-        <button id="copy-run-payload-button" class="button ghost" type="button">复制完整 JSON</button>
-        <button class="button ghost" type="button" data-close-run-payload data-i18n="delete.cancel">关闭</button>
+        <button id="copy-run-payload-button" class="button ghost" type="button" data-i18n="runPayload.copy">复制完整 JSON</button>
+        <button class="button ghost" type="button" data-close-run-payload data-i18n="common.close">关闭</button>
       </div>
     </section>
   </div>
@@ -1372,11 +1454,11 @@
     <div class="modal-backdrop" data-close-audit-detail></div>
     <section id="audit-detail-modal" class="modal-card payload-card" role="dialog" aria-modal="true" aria-labelledby="audit-detail-title" tabindex="-1">
       <div class="danger-label">AUDIT JSON</div>
-      <h2 id="audit-detail-title">审计详情</h2>
+      <h2 id="audit-detail-title" data-i18n="audit.detail.title">审计详情</h2>
       <pre id="audit-detail-content" class="payload-json"></pre>
       <div class="modal-actions">
-        <button id="copy-audit-detail-button" class="button ghost" type="button">复制 JSON</button>
-        <button class="button ghost" type="button" data-close-audit-detail>关闭</button>
+        <button id="copy-audit-detail-button" class="button ghost" type="button" data-i18n="audit.copy">复制 JSON</button>
+        <button class="button ghost" type="button" data-close-audit-detail data-i18n="common.close">关闭</button>
       </div>
     </section>
   </div>
@@ -1389,9 +1471,341 @@
 
       // ---------- i18n ----------
       const I18N = {
-        zh: {"title.page": "MOTA智能体控制台", "skip.main": "跳到主要内容", "boot.checking": "正在确认管理会话", "login.hero.eyebrow": "安全运维工作区", "login.hero.h1a": "管理运行中的", "login.hero.h1b": "智能体网络。", "login.hero.desc": "在一个清晰、安全的控制面中配置路由、执行策略与容量边界，并持续掌握最近运行状态。", "login.metric.session": "HttpOnly 会话", "login.metric.csrf": "写操作保护", "login.metric.secrets": "只显示脱敏提示", "login.panel.eyebrow": "管理员访问", "login.title": "登录控制台", "login.intro": "使用管理员凭据继续。会话凭据仅由服务器 Cookie 管理。", "login.retry": "重新检查会话", "login.username": "用户名", "login.password": "密码", "login.submit": "安全登录", "login.meta": "凭据仅发送至同源管理服务，不写入本地存储", "sidebar.label": "控制台导航", "sidebar.brand.label": "返回控制台概览", "sidebar.nav.workspace": "工作区", "sidebar.nav.overview": "运行概览", "sidebar.nav.agents": "岗位职能体", "sidebar.nav.runs": "运行日志", "sidebar.status.online": "服务连接可用", "sidebar.session": "会话有效", "sidebar.logout.label": "退出登录", "sidebar.logout": "退出", "topbar.title.sub": "管理控制台", "topbar.title": "智能体控制台", "topbar.sync.none": "尚未同步", "topbar.refresh": "刷新数据", "topbar.create": "创建智能体", "topbar.lang.label": "切换语言", "overview.eyebrow": "运行快照", "overview.title": "智能体运行概览", "overview.desc": "集中管理智能体路由、执行配置、并发容量与最近 50 条运行记录。", "overview.signal.label": "控制面状态", "overview.signal.title": "控制面", "overview.signal.auth": "会话已认证", "overview.stats.label": "关键指标", "overview.stat.total": "智能体总数", "overview.stat.total.foot": "已注册路由", "overview.stat.enabled": "已启用", "overview.stat.enabled.foot": "可接收请求", "overview.stat.running": "执行中", "overview.stat.running.foot": "最近运行窗口", "overview.stat.failed": "异常运行", "overview.stat.failed.foot": "最近 50 条记录", "agents.eyebrow": "注册表 / 路由", "agents.title": "岗位职能体", "agents.desc": "路由与执行配置的当前发布版本。", "agents.reload": "重新加载", "agents.new": "新建配置", "runs.eyebrow": "最近活动", "runs.title": "运行日志", "runs.desc": "按创建时间倒序显示最近 50 条执行记录。", "runs.reload": "重新加载", "drawer.eyebrow": "创建配置", "drawer.title.create": "创建智能体", "drawer.close": "关闭", "drawer.close.label": "关闭智能体表单", "drawer.basic.title": "基础信息", "drawer.basic.desc": "定义稳定路由标识、展示信息与执行器类型。", "drawer.name.label": "名称", "drawer.name.placeholder": "最多 30 字符", "drawer.executor.label": "执行器", "drawer.status.label": "运行状态", "drawer.status.desc": "允许该路由接收请求", "drawer.security.title": "签名与密钥", "drawer.security.desc": "已保存的密钥不会回显。编辑时保持空白即可沿用当前值。", "drawer.secret.toggle": "显示", "drawer.secret.toggle.label": "显示签名密钥", "drawer.secret.help.create": "创建时必填。首尾空白会作为密钥内容原样保留；仅可复制当前输入或刚生成、尚未保存的签名密钥。", "drawer.secret.generate": "安全生成", "drawer.secret.copy": "复制当前输入", "drawer.encoding.label": "签名编码", "drawer.runtime.title": "岗位配置", "drawer.runtime.desc": "设置岗位提示词。", "drawer.prompt.placeholder": "输入该智能体的系统指令", "drawer.workspace.label": "工作区路径", "drawer.workspace.help": "使用工作区根目录内的相对路径，不允许父级跳转。", "drawer.model.label": "模型选择", "drawer.model.placeholder": "留空使用服务端默认", "drawer.permission.label": "权限模式", "drawer.capacity.title": "容量与超时", "drawer.capacity.desc": "用有界并发和队列保护执行节点。", "drawer.timeout.label": "超时秒数", "drawer.concurrency.label": "最大并发", "drawer.queue.label": "队列容量", "drawer.footer.note": "保存后 revision 将由服务端更新", "drawer.cancel": "取消", "delete.label": "破坏性操作", "delete.title": "确认删除智能体", "delete.desc": "此操作无法在控制台中撤销。请核对目标并输入 slug 完成第二次确认。", "delete.confirm.html": "输入 <code id=\"delete-confirm-label\"></code> 以确认", "delete.cancel": "取消", "delete.confirm.btn": "永久删除", "agent.unnamed": "未命名智能体", "err.invalidFormat": "接口返回的 {key} 数据格式无效", "err.network": "无法连接管理服务，请检查网络后重试", "err.invalidJson": "服务返回了无法解析的数据", "err.httpStatus": "请求失败（HTTP {status}）", "err.missingData": "服务响应缺少 data 字段", "err.invalidSession": "会话响应缺少必要字段", "auth.expired": "会话已失效，请重新登录。", "auth.expiredToast": "会话已过期，已返回登录页", "state.sessionActive": "会话有效", "state.expiresMin": "{minutes} 分钟后到期", "state.expiresHour": "{hours} 小时内到期", "state.online": "服务连接可用", "state.offline": "浏览器当前离线", "toast.success": "操作成功", "toast.error": "请求失败", "toast.info": "提示", "toast.close": "关闭", "toast.close.label": "关闭通知", "agents.loadError": "智能体列表加载失败", "runs.loadError": "运行记录加载失败", "retry": "重试", "sync.refreshed": "智能体与运行记录已刷新", "sync.recent": "最近同步 {time}", "agent.enabled": "已启用", "agent.disabled": "已停用", "agents.empty.title": "还没有智能体", "agents.empty.desc": "创建第一个智能体后，动态路由和执行配置会显示在这里。", "agents.empty.action": "创建智能体", "agents.caption": "智能体注册表，包含路由、状态、执行器、容量和更新时间", "th.agent": "智能体", "th.public": "公开接口", "th.status": "状态", "th.executor": "执行器", "th.capacity": "容量", "th.updated": "最后更新", "th.execmode": "执行方式", "th.actions": "操作", "action.copyRoute": "复制路由 URL", "capacity.concurrent": "{n} 并发", "capacity.queue": "队列 {n}", "capacity.value": "{c} / {q}", "action.edit": "编辑", "action.delete": "删除", "detail.capacity": "并发 / 队列", "action.copyUrl": "复制 URL", "runs.empty.title": "暂无运行记录", "runs.caption": "最近 50 条智能体运行记录", "runs.filtered.title": "智能体的运行记录", "runs.showAll": "返回全部", "runs.refresh": "刷新", "runs.filterType": "接口类型", "runs.filterAgent": "智能体", "runs.filterStatus": "状态", "runs.successRate": "成功率", "runs.filterAll": "全部", "runs.filterSuccess": "成功", "runs.filterFailed": "失败", "th.runId": "运行 ID", "th.version": "版本", "th.duration": "耗时", "th.errorCode": "错误码", "th.endpoint": "接口 URI", "th.responseCode": "响应码", "th.started": "开始时间", "th.finished": "完成时间", "th.input": "输入", "th.type": "接口类型", "th.output": "输出", "runs.viewPayload": "查看", "runs.runIdCopied": "运行 ID 已复制", "runPayload.title": "运行详情", "copy.empty": "没有可复制的内容", "copy.denied": "浏览器拒绝了复制操作", "agents.stale": "智能体数据已变化，请刷新后重试", "copy.routeOk": "路由 URL 已复制", "copy.failed": "复制失败，请手动选择 URL", "secret.help.edit": "当前签名密钥提示：{hint}。留空表示不修改；首尾空白会原样保留。", "secret.help.none": "已保存的签名密钥不会回显；留空表示不修改，首尾空白会原样保留。", "drawer.title.edit": "编辑 {name}", "drawer.save.update": "保存更改", "valid.slug": "Slug 必须为 2–64 位小写字母或数字，可用单个连字符分隔", "valid.workspace": "工作区必须是根目录内的相对路径，且不能包含父级跳转", "valid.secretRequired": "创建智能体时必须填写签名密钥", "valid.secretLength": "签名密钥必须为 16–512 字节", "valid.tools": "工具最多 64 项，且每项不能超过 200 字节", "save.updated": "智能体配置已更新", "save.created": "智能体已创建", "delete.ok": "智能体“{name}”已删除", "session.checkFailed": "无法确认现有会话：{msg}", "login.ok": "登录成功，控制台数据正在同步", "login.badCredentials": "用户名或密码不正确。", "logout.ok": "已安全退出管理会话", "logout.failed": "退出未完成：{msg}。当前会话仍保持登录，可再次尝试。", "rng.unsupported": "当前浏览器不支持安全随机数生成，请使用现代浏览器", "secret.generated": "已生成 256 位随机签名密钥，保存后将不再完整显示", "secret.toggle.show": "显示", "secret.toggle.hide": "隐藏", "secret.toggle.label": "{action}签名密钥", "secret.empty": "当前输入为空；已保存的签名密钥不会被读取或复制", "secret.copied": "当前未保存的签名密钥已复制", "copy.failed2": "复制失败", "online.restored": "网络连接已恢复", "offline.now": "浏览器已离线，数据操作将暂时失败"},
+        zh: {"title.page": "MOTA智能体控制台", "skip.main": "跳到主要内容", "boot.checking": "正在确认管理会话", "login.hero.eyebrow": "安全运维工作区", "login.hero.h1a": "管理运行中的", "login.hero.h1b": "智能体网络。", "login.hero.desc": "在一个清晰、安全的控制面中配置路由、执行策略与容量边界，并持续掌握最近运行状态。", "login.metric.session": "HttpOnly 会话", "login.metric.csrf": "写操作保护", "login.metric.secrets": "只显示脱敏提示", "login.panel.eyebrow": "管理员访问", "login.title": "登录控制台", "login.intro": "使用管理员凭据继续。会话凭据仅由服务器 Cookie 管理。", "login.retry": "重新检查会话", "login.username": "用户名", "login.password": "密码", "login.submit": "安全登录", "login.meta": "凭据仅发送至同源管理服务，不写入本地存储", "sidebar.label": "控制台导航", "sidebar.brand.label": "返回控制台概览", "sidebar.nav.workspace": "工作区", "sidebar.nav.overview": "运行概览", "sidebar.nav.agents": "岗位职能体", "sidebar.nav.runs": "运行日志", "sidebar.status.online": "服务连接可用", "sidebar.session": "会话有效", "sidebar.logout.label": "退出登录", "sidebar.logout": "退出", "topbar.title.sub": "管理控制台", "topbar.title": "智能体控制台", "topbar.sync.none": "尚未同步", "topbar.refresh": "刷新数据", "topbar.create": "创建智能体", "topbar.lang.label": "切换语言", "overview.eyebrow": "运行快照", "overview.title": "智能体运行概览", "overview.desc": "集中管理智能体路由、执行配置、并发容量与最近 50 条运行记录。", "overview.signal.label": "控制面状态", "overview.signal.title": "控制面", "overview.signal.auth": "会话已认证", "overview.stats.label": "关键指标", "overview.stat.total": "智能体总数", "overview.stat.total.foot": "已注册路由", "overview.stat.enabled": "已启用", "overview.stat.enabled.foot": "可接收请求", "overview.stat.running": "执行中", "overview.stat.running.foot": "最近运行窗口", "overview.stat.failed": "异常运行", "overview.stat.failed.foot": "最近 50 条记录", "agents.eyebrow": "注册表 / 路由", "agents.title": "岗位职能体", "agents.desc": "路由与执行配置的当前发布版本。", "agents.reload": "重新加载", "agents.new": "新建配置", "runs.eyebrow": "最近活动", "runs.title": "运行日志", "runs.desc": "按创建时间倒序显示最近 50 条执行记录。", "runs.reload": "重新加载", "drawer.eyebrow": "创建配置", "drawer.title.create": "创建智能体", "drawer.close": "关闭", "drawer.close.label": "关闭智能体表单", "drawer.basic.title": "基础信息", "drawer.basic.desc": "定义稳定路由标识、展示信息与执行器类型。", "drawer.name.label": "名称", "drawer.name.placeholder": "最多 30 字符", "drawer.executor.label": "执行器", "drawer.status.label": "运行状态", "drawer.status.desc": "允许该路由接收请求", "drawer.security.title": "签名与密钥", "drawer.security.desc": "已保存的密钥不会回显。编辑时保持空白即可沿用当前值。", "drawer.secret.toggle": "显示", "drawer.secret.toggle.label": "显示签名密钥", "drawer.secret.help.create": "创建时必填。首尾空白会作为密钥内容原样保留；仅可复制当前输入或刚生成、尚未保存的签名密钥。", "drawer.secret.generate": "安全生成", "drawer.secret.copy": "复制当前输入", "drawer.encoding.label": "签名编码", "drawer.runtime.title": "岗位配置", "drawer.runtime.desc": "设置岗位提示词。", "drawer.prompt.placeholder": "输入该智能体的系统指令", "drawer.workspace.label": "工作区路径", "drawer.workspace.help": "使用工作区根目录内的相对路径，不允许父级跳转。", "drawer.model.label": "模型选择", "drawer.model.placeholder": "留空使用服务端默认", "drawer.permission.label": "权限模式", "drawer.capacity.title": "容量与超时", "drawer.capacity.desc": "用有界并发和队列保护执行节点。", "drawer.timeout.label": "超时秒数", "drawer.concurrency.label": "最大并发", "drawer.queue.label": "队列容量", "drawer.footer.note": "保存后 revision 将由服务端更新", "drawer.cancel": "取消", "delete.label": "破坏性操作", "delete.title": "确认删除智能体", "delete.desc": "此操作无法在控制台中撤销。请核对目标并输入 slug 完成第二次确认。", "delete.confirm.html": "输入 <code id=\"delete-confirm-label\"></code> 以确认", "delete.cancel": "取消", "delete.confirm.btn": "永久删除", "agent.unnamed": "未命名智能体", "err.invalidFormat": "接口返回的 {key} 数据格式无效", "err.network": "无法连接管理服务，请检查网络后重试", "err.invalidJson": "服务返回了无法解析的数据", "err.httpStatus": "请求失败（HTTP {status}）", "err.missingData": "服务响应缺少 data 字段", "err.invalidSession": "会话响应缺少必要字段", "auth.expired": "会话已失效，请重新登录。", "auth.expiredToast": "会话已过期，已返回登录页", "state.sessionActive": "会话有效", "state.expiresMin": "{minutes} 分钟后到期", "state.expiresHour": "{hours} 小时内到期", "state.online": "服务连接可用", "state.offline": "浏览器当前离线", "toast.success": "操作成功", "toast.error": "请求失败", "toast.info": "提示", "toast.close": "关闭", "toast.close.label": "关闭通知", "agents.loadError": "智能体列表加载失败", "runs.loadError": "运行记录加载失败", "retry": "重试", "sync.refreshed": "智能体与运行记录已刷新", "sync.recent": "最近同步 {time}", "agent.enabled": "已启用", "agent.disabled": "已停用", "agents.empty.title": "还没有智能体", "agents.empty.desc": "创建第一个智能体后，动态路由和执行配置会显示在这里。", "agents.empty.action": "创建智能体", "agents.caption": "智能体注册表，包含路由、状态、执行器、容量和更新时间", "th.agent": "智能体", "th.public": "公开接口", "th.status": "状态", "th.executor": "执行器", "th.capacity": "容量", "th.updated": "最后更新", "th.execmode": "执行方式", "th.actions": "操作", "action.copyRoute": "复制路由 URL", "capacity.concurrent": "{n} 并发", "capacity.queue": "队列 {n}", "capacity.value": "{c} / {q}", "action.edit": "编辑", "action.delete": "删除", "detail.capacity": "并发 / 队列", "action.copyUrl": "复制 URL", "runs.empty.title": "暂无运行记录", "runs.caption": "最近 50 条智能体运行记录", "runs.filtered.title": "智能体的运行记录", "runs.showAll": "返回全部", "runs.refresh": "刷新", "runs.filterType": "接口类型", "runs.filterAgent": "智能体", "runs.filterStatus": "状态", "runs.successRate": "成功率", "runs.filterAll": "全部", "runs.filterSuccess": "成功", "runs.filterFailed": "失败", "th.runId": "运行 ID", "th.version": "版本", "th.duration": "耗时", "th.errorCode": "错误码", "th.endpoint": "接口 URI", "th.responseCode": "响应码", "th.started": "开始时间", "th.finished": "完成时间", "th.input": "输入", "th.type": "接口类型", "th.output": "输出", "runs.viewPayload": "查看", "runs.runIdCopied": "运行 ID 已复制", "runPayload.title": "运行详情", "copy.empty": "没有可复制的内容", "copy.denied": "浏览器拒绝了复制操作", "agents.stale": "智能体数据已变化，请刷新后重试", "copy.routeOk": "路由 URL 已复制", "copy.failed": "复制失败，请手动选择 URL", "secret.help.edit": "当前签名密钥提示：{hint}。留空表示不修改；首尾空白会原样保留。", "secret.help.none": "已保存的签名密钥不会回显；留空表示不修改，首尾空白会原样保留。", "drawer.title.edit": "编辑 {name}", "drawer.save.update": "保存更改", "valid.slug": "标识必须为 2–64 位小写字母或数字，可用单个连字符分隔", "valid.workspace": "工作区必须是根目录内的相对路径，且不能包含父级跳转", "valid.secretRequired": "创建智能体时必须填写签名密钥", "valid.secretLength": "签名密钥必须为 16–512 字节", "valid.tools": "工具最多 64 项，且每项不能超过 200 字节", "save.updated": "智能体配置已更新", "save.created": "智能体已创建", "delete.ok": "智能体“{name}”已删除", "session.checkFailed": "无法确认现有会话：{msg}", "login.ok": "登录成功，控制台数据正在同步", "login.badCredentials": "用户名或密码不正确。", "logout.ok": "已安全退出管理会话", "logout.failed": "退出未完成：{msg}。当前会话仍保持登录，可再次尝试。", "rng.unsupported": "当前浏览器不支持安全随机数生成，请使用现代浏览器", "secret.generated": "已生成 256 位随机签名密钥，保存后将不再完整显示", "secret.toggle.show": "显示", "secret.toggle.hide": "隐藏", "secret.toggle.label": "{action}签名密钥", "secret.empty": "当前输入为空；已保存的签名密钥不会被读取或复制", "secret.copied": "当前未保存的签名密钥已复制", "copy.failed2": "复制失败", "online.restored": "网络连接已恢复", "offline.now": "浏览器已离线，数据操作将暂时失败"},
         en: {"title.page": "MOTA Agent Console", "skip.main": "Skip to main content", "boot.checking": "Confirming session…", "login.hero.eyebrow": "Secure operations workspace", "login.hero.h1a": "Manage your", "login.hero.h1b": "Agent network.", "login.hero.desc": "Configure routes, execution policies and capacity bounds in one clear, secure control plane, and keep an eye on recent run status.", "login.metric.session": "HttpOnly session", "login.metric.csrf": "Write-op protection", "login.metric.secrets": "Secrets masked", "login.panel.eyebrow": "Administrator access", "login.title": "Console login", "login.intro": "Continue with your admin credentials. Session credentials are managed by server cookies only.", "login.retry": "Re-check session", "login.username": "Username", "login.password": "Password", "login.submit": "Sign in securely", "login.meta": "Credentials are sent only to the same-origin admin service and never stored locally.", "sidebar.label": "Console navigation", "sidebar.brand.label": "Back to console overview", "sidebar.nav.workspace": "Workspace", "sidebar.nav.overview": "Overview", "sidebar.nav.agents": "Role Agents", "sidebar.nav.runs": "Recent runs", "sidebar.status.online": "Service reachable", "sidebar.session": "Session active", "sidebar.logout.label": "Log out", "sidebar.logout": "Log out", "topbar.title.sub": "Management plane", "topbar.title": "Agent Console", "topbar.sync.none": "Not synced", "topbar.refresh": "Refresh", "topbar.create": "New Agent", "topbar.lang.label": "Switch language", "overview.eyebrow": "Operations snapshot", "overview.title": "Agent overview", "overview.desc": "Manage agent routes, execution config, concurrency capacity and the latest 50 run records in one place.", "overview.signal.label": "Control plane status", "overview.signal.title": "Control plane", "overview.signal.auth": "Authenticated", "overview.stats.label": "Key metrics", "overview.stat.total": "Total agents", "overview.stat.total.foot": "Registered routes", "overview.stat.enabled": "Enabled", "overview.stat.enabled.foot": "Accepting requests", "overview.stat.running": "Running", "overview.stat.running.foot": "Recent run window", "overview.stat.failed": "Failed", "overview.stat.failed.foot": "Last 50 runs", "agents.eyebrow": "Registry / routes", "agents.title": "Role Agents", "agents.desc": "Current published revision of routes and execution config.", "agents.reload": "Reload", "agents.new": "New config", "runs.eyebrow": "Recent activity", "runs.title": "Recent Runs", "runs.desc": "Latest 50 run records, newest first.", "runs.reload": "Reload", "drawer.eyebrow": "Create configuration", "drawer.title.create": "Create Agent", "drawer.close": "Close", "drawer.close.label": "Close agent form", "drawer.basic.title": "Basics", "drawer.basic.desc": "Define a stable route id, display information and executor type.", "drawer.name.label": "Name", "drawer.name.placeholder": "Up to 30 characters", "drawer.executor.label": "Executor", "drawer.status.label": "Runtime status", "drawer.status.desc": "Allow this route to accept requests", "drawer.security.title": "Signature & secrets", "drawer.security.desc": "Saved secrets are never echoed. Leave blank to keep the current value.", "drawer.secret.toggle": "Show", "drawer.secret.toggle.label": "Show Signing Secret", "drawer.secret.help.create": "Required on create. Leading/trailing whitespace is preserved as-is; only the current input or a freshly generated, unsaved secret can be copied.", "drawer.secret.generate": "Generate securely", "drawer.secret.copy": "Copy current input", "drawer.encoding.label": "Signature encoding", "drawer.runtime.title": "Runtime", "drawer.runtime.desc": "Set the role prompt.", "drawer.prompt.placeholder": "System instructions for this agent", "drawer.workspace.label": "Workspace path", "drawer.workspace.help": "Relative path inside the workspace root; parent traversal is not allowed.", "drawer.model.label": "Model selection", "drawer.model.placeholder": "Leave blank for server default", "drawer.permission.label": "Permission mode", "drawer.capacity.title": "Capacity & timeouts", "drawer.capacity.desc": "Bound concurrency and queue to protect executors.", "drawer.timeout.label": "Timeout (seconds)", "drawer.concurrency.label": "Max concurrency", "drawer.queue.label": "Queue capacity", "drawer.footer.note": "Revision will be updated by the server after saving.", "drawer.cancel": "Cancel", "delete.label": "Destructive operation", "delete.title": "Delete Agent?", "delete.desc": "This cannot be undone from the console. Review the target and type its slug to confirm.", "delete.confirm.html": "Type <code id=\"delete-confirm-label\"></code> to confirm", "delete.cancel": "Cancel", "delete.confirm.btn": "Delete permanently", "agent.unnamed": "Unnamed Agent", "err.invalidFormat": "Invalid data format for {key} in API response", "err.network": "Cannot reach the admin service. Check your network and retry.", "err.invalidJson": "Service returned unparsable data.", "err.httpStatus": "Request failed (HTTP {status})", "err.missingData": "Service response is missing the data field.", "err.invalidSession": "Session response is missing required fields.", "auth.expired": "Session expired. Please log in again.", "auth.expiredToast": "Session expired; returned to the login page.", "state.sessionActive": "Session active", "state.expiresMin": "expires in {minutes} min", "state.expiresHour": "expires in {hours} h", "state.online": "Service reachable", "state.offline": "Browser offline", "toast.success": "Success", "toast.error": "Request failed", "toast.info": "Info", "toast.close": "Close", "toast.close.label": "Dismiss notification", "agents.loadError": "Failed to load agents", "runs.loadError": "Failed to load runs", "retry": "Retry", "sync.refreshed": "Agents and runs refreshed", "sync.recent": "Synced {time}", "agent.enabled": "Enabled", "agent.disabled": "Disabled", "agents.empty.title": "No agents yet", "agents.empty.desc": "Dynamic routes and execution config will appear here after you create your first agent.", "agents.empty.action": "Create Agent", "agents.caption": "Agent registry with routes, status, executor, capacity and update time.", "th.agent": "Agent", "th.public": "Public endpoint", "th.status": "Status", "th.executor": "Executor", "th.capacity": "Capacity", "th.updated": "Updated", "th.execmode": "Execution mode", "th.actions": "Actions", "action.copyRoute": "Copy route URL", "capacity.concurrent": "{n} concurrent", "capacity.queue": "queue {n}", "capacity.value": "{c} / {q}", "action.edit": "Edit", "action.delete": "Delete", "detail.capacity": "Concurrency / queue", "action.copyUrl": "Copy URL", "runs.empty.title": "No runs yet", "runs.caption": "Latest 50 agent run records.", "runs.filtered.title": "Agent run records", "runs.showAll": "Show all runs", "runs.refresh": "Refresh", "runs.filterType": "Interface type", "runs.filterAgent": "Agent", "runs.filterStatus": "Status", "runs.successRate": "Success rate", "runs.filterAll": "All", "runs.filterSuccess": "Success", "runs.filterFailed": "Failed", "th.runId": "Run ID", "th.version": "Rev", "th.duration": "Duration", "th.errorCode": "Error code", "th.endpoint": "Endpoint", "th.responseCode": "Response code", "th.started": "Started", "th.finished": "Finished", "th.input": "Input", "th.type": "Interface type", "th.output": "Output", "runs.viewPayload": "View", "runs.runIdCopied": "Run ID copied", "runPayload.title": "Run details", "copy.empty": "Nothing to copy.", "copy.denied": "The browser denied the copy operation.", "agents.stale": "Agent data changed; refresh and retry.", "copy.routeOk": "Route URL copied.", "copy.failed": "Copy failed; select the URL manually.", "secret.help.edit": "Current key hint: {hint}. Leave blank to keep unchanged; leading/trailing whitespace is preserved.", "secret.help.none": "Saved secrets are never echoed; leave blank to keep unchanged. Leading/trailing whitespace is preserved.", "drawer.title.edit": "Edit {name}", "drawer.save.update": "Save changes", "valid.slug": "Slug must be 2–64 lowercase letters or digits, optionally separated by single hyphens.", "valid.workspace": "Workspace must be a relative path inside the root, without parent traversal.", "valid.secretRequired": "Signing Secret is required when creating an agent.", "valid.secretLength": "Signing Secret must be 16–512 bytes.", "valid.tools": "At most 64 tools, each up to 200 bytes.", "save.updated": "Agent configuration updated.", "save.created": "Agent created.", "delete.ok": "Agent “{name}” deleted.", "session.checkFailed": "Cannot confirm session: {msg}", "login.ok": "Logged in; syncing console data.", "login.badCredentials": "Incorrect username or password.", "logout.ok": "Securely logged out.", "logout.failed": "Logout incomplete: {msg}. The session is still active; try again.", "rng.unsupported": "This browser lacks secure random generation; use a modern browser.", "secret.generated": "Generated a 256-bit random secret; it will be masked after saving.", "secret.toggle.show": "Show", "secret.toggle.hide": "Hide", "secret.toggle.label": "{action} Signing Secret", "secret.empty": "Input is empty; the saved secret was not read or copied.", "secret.copied": "Unsaved secret copied.", "copy.failed2": "Copy failed.", "online.restored": "Network restored.", "offline.now": "Browser is offline; data operations will fail temporarily."}
       };
+      Object.assign(I18N.zh, {
+        "brand.product": "MOTA / 智能体控制",
+        "brand.plane": "本地管理平面",
+        "brand.console": "智能体控制台",
+        "sidebar.nav.providers": "执行职能体",
+        "sidebar.nav.audit": "审计日志",
+        "sidebar.nav.users": "账号管理",
+        "mobile.nav.label": "移动端导航",
+        "mobile.nav.providers": "执行器",
+        "mobile.nav.agents": "岗位",
+        "mobile.nav.runs": "运行",
+        "mobile.nav.audit": "审计",
+        "mobile.nav.users": "账号",
+        "providers.title": "执行职能体",
+        "providers.tabs.label": "智能体类型",
+        "providers.local": "本地系统",
+        "providers.remote": "远端智能体",
+        "providers.desc": "先配置本地或远端执行智能体，配置完成后才能分配给岗位。",
+        "providers.refresh": "刷新状态",
+        "providers.empty.local": "暂无本地系统",
+        "providers.empty.remote": "暂无远端智能体",
+        "providers.empty.desc": "当前类型下还没有可用的智能体。",
+        "providers.edit": "编辑配置",
+        "providers.setup": "开始配置",
+        "providers.available": "可用",
+        "providers.needsSetup": "待配置",
+        "providers.builtin": "内置",
+        "providers.loadError": "执行职能体加载失败",
+        "providers.drawer.title": "配置 {name}",
+        "providers.drawer.close": "关闭智能体配置",
+        "providers.drawer.note": "Secret 留空表示保留；保存后立即对新任务生效",
+        "providers.drawer.save": "保存配置",
+        "providers.secret.placeholder": "密钥加密保存，保存后不会回显。",
+        "providers.saved": "智能体配置已保存，可用于岗位创建。",
+        "common.all": "全部",
+        "common.close": "关闭",
+        "common.cancel": "取消",
+        "common.enabled": "已启用",
+        "common.disabled": "已停用",
+        "common.edit": "编辑",
+        "common.delete": "删除",
+        "common.clearFilters": "清除筛选",
+        "common.time": "时间",
+        "common.status": "状态",
+        "common.actions": "操作",
+        "agents.filter.role": "岗位",
+        "agents.filter.executor": "执行器",
+        "agents.filter.status": "状态",
+        "audit.title": "审计日志",
+        "audit.desc": "记录管理员登录、执行配置变更及岗位职能体的创建、修改和删除操作。",
+        "audit.scope.admin": "管理员可查看所有用户的登录、配置与账号操作记录。",
+        "audit.scope.user": "普通用户仅可查看自己的登录与操作记录。",
+        "audit.refresh": "刷新日志",
+        "audit.filter.user": "用户",
+        "audit.filter.action": "操作",
+        "audit.loadError": "审计日志加载失败",
+        "audit.empty.title": "暂无审计记录",
+        "audit.empty.desc": "用户执行管理操作后，记录会显示在这里。",
+        "audit.filtered.title": "没有符合条件的审计记录",
+        "audit.filtered.desc": "请调整用户或操作筛选条件。",
+        "audit.caption": "管理员用户操作审计日志",
+        "audit.column.user": "用户",
+        "audit.column.action": "操作",
+        "audit.column.target": "对象",
+        "audit.column.details": "详情",
+        "audit.details.view": "查看标准 JSON",
+        "audit.detail.title": "审计详情",
+        "audit.copy": "复制 JSON",
+        "audit.copied": "审计 JSON 已复制",
+        "audit.action.login": "登录成功",
+        "audit.action.loginFailed": "登录失败",
+        "audit.action.logout": "退出登录",
+        "audit.action.providerUpdate": "更新执行职能体",
+        "audit.action.agentCreate": "创建岗位职能体",
+        "audit.action.agentUpdate": "修改岗位职能体",
+        "audit.action.agentDelete": "删除岗位职能体",
+        "audit.action.userCreate": "创建账号",
+        "audit.action.userUpdate": "修改账号",
+        "audit.action.userDelete": "删除账号",
+        "users.title": "账号管理",
+        "users.desc": "维护管理员与普通用户账号；系统始终保留至少一个可用管理员。",
+        "users.refresh": "刷新账号",
+        "users.create": "创建账号",
+        "users.save": "保存账号",
+        "users.editTitle": "编辑账号 · {username}",
+        "users.loadError": "账号列表加载失败",
+        "users.filter.role": "角色",
+        "users.filter.status": "状态",
+        "users.drawer.close": "关闭账号表单",
+        "users.basic.title": "账号信息",
+        "users.basic.desc": "管理员可以管理账号并查看全部审计；普通用户只能查看自己的审计。",
+        "users.username": "用户名",
+        "users.username.help": "2–64 位字母、数字、点、下划线或连字符；创建后不可修改。",
+        "users.role": "角色",
+        "users.role.user": "user · 普通用户",
+        "users.role.admin": "admin · 管理员",
+        "users.password": "密码",
+        "users.password.placeholder": "至少 12 个字符",
+        "users.password.editHelp": "留空表示不修改密码；修改密码后该账号的现有会话立即失效。",
+        "users.enabled": "账号已启用",
+        "users.enabled.desc": "停用后现有会话立即失效",
+        "users.enabled.label": "账号启用状态",
+        "users.footer.note": "角色与账号变更会写入审计日志",
+        "users.password.changed": "密码已更新，请使用新密码重新登录。",
+        "users.updated": "账号已更新",
+        "users.created": "账号已创建",
+        "users.delete.confirm": "确认删除账号“{username}”？该账号的现有会话将立即失效。",
+        "users.deleted": "账号“{username}”已删除",
+        "users.empty.title": "暂无账号",
+        "users.empty.desc": "创建首个管理账号。",
+        "users.filtered.title": "没有符合条件的账号",
+        "users.filtered.desc": "请调整角色或状态筛选条件。",
+        "users.caption": "系统登录账号列表",
+        "users.column.username": "用户名",
+        "users.column.role": "角色",
+        "users.column.created": "创建时间",
+        "users.column.updated": "更新时间",
+        "drawer.slug.label": "标识",
+        "drawer.slug.placeholder": "2–64 位小写字母、数字或连字符",
+        "drawer.secret.label": "签名密钥",
+        "drawer.secret.placeholder": "创建时必填；至少 16 个字符",
+        "drawer.prompt.label": "提示词（岗位）",
+        "drawer.prompt.fundamental": "基本面分析师",
+        "drawer.prompt.technical": "技术分析师",
+        "drawer.prompt.strategist": "策略分析师",
+        "drawer.prompt.risk": "风控经理",
+        "drawer.prompt.execution": "执行交易员",
+        "drawer.prompt.portfolio": "组合经理",
+        "drawer.prompt.custom": "自定义（已保存）",
+        "drawer.prompt.help": "提示词由服务端预置（对齐评测 schema），仅可选择，不可编辑。",
+        "drawer.executor.openai": "OpenAI 托管智能体",
+        "drawer.executor.claude": "Claude 托管智能体",
+        "drawer.noProvider": "请先在执行职能体配置至少一个可用执行器。",
+        "runPayload.copy": "复制完整 JSON",
+        "runPayload.copied": "完整 JSON 已复制",
+        "api.invalid_provider_config": "执行职能体配置格式不正确",
+        "api.provider_update_failed": "执行职能体配置更新失败",
+        "api.invalid_request": "请求格式不正确",
+        "api.invalid_credentials": "用户名或密码不正确",
+        "api.login_rate_limited": "登录尝试过于频繁，请稍后重试",
+        "api.login_unavailable": "登录服务暂时不可用",
+        "api.logout_unavailable": "退出登录失败，请重试",
+        "api.invalid_user": "账号格式不正确",
+        "api.invalid_username": "用户名需为 2–64 位字母、数字、点、下划线或连字符",
+        "api.invalid_password": "密码需为 12–512 个字符，且不能使用不安全的默认值",
+        "api.username_exists": "用户名已存在",
+        "api.user_not_found": "账号不存在",
+        "api.cannot_demote_self": "不能降级或停用当前登录账号",
+        "api.last_admin_required": "系统必须保留至少一个已启用的管理员",
+        "api.cannot_delete_self": "不能删除当前登录账号",
+        "api.agent_not_found": "智能体不存在",
+        "api.invalid_agent_config": "智能体配置格式不正确，请检查输入",
+        "api.slug_exists": "该标识已被其他智能体使用",
+        "api.executor_provider_not_configured": "请先完成对应执行职能体配置",
+        "api.invalid_execution_mode": "所选执行器不支持当前执行模式",
+        "api.openai_agent_executor_disabled": "OpenAI Agents API 执行器尚未启用",
+        "api.claude_managed_executor_disabled": "Claude Managed Agents 执行器尚未启用",
+        "api.interactive_permission_mode_unsupported": "当前托管执行器不支持交互式工具确认",
+        "api.claude_executor_disabled": "Claude Code 本地执行器尚未启用",
+        "api.invalid_workspace": "工作区不存在、不可访问或超出配置根目录",
+        "api.authentication_required": "管理会话不存在或已过期",
+        "api.session_unavailable": "管理会话服务暂时不可用",
+        "api.invalid_csrf_token": "安全令牌缺失或无效，请刷新后重试",
+        "api.admin_required": "此操作仅管理员可用",
+        "api.storage_unavailable": "平台数据暂时不可用"
+      });
+      Object.assign(I18N.en, {
+        "brand.product": "MOTA / Agent Control",
+        "brand.plane": "Local management plane",
+        "brand.console": "Agent Console",
+        "sidebar.nav.providers": "Execution Agents",
+        "sidebar.nav.audit": "Audit Log",
+        "sidebar.nav.users": "Account Management",
+        "mobile.nav.label": "Mobile navigation",
+        "mobile.nav.providers": "Executors",
+        "mobile.nav.agents": "Roles",
+        "mobile.nav.runs": "Runs",
+        "mobile.nav.audit": "Audit",
+        "mobile.nav.users": "Accounts",
+        "providers.title": "Execution Agents",
+        "providers.tabs.label": "Agent type",
+        "providers.local": "Local Systems",
+        "providers.remote": "Remote Agents",
+        "providers.desc": "Configure a local or remote execution agent before assigning it to a role.",
+        "providers.refresh": "Refresh status",
+        "providers.empty.local": "No local systems",
+        "providers.empty.remote": "No remote agents",
+        "providers.empty.desc": "No execution agents are available in this category yet.",
+        "providers.edit": "Edit config",
+        "providers.setup": "Configure",
+        "providers.available": "Available",
+        "providers.needsSetup": "Setup required",
+        "providers.builtin": "Built in",
+        "providers.loadError": "Failed to load execution agents",
+        "providers.drawer.title": "Configure {name}",
+        "providers.drawer.close": "Close agent configuration",
+        "providers.drawer.note": "Leave Secret blank to keep it; saved changes apply to new tasks immediately.",
+        "providers.drawer.save": "Save configuration",
+        "providers.secret.placeholder": "Secrets are encrypted and never shown after saving.",
+        "providers.saved": "Agent configuration saved and ready for role assignment.",
+        "common.all": "All",
+        "common.close": "Close",
+        "common.cancel": "Cancel",
+        "common.enabled": "Enabled",
+        "common.disabled": "Disabled",
+        "common.edit": "Edit",
+        "common.delete": "Delete",
+        "common.clearFilters": "Clear filters",
+        "common.time": "Time",
+        "common.status": "Status",
+        "common.actions": "Actions",
+        "agents.filter.role": "Role",
+        "agents.filter.executor": "Executor",
+        "agents.filter.status": "Status",
+        "audit.title": "Audit Log",
+        "audit.desc": "Tracks administrator sign-ins, execution configuration changes, and role-agent create, update, and delete operations.",
+        "audit.scope.admin": "Administrators can view sign-ins, configuration changes, and account operations for all users.",
+        "audit.scope.user": "Standard users can view only their own sign-ins and operations.",
+        "audit.refresh": "Refresh log",
+        "audit.filter.user": "User",
+        "audit.filter.action": "Action",
+        "audit.loadError": "Failed to load audit log",
+        "audit.empty.title": "No audit records",
+        "audit.empty.desc": "Management operations will appear here after users perform them.",
+        "audit.filtered.title": "No matching audit records",
+        "audit.filtered.desc": "Adjust the user or action filters.",
+        "audit.caption": "Administrator and user operation audit log",
+        "audit.column.user": "User",
+        "audit.column.action": "Action",
+        "audit.column.target": "Target",
+        "audit.column.details": "Details",
+        "audit.details.view": "View formatted JSON",
+        "audit.detail.title": "Audit details",
+        "audit.copy": "Copy JSON",
+        "audit.copied": "Audit JSON copied",
+        "audit.action.login": "Login succeeded",
+        "audit.action.loginFailed": "Login failed",
+        "audit.action.logout": "Logged out",
+        "audit.action.providerUpdate": "Updated execution agent",
+        "audit.action.agentCreate": "Created role agent",
+        "audit.action.agentUpdate": "Updated role agent",
+        "audit.action.agentDelete": "Deleted role agent",
+        "audit.action.userCreate": "Created account",
+        "audit.action.userUpdate": "Updated account",
+        "audit.action.userDelete": "Deleted account",
+        "users.title": "Account Management",
+        "users.desc": "Manage administrator and standard user accounts; at least one enabled administrator is always retained.",
+        "users.refresh": "Refresh accounts",
+        "users.create": "Create account",
+        "users.save": "Save account",
+        "users.editTitle": "Edit account · {username}",
+        "users.loadError": "Failed to load accounts",
+        "users.filter.role": "Role",
+        "users.filter.status": "Status",
+        "users.drawer.close": "Close account form",
+        "users.basic.title": "Account information",
+        "users.basic.desc": "Administrators can manage accounts and view all audits; standard users can view only their own audits.",
+        "users.username": "Username",
+        "users.username.help": "2–64 letters, numbers, dots, underscores, or hyphens; cannot be changed after creation.",
+        "users.role": "Role",
+        "users.role.user": "user · Standard user",
+        "users.role.admin": "admin · Administrator",
+        "users.password": "Password",
+        "users.password.placeholder": "At least 12 characters",
+        "users.password.editHelp": "Leave blank to keep the password; changing it immediately invalidates the account's existing sessions.",
+        "users.enabled": "Account enabled",
+        "users.enabled.desc": "Disabling immediately invalidates existing sessions",
+        "users.enabled.label": "Account enabled status",
+        "users.footer.note": "Role and account changes are written to the audit log",
+        "users.password.changed": "Password updated. Sign in again with the new password.",
+        "users.updated": "Account updated",
+        "users.created": "Account created",
+        "users.delete.confirm": "Delete account “{username}”? Its existing sessions will be invalidated immediately.",
+        "users.deleted": "Account “{username}” deleted",
+        "users.empty.title": "No accounts",
+        "users.empty.desc": "Create the first management account.",
+        "users.filtered.title": "No matching accounts",
+        "users.filtered.desc": "Adjust the role or status filters.",
+        "users.caption": "System login accounts",
+        "users.column.username": "Username",
+        "users.column.role": "Role",
+        "users.column.created": "Created",
+        "users.column.updated": "Updated",
+        "drawer.slug.label": "Slug",
+        "drawer.slug.placeholder": "2–64 lowercase letters, numbers, or hyphens",
+        "drawer.secret.label": "Signing Secret",
+        "drawer.secret.placeholder": "Required when creating; at least 16 characters",
+        "drawer.prompt.label": "Role prompt",
+        "drawer.prompt.fundamental": "Fundamental Analyst",
+        "drawer.prompt.technical": "Technical Analyst",
+        "drawer.prompt.strategist": "Strategist",
+        "drawer.prompt.risk": "Risk Manager",
+        "drawer.prompt.execution": "Execution Trader",
+        "drawer.prompt.portfolio": "Portfolio Manager",
+        "drawer.prompt.custom": "Custom (saved)",
+        "drawer.prompt.help": "Role prompts are server presets aligned with the evaluation schema; select one without editing it.",
+        "drawer.executor.openai": "OpenAI Managed Agent",
+        "drawer.executor.claude": "Claude Managed Agent",
+        "drawer.noProvider": "Configure at least one available executor under Execution Agents first.",
+        "runPayload.copy": "Copy complete JSON",
+        "runPayload.copied": "Complete JSON copied",
+        "api.invalid_provider_config": "The execution-agent configuration is invalid.",
+        "api.provider_update_failed": "Failed to update the execution-agent configuration.",
+        "api.invalid_request": "The request format is invalid.",
+        "api.invalid_credentials": "Incorrect username or password.",
+        "api.login_rate_limited": "Too many login attempts. Try again later.",
+        "api.login_unavailable": "The login service is temporarily unavailable.",
+        "api.logout_unavailable": "Logout failed. Please try again.",
+        "api.invalid_user": "The account data is invalid.",
+        "api.invalid_username": "Username must be 2–64 letters, numbers, dots, underscores, or hyphens.",
+        "api.invalid_password": "Password must be 12–512 characters and cannot use an unsafe default.",
+        "api.username_exists": "The username already exists.",
+        "api.user_not_found": "The account does not exist.",
+        "api.cannot_demote_self": "You cannot demote or disable the account you are currently using.",
+        "api.last_admin_required": "At least one enabled administrator must remain.",
+        "api.cannot_delete_self": "You cannot delete the account you are currently using.",
+        "api.agent_not_found": "The agent does not exist.",
+        "api.invalid_agent_config": "The agent configuration is invalid. Check the input and try again.",
+        "api.slug_exists": "That slug is already used by another agent.",
+        "api.executor_provider_not_configured": "Configure the corresponding execution agent first.",
+        "api.invalid_execution_mode": "The selected executor does not support this execution mode.",
+        "api.openai_agent_executor_disabled": "The OpenAI Agents API executor is not enabled.",
+        "api.claude_managed_executor_disabled": "The Claude Managed Agents executor is not enabled.",
+        "api.interactive_permission_mode_unsupported": "The selected managed executor does not support interactive tool confirmation.",
+        "api.claude_executor_disabled": "The local Claude Code executor is not enabled.",
+        "api.invalid_workspace": "The workspace is missing, inaccessible, or outside the configured root.",
+        "api.authentication_required": "The management session is missing or has expired.",
+        "api.session_unavailable": "The management session service is temporarily unavailable.",
+        "api.invalid_csrf_token": "The security token is missing or invalid. Refresh and try again.",
+        "api.admin_required": "This operation is available to administrators only.",
+        "api.storage_unavailable": "Platform data is temporarily unavailable."
+      });
       let lang = "zh";
       try { lang = localStorage.getItem("mota.admin.locale") || "zh"; } catch (e) {}
       if (lang !== "zh" && lang !== "en") lang = "zh";
@@ -1404,8 +1818,14 @@
         if (params) for (const k of Object.keys(params)) s = s.split("{" + k + "}").join(String(params[k]));
         return s;
       }
+      function localizedApiError(code, fallback) {
+        const key = "api." + code;
+        const localized = t(key);
+        return localized === key ? fallback : localized;
+      }
       function applyI18n() {
         const d = I18N[lang] || I18N.zh;
+        document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
         document.querySelectorAll("[data-i18n]").forEach((el) => {
           const k = el.getAttribute("data-i18n");
           if (d[k] !== undefined) el.textContent = d[k];
@@ -1429,15 +1849,50 @@
         if (d["title.page"] !== undefined) document.title = d["title.page"];
       }
       function setupLangToggle() {
-        const btn = document.getElementById("lang-toggle");
-        if (!btn) return;
-        btn.textContent = lang === "zh" ? "EN" : "中文";
-        btn.setAttribute("aria-label", lang === "zh" ? "English" : "中文");
-        btn.addEventListener("click", () => {
-          const next = lang === "zh" ? "en" : "zh";
-          try { localStorage.setItem("mota.admin.locale", next); } catch (e) {}
-          location.reload();
+        const container = document.getElementById("sidebar-preferences");
+        const label = document.getElementById("language-preference-label");
+        const options = document.getElementById("language-preference-options");
+        if (container) container.setAttribute("aria-label", lang === "zh" ? "界面偏好" : "Interface preferences");
+        if (label) label.textContent = lang === "zh" ? "语言" : "Language";
+        if (options) options.setAttribute("aria-label", label ? label.textContent : "Language");
+        document.querySelectorAll("[data-locale]").forEach((button) => {
+          const locale = button.dataset.locale;
+          button.setAttribute("aria-pressed", String(locale === lang));
+          button.addEventListener("click", () => {
+            if (locale === lang || (locale !== "zh" && locale !== "en")) return;
+            try { localStorage.setItem("mota.admin.locale", locale); } catch (e) {}
+            location.reload();
+          });
         });
+      }
+
+      function applyTheme(theme, persist = false) {
+        const next = theme === "light" ? "light" : "dark";
+        document.documentElement.dataset.theme = next;
+        document.querySelector('meta[name="color-scheme"]').setAttribute("content", next);
+        document.querySelector('meta[name="theme-color"]').setAttribute("content", next === "light" ? "#f4f8f6" : "#07110f");
+        document.querySelectorAll("[data-theme-option]").forEach((button) => {
+          button.setAttribute("aria-pressed", String(button.dataset.themeOption === next));
+        });
+        if (persist) {
+          try { localStorage.setItem("mota.admin.theme", next); } catch (e) {}
+        }
+      }
+
+      function setupThemeToggle() {
+        const label = document.getElementById("theme-preference-label");
+        const options = document.getElementById("theme-preference-options");
+        const isZh = lang === "zh";
+        if (label) label.textContent = isZh ? "主题" : "Theme";
+        if (options) options.setAttribute("aria-label", label ? label.textContent : "Theme");
+        document.querySelectorAll("[data-theme-option]").forEach((button) => {
+          const light = button.dataset.themeOption === "light";
+          const description = light ? (isZh ? "浅色主题" : "Light theme") : (isZh ? "深色主题" : "Dark theme");
+          button.setAttribute("aria-label", description);
+          button.setAttribute("title", description);
+          button.addEventListener("click", () => applyTheme(button.dataset.themeOption, true));
+        });
+        applyTheme(document.documentElement.dataset.theme || "dark");
       }
 
 
@@ -1613,7 +2068,7 @@
         return Number.isNaN(date.getTime()) ? null : date;
       }
 
-      const dateFormatter = new Intl.DateTimeFormat("zh-CN", {
+      const dateFormatter = new Intl.DateTimeFormat(lang === "zh" ? "zh-CN" : "en", {
         month: "2-digit",
         day: "2-digit",
         hour: "2-digit",
@@ -1760,8 +2215,9 @@
 
         if (!response.ok || (payload && payload.error)) {
           const errorPayload = payload && payload.error;
-          const message = safeString(errorPayload && errorPayload.message) || fmt("err.httpStatus", { status: response.status });
           const code = safeString(errorPayload && errorPayload.code, `HTTP_${response.status}`);
+          const fallback = safeString(errorPayload && errorPayload.message) || fmt("err.httpStatus", { status: response.status });
+          const message = localizedApiError(code, fallback);
           throw new ApiError(message, response.status, code);
         }
 
@@ -1799,9 +2255,7 @@
         $("#sidebar-username").textContent = username;
         $("#user-avatar").textContent = Array.from(username)[0] ? Array.from(username)[0].toUpperCase() : "A";
         $$('[data-admin-only]').forEach((element) => { element.hidden = state.session.role !== "admin"; });
-        $("#audit-scope-text").textContent = state.session.role === "admin"
-          ? "管理员可查看所有用户的登录、配置与账号操作记录。"
-          : "普通用户仅可查看自己的登录与操作记录。";
+        $("#audit-scope-text").textContent = t(state.session.role === "admin" ? "audit.scope.admin" : "audit.scope.user");
         updateSessionClock();
         window.clearInterval(state.sessionTimer);
         state.sessionTimer = window.setInterval(updateSessionClock, 30000);
@@ -1942,8 +2396,7 @@
         providersPanel.setAttribute("aria-busy", "false");
         const entries = state.providers.filter((provider) => provider.category === state.providerCategory && provider.id !== "gateway");
         if (!entries.length) {
-          const label = state.providerCategory === "local" ? "本地系统" : "远端智能体";
-          renderPanelState(providersPanel, "empty", `暂无${label}`, "当前类型下还没有可用的智能体。", "刷新状态", loadProviders);
+          renderPanelState(providersPanel, "empty", t(state.providerCategory === "local" ? "providers.empty.local" : "providers.empty.remote"), t("providers.empty.desc"), t("providers.refresh"), loadProviders);
           return;
         }
         const grid = makeElement("div", "provider-grid");
@@ -1952,19 +2405,19 @@
           const head = makeElement("div", "provider-card-head");
           head.append(
             makeElement("h3", "", providerDisplayName(provider)),
-            makeElement("span", "provider-status" + (provider.configured ? " ready" : ""), provider.configured ? "AVAILABLE" : "SETUP")
+            makeElement("span", "provider-status" + (provider.configured ? " ready" : ""), t(provider.configured ? "providers.available" : "providers.needsSetup"))
           );
           const copy = makeElement("div");
           copy.append(makeElement("p", "", providerDisplayDescription(provider)));
           const foot = makeElement("div", "provider-card-foot");
           foot.append(makeElement("span", "provider-detail", providerDisplayStatus(provider)));
           if (provider.editable) {
-            const button = makeElement("button", "button " + (provider.configured ? "ghost" : "primary") + " compact", provider.configured ? "编辑配置" : "开始配置");
+            const button = makeElement("button", "button " + (provider.configured ? "ghost" : "primary") + " compact", t(provider.configured ? "providers.edit" : "providers.setup"));
             button.type = "button";
             button.dataset.providerConfigure = provider.id;
             foot.append(button);
           } else {
-            foot.append(makeElement("span", "provider-detail", "BUILT-IN"));
+            foot.append(makeElement("span", "provider-detail", t("providers.builtin")));
           }
           card.append(head, copy, foot);
           grid.append(card);
@@ -1995,33 +2448,63 @@
       }
 
       function providerDisplayDescription(provider) {
-        if (lang !== "zh") return provider.description;
-        if (provider.id === "openai_agent") return "OpenAI 托管智能体 API Session/SSE。";
-        if (provider.id === "claude_managed_agent") return "Anthropic 托管智能体 + Environment Session/SSE。";
-        return provider.description.replace(/\bAgents?\b/g, "智能体");
+        if (lang === "zh") {
+          if (provider.id === "openai_agent") return "OpenAI 托管智能体 API Session/SSE。";
+          if (provider.id === "claude_managed_agent") return "Anthropic 托管智能体 + Environment Session/SSE。";
+          return provider.description.replace(/\bAgents?\b/g, "智能体");
+        }
+        const descriptions = {
+          codex_local: "Local Codex CLI running in a read-only sandbox.",
+          pi_local: "Local Pi CLI with role Skills and finance extensions.",
+          opencode_local: "Local OpenCode CLI for non-interactive execution in read-only plan mode.",
+          qwen_code_local: "Local Qwen Code CLI for headless execution in safe mode.",
+          gemini_cli_local: "Local Gemini CLI with plan permissions and JSON responses.",
+          openhands_local: "Local OpenHands headless mode; use an isolated workspace because actions are automatically approved.",
+          claude_code_local: "Local Claude Code CLI; OS or container isolation is required.",
+          gateway: "Gateway compatible with Anthropic Messages or OpenAI Chat Completions.",
+          deepseek_harness: "Local official dsh headless Agent with tools, sessions, and the Harness loop.",
+          openai_agent: "OpenAI managed Agents API Session/SSE.",
+          claude_managed_agent: "Anthropic managed Agent with Environment Session/SSE."
+        };
+        return descriptions[provider.id] || provider.description;
       }
 
       function providerDisplayStatus(provider) {
-        if (lang !== "zh") return provider.status_detail;
-        return provider.status_detail.replace(/\bAgent ID\b/g, "智能体 ID");
+        if (lang === "zh") return provider.status_detail.replace(/\bAgent ID\b/g, "智能体 ID");
+        if (provider.configured) return "Configured and available for role assignment.";
+        const details = {
+          codex_local: "Executable not found",
+          pi_local: "Executable not found",
+          opencode_local: "Executable not found",
+          qwen_code_local: "Executable not found",
+          gemini_cli_local: "Executable not found",
+          openhands_local: "Executable not found",
+          claude_code_local: "Claude Code is disabled on the server",
+          gateway: "Gateway URL required",
+          deepseek_harness: "dsh executable not found",
+          openai_agent: "Enable the provider and configure an API key",
+          claude_managed_agent: "API key, Agent ID, and Environment ID required"
+        };
+        return details[provider.id] || provider.status_detail;
       }
 
       const PROVIDER_FIELDS = Object.freeze({
-        codex_local: [["binary", "Codex 可执行文件", "text", true], ["default_model", "默认模型", "text", true]],
-        pi_local: [["binary", "Pi 可执行文件", "text", true], ["default_model", "默认模型", "text", true], ["finance_extension_path", "金融扩展路径", "text", false]],
-        opencode_local: [["binary", "OpenCode 可执行文件", "text", true], ["default_model", "默认模型（可留空）", "text", false]],
-        qwen_code_local: [["binary", "Qwen Code 可执行文件", "text", true], ["default_model", "默认模型（可留空）", "text", false]],
-        gemini_cli_local: [["binary", "Gemini CLI 可执行文件", "text", true], ["default_model", "默认模型", "text", false]],
-        openhands_local: [["binary", "OpenHands 可执行文件", "text", true], ["default_model", "默认模型（可留空）", "text", false]],
-        claude_code_local: [["enabled", "启用 Claude Code", "checkbox", false], ["binary", "Claude 可执行文件", "text", true], ["default_model", "默认模型", "text", true]],
-        gateway: [["base_url", "Gateway Base URL", "url", true], ["api_key", "API Key", "password", false], ["protocol", "协议", "select:anthropic,openai", true], ["model", "模型", "text", true], ["max_tokens", "最大输出 Token", "number", true], ["max_attempts", "最大尝试次数", "number", true], ["max_response_bytes", "响应字节上限", "number", true]],
-        deepseek_harness: [["binary", "dsh 可执行文件", "text", true], ["base_url", "Host（可选）", "url", false], ["api_key", "API Key", "password", false], ["model", "模型", "text", true]],
-        openai_agent: [["enabled", "启用 OpenAI 托管智能体", "checkbox", false], ["base_url", "API Base URL", "url", true], ["api_key", "API Key", "password", false], ["default_model", "默认模型", "text", true], ["reasoning_effort", "推理强度", "select:low,medium,high,xhigh,max", true], ["mcp_server_url", "MCP Server URL", "url", false], ["mcp_server_label", "MCP Label", "text", true], ["mcp_authorization", "MCP Authorization", "password", false], ["mcp_required", "MCP 必须可用", "checkbox", false], ["delete_session", "完成后删除 Session", "checkbox", false], ["max_response_bytes", "SSE 字节上限", "number", true]],
-        claude_managed_agent: [["enabled", "启用 Claude 托管智能体", "checkbox", false], ["base_url", "API Base URL", "url", true], ["api_key", "API Key", "password", false], ["workspace_id", "Workspace ID", "text", false], ["agent_id", "Anthropic 智能体 ID", "text", true], ["environment_id", "Environment ID", "text", true], ["vault_ids", "Vault IDs（每行一个）", "textarea", false], ["max_list_cost_cents", "单次预算（美分）", "number", false], ["delete_session", "完成后删除 Session", "checkbox", false], ["max_response_bytes", "SSE 字节上限", "number", true]]
+        codex_local: [["binary", "Codex 可执行文件", "Codex executable", "text", true], ["default_model", "默认模型", "Default model", "text", true]],
+        pi_local: [["binary", "Pi 可执行文件", "Pi executable", "text", true], ["default_model", "默认模型", "Default model", "text", true], ["finance_extension_path", "金融扩展路径", "Finance extension path", "text", false]],
+        opencode_local: [["binary", "OpenCode 可执行文件", "OpenCode executable", "text", true], ["default_model", "默认模型（可留空）", "Default model (optional)", "text", false]],
+        qwen_code_local: [["binary", "Qwen Code 可执行文件", "Qwen Code executable", "text", true], ["default_model", "默认模型（可留空）", "Default model (optional)", "text", false]],
+        gemini_cli_local: [["binary", "Gemini CLI 可执行文件", "Gemini CLI executable", "text", true], ["default_model", "默认模型", "Default model", "text", false]],
+        openhands_local: [["binary", "OpenHands 可执行文件", "OpenHands executable", "text", true], ["default_model", "默认模型（可留空）", "Default model (optional)", "text", false]],
+        claude_code_local: [["enabled", "启用 Claude Code", "Enable Claude Code", "checkbox", false], ["binary", "Claude 可执行文件", "Claude executable", "text", true], ["default_model", "默认模型", "Default model", "text", true]],
+        gateway: [["base_url", "Gateway Base URL", "Gateway Base URL", "url", true], ["api_key", "API Key", "API Key", "password", false], ["protocol", "协议", "Protocol", "select:anthropic,openai", true], ["model", "模型", "Model", "text", true], ["max_tokens", "最大输出 Token", "Maximum output tokens", "number", true], ["max_attempts", "最大尝试次数", "Maximum attempts", "number", true], ["max_response_bytes", "响应字节上限", "Response byte limit", "number", true]],
+        deepseek_harness: [["binary", "dsh 可执行文件", "dsh executable", "text", true], ["base_url", "Host（可选）", "Host (optional)", "url", false], ["api_key", "API Key", "API Key", "password", false], ["model", "模型", "Model", "text", true]],
+        openai_agent: [["enabled", "启用 OpenAI 托管智能体", "Enable OpenAI Managed Agent", "checkbox", false], ["base_url", "API Base URL", "API Base URL", "url", true], ["api_key", "API Key", "API Key", "password", false], ["default_model", "默认模型", "Default model", "text", true], ["reasoning_effort", "推理强度", "Reasoning effort", "select:low,medium,high,xhigh,max", true], ["mcp_server_url", "MCP Server URL", "MCP Server URL", "url", false], ["mcp_server_label", "MCP Label", "MCP Label", "text", true], ["mcp_authorization", "MCP Authorization", "MCP Authorization", "password", false], ["mcp_required", "MCP 必须可用", "Require MCP", "checkbox", false], ["delete_session", "完成后删除 Session", "Delete session after completion", "checkbox", false], ["max_response_bytes", "SSE 字节上限", "SSE byte limit", "number", true]],
+        claude_managed_agent: [["enabled", "启用 Claude 托管智能体", "Enable Claude Managed Agent", "checkbox", false], ["base_url", "API Base URL", "API Base URL", "url", true], ["api_key", "API Key", "API Key", "password", false], ["workspace_id", "Workspace ID", "Workspace ID", "text", false], ["agent_id", "Anthropic 智能体 ID", "Anthropic Agent ID", "text", true], ["environment_id", "Environment ID", "Environment ID", "text", true], ["vault_ids", "Vault IDs（每行一个）", "Vault IDs (one per line)", "textarea", false], ["max_list_cost_cents", "单次预算（美分）", "Per-run budget (cents)", "number", false], ["delete_session", "完成后删除 Session", "Delete session after completion", "checkbox", false], ["max_response_bytes", "SSE 字节上限", "SSE byte limit", "number", true]]
       });
 
       function providerField(definition, provider) {
-        const [key, labelText, type, required] = definition;
+        const [key, zhLabel, enLabel, type, required] = definition;
+        const labelText = lang === "zh" ? zhLabel : enLabel;
         const field = makeElement("div", "field" + (type === "textarea" ? " span-2" : "") + (type === "checkbox" ? " provider-option-field" : ""));
         const label = makeElement("label", "", labelText);
         label.htmlFor = "provider-" + key;
@@ -2048,7 +2531,7 @@
           control.value = current == null ? "" : String(current);
           if (type === "password") {
             control.autocomplete = "new-password";
-            control.placeholder = "密钥加密保存，保存后不会回显。";
+            control.placeholder = t("providers.secret.placeholder");
           }
           if (type === "number") control.min = "0";
         }
@@ -2073,16 +2556,16 @@
         providerFormFields.replaceChildren();
         providerFormError.hidden = true;
         providerFormError.textContent = "";
-        $("#provider-drawer-title").textContent = "配置 " + providerDisplayName(provider);
+        $("#provider-drawer-title").textContent = fmt("providers.drawer.title", { name: providerDisplayName(provider) });
         const definitions = PROVIDER_FIELDS[provider.id] || [];
-        const options = definitions.filter((definition) => definition[2] === "checkbox");
+        const options = definitions.filter((definition) => definition[3] === "checkbox");
         if (options.length) {
           const optionGroup = makeElement("div", "provider-option-group");
           options.forEach((definition) => optionGroup.append(providerField(definition, provider)));
           providerFormFields.append(optionGroup);
         }
         definitions
-          .filter((definition) => definition[2] !== "checkbox")
+          .filter((definition) => definition[3] !== "checkbox")
           .forEach((definition) => providerFormFields.append(providerField(definition, provider)));
         providerDrawerLayer.hidden = false;
         providerDrawerLayer.setAttribute("aria-hidden", "false");
@@ -2132,7 +2615,7 @@
           });
           closeProviderDrawer();
           await loadProviders();
-          showToast("智能体配置已保存，可用于岗位创建。", "success");
+          showToast(t("providers.saved"), "success");
         } catch (error) {
           providerFormError.textContent = error.message;
           providerFormError.hidden = false;
@@ -2152,8 +2635,8 @@
         const usernameInput = $("#user-username");
         const passwordInput = $("#user-password");
         const editing = Boolean(user);
-        $("#user-drawer-title").textContent = editing ? `编辑账号 · ${user.username}` : "创建账号";
-        saveUserButton.textContent = editing ? "保存账号" : "创建账号";
+        $("#user-drawer-title").textContent = editing ? fmt("users.editTitle", { username: user.username }) : t("users.create");
+        saveUserButton.textContent = t(editing ? "users.save" : "users.create");
         usernameInput.disabled = editing;
         usernameInput.value = editing ? user.username : "";
         passwordInput.required = !editing;
@@ -2161,7 +2644,7 @@
         $("#user-password-required").hidden = editing;
         $("#user-password-help").hidden = !editing;
         $("#user-password-help").textContent = editing
-          ? "留空表示不修改密码；修改密码后该账号的现有会话立即失效。"
+          ? t("users.password.editHelp")
           : "";
         $("#user-role").value = editing ? user.role : "user";
         $("#user-enabled").checked = editing ? user.enabled : true;
@@ -2217,10 +2700,10 @@
           const changedOwnPassword = editing && username === state.session.username && Boolean(password);
           closeUserDrawer(changedOwnPassword);
           if (changedOwnPassword) {
-            enterLoggedOut("密码已更新，请使用新密码重新登录。", { canRetrySession: false });
+            enterLoggedOut(t("users.password.changed"), { canRetrySession: false });
             return;
           }
-          showToast(editing ? "账号已更新" : "账号已创建", "success");
+          showToast(t(editing ? "users.updated" : "users.created"), "success");
           await Promise.all([loadUsers(), loadAudits()]);
         } catch (error) {
           if (!state.session) return;
@@ -2233,10 +2716,10 @@
 
       async function deleteUserAccount(user) {
         if (!user || user.username === state.session.username) return;
-        if (!window.confirm(`确认删除账号“${user.username}”？该账号的现有会话将立即失效。`)) return;
+        if (!window.confirm(fmt("users.delete.confirm", { username: user.username }))) return;
         try {
           await apiRequest(`${API.users}/${encodeURIComponent(user.username)}`, { method: "DELETE" });
-          showToast(`账号“${user.username}”已删除`, "success");
+          showToast(fmt("users.deleted", { username: user.username }), "success");
           await Promise.all([loadUsers(), loadAudits()]);
         } catch (error) {
           showToast(error.message, "error");
@@ -2282,7 +2765,7 @@
         } catch (error) {
           if (epoch !== state.authEpoch || !state.session) return false;
           state.providersStatus = "error";
-          renderPanelState(providersPanel, "error", "执行职能体加载失败", error.message, t("retry"), loadProviders);
+          renderPanelState(providersPanel, "error", t("providers.loadError"), error.message, t("retry"), loadProviders);
           return false;
         }
       }
@@ -2361,7 +2844,7 @@
         } catch (error) {
           if (epoch !== state.authEpoch || !state.session) return false;
           state.auditsStatus = "error";
-          renderPanelState(auditPanel, "error", "审计日志加载失败", error.message, t("retry"), loadAudits);
+          renderPanelState(auditPanel, "error", t("audit.loadError"), error.message, t("retry"), loadAudits);
           return false;
         }
       }
@@ -2381,7 +2864,7 @@
         } catch (error) {
           if (epoch !== state.authEpoch || !state.session) return false;
           state.usersStatus = "error";
-          renderPanelState(usersPanel, "error", "账号列表加载失败", error.message, t("retry"), loadUsers);
+          renderPanelState(usersPanel, "error", t("users.loadError"), error.message, t("retry"), loadUsers);
           return false;
         }
       }
@@ -3126,18 +3609,18 @@
 
       function auditActionLabel(action) {
         const labels = {
-          "admin.login": "登录成功",
-          "admin.login_failed": "登录失败",
-          "admin.logout": "退出登录",
-          "provider.update": "更新执行职能体",
-          "agent.create": "创建岗位职能体",
-          "agent.update": "修改岗位职能体",
-          "agent.delete": "删除岗位职能体",
-          "user.create": "创建账号",
-          "user.update": "修改账号",
-          "user.delete": "删除账号"
+          "admin.login": "audit.action.login",
+          "admin.login_failed": "audit.action.loginFailed",
+          "admin.logout": "audit.action.logout",
+          "provider.update": "audit.action.providerUpdate",
+          "agent.create": "audit.action.agentCreate",
+          "agent.update": "audit.action.agentUpdate",
+          "agent.delete": "audit.action.agentDelete",
+          "user.create": "audit.action.userCreate",
+          "user.update": "audit.action.userUpdate",
+          "user.delete": "audit.action.userDelete"
         };
-        return labels[action] || action;
+        return labels[action] ? t(labels[action]) : action;
       }
 
       function auditDetailsJson(details, pretty = false) {
@@ -3168,7 +3651,7 @@
           .sort((a, b) => auditActionLabel(a).localeCompare(auditActionLabel(b), lang === "zh" ? "zh-CN" : "en"));
         if (state.auditUserFilter && !users.includes(state.auditUserFilter)) state.auditUserFilter = "";
         if (state.auditActionFilter && !actions.includes(state.auditActionFilter)) state.auditActionFilter = "";
-        const userAll = makeElement("option", "", "全部");
+        const userAll = makeElement("option", "", t("common.all"));
         userAll.value = "";
         userSelect.replaceChildren(userAll);
         users.forEach((username) => {
@@ -3177,7 +3660,7 @@
           userSelect.append(option);
         });
         userSelect.value = state.auditUserFilter;
-        const actionAll = makeElement("option", "", "全部");
+        const actionAll = makeElement("option", "", t("common.all"));
         actionAll.value = "";
         actionSelect.replaceChildren(actionAll);
         actions.forEach((action) => {
@@ -3205,21 +3688,21 @@
         auditPanel.setAttribute("aria-busy", "false");
         populateAuditFilters();
         if (!state.audits.length) {
-          renderPanelState(auditPanel, "empty", "暂无审计记录", "用户执行管理操作后，记录会显示在这里。", "刷新日志", loadAudits);
+          renderPanelState(auditPanel, "empty", t("audit.empty.title"), t("audit.empty.desc"), t("audit.refresh"), loadAudits);
           return;
         }
         const entries = filteredAudits();
         if (!entries.length) {
-          renderPanelState(auditPanel, "empty", "没有符合条件的审计记录", "请调整用户或操作筛选条件。", "清除筛选", clearAuditFilters);
+          renderPanelState(auditPanel, "empty", t("audit.filtered.title"), t("audit.filtered.desc"), t("common.clearFilters"), clearAuditFilters);
           return;
         }
         auditPanel.replaceChildren();
         const scroll = makeElement("div", "table-scroll");
         const table = makeElement("table", "audit-table");
-        const caption = makeElement("caption", "sr-only", "管理员用户操作审计日志");
+        const caption = makeElement("caption", "sr-only", t("audit.caption"));
         const head = document.createElement("thead");
         const headRow = document.createElement("tr");
-        ["时间", "用户", "操作", "对象", "详情"].forEach((label) => headRow.append(makeElement("th", "", label)));
+        [t("common.time"), t("audit.column.user"), t("audit.column.action"), t("audit.column.target"), t("audit.column.details")].forEach((label) => headRow.append(makeElement("th", "", label)));
         head.append(headRow);
         const body = document.createElement("tbody");
         entries.forEach((entry) => {
@@ -3234,7 +3717,7 @@
           const details = makeElement("button", "audit-details", auditDetailsSummary(entry.details));
           details.type = "button";
           details.dataset.auditDetail = String(entry.id);
-          details.title = "查看标准 JSON";
+          details.title = t("audit.details.view");
           detailsCell.append(details);
           row.append(
             makeElement("td", "date-cell", formatDate(entry.created_at)),
@@ -3327,21 +3810,21 @@
         usersPanel.setAttribute("aria-busy", "false");
         populateUserFilters();
         if (!state.users.length) {
-          renderPanelState(usersPanel, "empty", "暂无账号", "创建首个管理账号。", "创建账号", () => openUserDrawer());
+          renderPanelState(usersPanel, "empty", t("users.empty.title"), t("users.empty.desc"), t("users.create"), () => openUserDrawer());
           return;
         }
         const users = filteredUsers();
         if (!users.length) {
-          renderPanelState(usersPanel, "empty", "没有符合条件的账号", "请调整角色或状态筛选条件。", "清除筛选", clearUserFilters);
+          renderPanelState(usersPanel, "empty", t("users.filtered.title"), t("users.filtered.desc"), t("common.clearFilters"), clearUserFilters);
           return;
         }
         usersPanel.replaceChildren();
         const scroll = makeElement("div", "table-scroll");
         const table = makeElement("table", "users-table");
-        const caption = makeElement("caption", "sr-only", "系统登录账号列表");
+        const caption = makeElement("caption", "sr-only", t("users.caption"));
         const head = document.createElement("thead");
         const headRow = document.createElement("tr");
-        ["用户名", "角色", "状态", "创建时间", "更新时间", "操作"].forEach((label) => headRow.append(makeElement("th", "", label)));
+        [t("users.column.username"), t("users.column.role"), t("common.status"), t("users.column.created"), t("users.column.updated"), t("common.actions")].forEach((label) => headRow.append(makeElement("th", "", label)));
         head.append(headRow);
         const body = document.createElement("tbody");
         users.forEach((user) => {
@@ -3349,15 +3832,15 @@
           const roleCell = document.createElement("td");
           roleCell.append(makeElement("span", `user-role ${user.role}`, user.role));
           const statusCell = document.createElement("td");
-          statusCell.append(makeElement("span", `user-status${user.enabled ? "" : " disabled"}`, user.enabled ? "已启用" : "已停用"));
+          statusCell.append(makeElement("span", `user-status${user.enabled ? "" : " disabled"}`, t(user.enabled ? "common.enabled" : "common.disabled")));
           const actions = makeElement("td", "row-actions");
-          const edit = makeElement("button", "button ghost compact", "编辑");
+          const edit = makeElement("button", "button ghost compact", t("common.edit"));
           edit.type = "button";
           edit.dataset.userAction = "edit";
           edit.dataset.username = user.username;
           actions.append(edit);
           if (!state.session || user.username !== state.session.username) {
-            const remove = makeElement("button", "button danger compact", "删除");
+            const remove = makeElement("button", "button danger compact", t("common.delete"));
             remove.type = "button";
             remove.dataset.userAction = "delete";
             remove.dataset.username = user.username;
@@ -3439,7 +3922,7 @@
           select.value = value;
         } else if (value) {
           custom.value = value;
-          custom.textContent = "自定义（已保存）";
+          custom.textContent = t("drawer.prompt.custom");
           custom.hidden = false;
           select.value = value;
         } else {
@@ -3460,12 +3943,11 @@
       }
 
       function syncExecutionModeControl(resetToRemote = false) {
+        // execution_mode / claude_model / permission_mode are now hidden.
+        // Auto-determine execution_mode from executor_kind + configured providers.
         const executor = $("#agent-executor-kind").value;
-        const mode = $("#agent-execution-mode");
-        const gatewayOption = $("#agent-execution-gateway-option");
-        const localOption = $("#agent-execution-local-option");
-        const managedOption = $("#agent-execution-managed-option");
-        const label = $("#agent-execution-mode-label");
+        const modeInput = $("#agent-execution-mode");
+        const modelInput = $("#agent-claude-model");
         const availableModes = new Set(
           configuredAssignments()
             .filter((assignment) => assignment.executor_kind === executor)
@@ -3475,49 +3957,20 @@
           const existing = findAgent(state.editingSlug);
           if (existing && existing.executor_kind === executor) availableModes.add(existing.execution_mode);
         }
-        const isOpenAIManaged = executor === "openai_agent";
-        const isClaudeManaged = executor === "claude_managed_agent";
-        gatewayOption.hidden = !availableModes.has("gateway");
-        localOption.hidden = !availableModes.has("local");
-        managedOption.hidden = !availableModes.has("managed");
         const preferred = resetToRemote && availableModes.has("gateway")
           ? "gateway"
           : ["managed", "local", "gateway"].find((candidate) => availableModes.has(candidate));
-        if (!availableModes.has(mode.value)) mode.value = preferred || "";
-        mode.disabled = availableModes.size <= 1;
-        label.textContent = lang === "zh" ? "执行位置" : "Execution location";
+        if (!availableModes.has(modeInput.value)) modeInput.value = preferred || "gateway";
 
-        gatewayOption.textContent = executor === "rust"
-          ? (lang === "zh" ? "进程内置 Rust" : "Built-in Rust")
-          : (lang === "zh" ? "远端网关（默认）" : "Remote gateway (default)");
-        if (mode.value === "managed") {
-          managedOption.textContent = isClaudeManaged
-            ? (lang === "zh" ? "Claude 托管智能体 API" : "Claude Managed Agents API")
-            : (lang === "zh" ? "OpenAI 托管智能体 API" : "OpenAI managed Agents API");
-          const model = $("#agent-claude-model");
-          if (isOpenAIManaged && (!model.value || model.value.startsWith("deepseek-") || model.value === "dsk_4f" || model.value.startsWith("claude-"))) {
-            model.value = "gpt-6-astra";
+        // Auto-set model for managed executors
+        if (modeInput.value === "managed") {
+          if (executor === "openai_agent" && (!modelInput.value || modelInput.value.startsWith("deepseek-") || modelInput.value === "dsk_4f" || modelInput.value.startsWith("claude-"))) {
+            modelInput.value = "gpt-6-astra";
           }
-          if (isClaudeManaged && (!model.value || model.value.startsWith("deepseek-") || model.value === "dsk_4f" || model.value.startsWith("gpt"))) {
-            model.value = "claude-opus-5";
+          if (executor === "claude_managed_agent" && (!modelInput.value || modelInput.value.startsWith("deepseek-") || modelInput.value === "dsk_4f" || modelInput.value.startsWith("gpt"))) {
+            modelInput.value = "claude-opus-5";
           }
-          return;
         }
-        if (mode.value !== "local") return;
-
-        const executorName = {
-          reasonix: "Reasonix",
-          pi: "Pi",
-          claude_code: "Claude Code",
-          opencode: "OpenCode",
-          qwen_code: "Qwen Code",
-          gemini_cli: "Gemini",
-          openhands: "OpenHands",
-          deepseek_harness: "DeepSeek Harness"
-        }[executor] || "Codex";
-        localOption.textContent = lang === "zh"
-          ? "本机 Local（启动 " + executorName + " CLI）"
-          : "Local (" + executorName + " CLI)";
       }
 
       function resetAgentForm() {
@@ -3531,11 +3984,11 @@
         $("#enabled-label").textContent = t("agent.enabled");
         const firstAssignment = configuredAssignments()[0];
         setFormValue("executor_kind", firstAssignment ? firstAssignment.executor_kind : "");
-        setFormValue("execution_mode", firstAssignment ? firstAssignment.execution_mode : "");
-        syncExecutionModeControl(false);
-        setFormValue("claude_model", "deepseek-v4-flash");
-        setFormValue("signature_encoding", "hex");
+        setFormValue("execution_mode", firstAssignment ? firstAssignment.execution_mode : "gateway");
+        setFormValue("claude_model", "");
         setFormValue("permission_mode", "dontAsk");
+        syncExecutionModeControl(false);
+        setFormValue("signature_encoding", "hex");
         setFormValue("system_prompt", "fundamental_analyst");
         $("#agent-slug").readOnly = false;
         secretInput.required = true;
@@ -3555,7 +4008,7 @@
 
       function openCreateDrawer() {
         if (!configuredAssignments().length) {
-          showToast("请先在执行职能体配置至少一个可用执行器。", "error");
+          showToast(t("drawer.noProvider"), "error");
           switchSection("providers-section");
           return;
         }
@@ -4138,7 +4591,7 @@
       $("#copy-run-payload-button").addEventListener("click", () => {
         const content = $("#run-payload-content");
         copyText(content && content.dataset.copyText)
-          .then(() => showToast(lang === "zh" ? "完整 JSON 已复制" : "Complete JSON copied", "success"))
+          .then(() => showToast(t("runPayload.copied"), "success"))
           .catch((error) => showToast(error.message || t("copy.failed2"), "error"));
       });
       $("#runs-refresh-button").addEventListener("click", () => loadRuns(state.runsFilter));
@@ -4157,7 +4610,7 @@
       $("#copy-audit-detail-button").addEventListener("click", () => {
         const content = $("#audit-detail-content");
         copyText(content && content.dataset.copyText)
-          .then(() => showToast("审计 JSON 已复制", "success"))
+          .then(() => showToast(t("audit.copied"), "success"))
           .catch((error) => showToast(error.message || t("copy.failed2"), "error"));
       });
       $("#runs-role-filter").addEventListener("change", (event) => {
@@ -4187,6 +4640,7 @@
       // 应用语言并初始化语言切换按钮
       applyI18n();
       setupLangToggle();
+      setupThemeToggle();
       bootstrap();
     })();
 

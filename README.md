@@ -198,6 +198,18 @@ func (MyAnalysisProcessor) Process(ctx context.Context, task *mota.TaskContext) 
 processor := MyAnalysisProcessor{}   // 替换 PlaceholderProcessor{}
 ```
 
+## Makefile 常用入口
+
+```bash
+make help             # 查看开发、部署和运维命令
+make ci               # gofmt + vet + test + build + module verify
+make deploy-build     # Linux ARM64 静态二进制
+```
+
+部署目标默认使用独立的 Go 服务目录和 systemd 名称；可通过 `REMOTE_HOST`、
+`REMOTE_ROOT`、`REMOTE_BIN`、`REMOTE_SERVICE`、`REMOTE_ENV` 和 `HEALTH_URL`
+覆盖，无需修改 Makefile。
+
 ## 测试
 
 ```bash

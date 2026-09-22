@@ -1,6 +1,7 @@
 # 构建产物
 /mota-agent-server
 /target
+/dist/
 *.exe
 *.test
 
