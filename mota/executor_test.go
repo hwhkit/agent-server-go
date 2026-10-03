@@ -224,7 +224,7 @@ func TestExecuteTimesOutStuckProcessor(t *testing.T) {
 		executorRuntime("", ExecutorKindRust, ExecutionModeLocal),
 		&TaskContext{}, map[string]any{}, 80*time.Millisecond)
 	execErr := wantExecutionCode(t, err, "execution_timeout")
-	if execErr.Detail != "Rust processor exceeded its deadline" {
+	if execErr.Detail != "in-process processor exceeded its deadline" {
 		t.Errorf("detail = %q", execErr.Detail)
 	}
 	if elapsed := time.Since(started); elapsed > 2*time.Second {
@@ -1972,6 +1972,49 @@ func TestExecuteLocalCLIHappyPath(t *testing.T) {
 	}
 	if out.Usage == nil || out.Usage.PromptTokens != 100 || out.Usage.CompletionTokens != 20 {
 		t.Errorf("usage = %+v, want 100/20", out.Usage)
+	}
+}
+
+// 父请求取消必须贯穿 AgentExecutor → runCommand，立即终止本机 CLI；不能只等
+// Agent 自身最长一小时的 timeout。Pull renew 冲突和服务 shutdown 也依赖同一链路。
+func TestExecuteLocalCLIParentCancellationStopsProcess(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "started")
+	executor, _ := localCLIExecutor(t, fmt.Sprintf("printf started > %q\nsleep 30\n", marker))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		_, execErr := executor.Execute(ctx,
+			executorRuntime("technical_analyst", ExecutorKindPi, ExecutionModeLocal),
+			&TaskContext{}, map[string]any{}, 30*time.Second)
+		done <- execErr
+	}()
+
+	startedDeadline := time.Now().Add(3 * time.Second)
+	for {
+		if _, err := os.Stat(marker); err == nil {
+			break
+		}
+		if time.Now().After(startedDeadline) {
+			t.Fatal("fake local CLI did not start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	cancelledAt := time.Now()
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("cancelled local CLI returned success")
+		}
+		wantExecutionCode(t, err, "execution_timeout")
+		if elapsed := time.Since(cancelledAt); elapsed > 3*time.Second {
+			t.Fatalf("cancelled local CLI returned after %v", elapsed)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("cancelled local CLI did not return")
 	}
 }
 

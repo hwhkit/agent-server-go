@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "23 3 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOTOOLCHAIN: local
+  GOFLAGS: -mod=readonly
+
+jobs:
+  quality:
+    name: Quality, race and release build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.8"
+          cache: true
+      - name: Bootstrap pinned hwhkit source
+        run: make bootstrap-hwhkit
+      - name: Full local-equivalent checks
+        run: make ci
+      - name: Inspect deployment provenance
+        run: |
+          file dist/mota-agent-server-linux-arm64
+          go version -m dist/mota-agent-server-linux-arm64
+          (cd dist && sha256sum -c mota-agent-server-linux-arm64.sha256)
+      - name: Upload Linux ARM64 artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node 24)
+        with:
+          name: mota-agent-server-linux-arm64-${{ github.sha }}
+          path: |
+            dist/mota-agent-server-linux-arm64
+            dist/mota-agent-server-linux-arm64.sha256
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  postgres:
+    name: PostgreSQL ${{ matrix.postgres }} integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: [15-alpine, 16-alpine, 17-alpine]
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: mota_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d mota_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.8"
+          cache: true
+      - name: Bootstrap pinned hwhkit source
+        run: make bootstrap-hwhkit
+      - name: PostgreSQL integration tests (must not skip)
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/mota_test?sslmode=disable
+        run: make test-pg
+
+  security:
+    name: Dependency vulnerability scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Bootstrap pinned hwhkit source
+        run: make bootstrap-hwhkit
+      - name: Scan source with OSV Scanner 2.6.0
+        run: |
+          docker run --rm \
+            -v "$PWD:/workspace/repo:ro" \
+            -v "$(dirname "$PWD")/.hwhkit-go-src:/workspace/.hwhkit-go-src:ro" \
+            -w /workspace/repo \
+            ghcr.io/google/osv-scanner:v2.6.0@sha256:afd838850ac1a0fcc15ff4a041dc9ba11123c3f0d2666217a5f0fcf9222b55fa \
+            scan source \
+            --config ./osv-scanner.toml \
+            --call-analysis=go \
+            --include-git-root \
+            -r ./

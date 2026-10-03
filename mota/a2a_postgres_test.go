@@ -85,8 +85,10 @@ func TestA2APostgresGetRunReadsSingleRecordAndTaskSnapshot(t *testing.T) {
 		}},
 	}
 	executorOutput := `{"raw":true}`
-	if err := tasks.Finish(ctx, slug, completed, 42, nil, &executorOutput); err != nil {
-		t.Fatalf("Finish: %v", err)
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := tasks.Finish(cancelled, slug, completed, 42, nil, &executorOutput); err != nil {
+		t.Fatalf("Finish with canceled request context: %v", err)
 	}
 
 	restored, err := tasks.Get(ctx, slug, taskID)

@@ -1,7 +1,12 @@
-# v1.1 迁移进度:mota-agent-server-rs → mota-agent-server-go
+# v1.1 迁移历史:mota-agent-server-rs → mota-agent-server-go
 
 > 记录日期:2026-09-10。目标:把 `mota-agent-server-rs`(Rust,12,418 行)的功能完整复刻到
-> `mota-agent-server-go`。本文档是执行进度与后续计划的唯一权威记录,后续继续推进时先读本文件。
+> `mota-agent-server-go`。
+>
+> **历史说明：**本文保留当时的迁移过程和一次性验证记录，不再是当前状态的权威来源，
+> 也不构成“Go 与 Rust 没有差异”的保证。当前门禁、已知边界与待验证项请查阅
+> [`../RELEASE-READINESS.md`](../RELEASE-READINESS.md) 和
+> [`../MAINTENANCE.md`](../MAINTENANCE.md)。
 
 ## 0. 总体决策(已定,不再重新讨论)
 
@@ -36,9 +41,10 @@
 | 13 | 移植 rs `tests/` 6 个集成测试(含 `protocol_dispatch_test.rs` 的 push/pull 双路径分发) | ✅ 完成 |
 | 14 | A2A(Agent2Agent Protocol v1.0)接入,见 §9 | ✅ 完成 |
 
-全量测试现状(#14 全部完成后一次性验证的快照,精确数字见下方「验证记录」):
-**1029 PASS / 0 FAIL / 0 SKIP**,`-race` 干净,`go vet` 干净,`gofmt` 无差异。
-1-14 号任务**全部完成**,没有已知的剩余差距。
+以下数字仅是 2026-09-10 当时 checkout 的一次性快照，不能代表当前分支：
+**1029 个生成子测试 PASS / 0 FAIL / 0 SKIP**，当时记录 `-race`、`go vet`、
+`gofmt` 无差异。当前 PostgreSQL 与跨仓契约测试可能因缺少外部条件而跳过，发布说明
+必须列出真实 skip 和数据库版本，不能沿用本段数字。
 
 ## 2. #11 MOTA 协议层:已完成的部分
 
@@ -593,8 +599,9 @@ go test ./mota/ -count=1 -v: 1029 --- PASS,0 FAIL,0 SKIP(#13 完成时是 954,
 go test -race ./... -count=1: ok
 ```
 
-至此 rs `mota-agent-server-rs` 的功能已**全部**复刻到 Go 侧,包括当初记录
-为缺口的 A2A 模块。没有已知的剩余差距。
+截至该历史快照，当时列出的 1-14 号迁移项已完成，包括 A2A 模块。之后 Rust 与 Go
+实现继续独立演进；callback 崩溃窗口、Provider 并发更新、部署门禁等差异必须按当前
+代码重新审查，不能由这份旧快照推断完成。
 
 ## 2026-09-16 · usage 改为每次结果回传必填（RULE-BND-001 对齐）
 

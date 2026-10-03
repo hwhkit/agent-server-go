@@ -36,6 +36,48 @@ type App struct {
 	a2aConfig *mota.A2AConfig
 }
 
+// sameOriginRedirectPolicy prevents HTTP clients carrying Provider API keys,
+// callback signatures, or callback tokens from forwarding a request to a
+// different origin. Relative redirects on the original origin remain
+// compatible; cross-host and HTTPS-to-HTTP redirects fail closed.
+func sameOriginRedirectPolicy(req *http.Request, via []*http.Request) error {
+	return mota.CredentialedRedirectPolicy(req, via)
+}
+
+// applicationBootstrap makes the repository's config/default.toml the local
+// base configuration. An explicit HWHKIT_ENV still selects config/{env}.toml.
+func applicationBootstrap() *config.BootstrapConfig {
+	bootstrap := config.DefaultBootstrap()
+	if strings.TrimSpace(os.Getenv("HWHKIT_ENV")) == "" {
+		bootstrap.Env = "default"
+	}
+	return bootstrap
+}
+
+func newExecutorHTTPClient() *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout:   5 * time.Second,
+				KeepAlive: 60 * time.Second,
+			}).DialContext,
+			IdleConnTimeout:     90 * time.Second,
+			MaxIdleConnsPerHost: 32,
+		},
+		CheckRedirect: sameOriginRedirectPolicy,
+	}
+}
+
+func newCallbackHTTPClient() *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			DialContext: (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
+		},
+		Timeout:       30 * time.Second,
+		CheckRedirect: sameOriginRedirectPolicy,
+	}
+}
+
 func (a App) BuildRouter(
 	ctx context.Context,
 	app *appctx.Context,
@@ -128,37 +170,20 @@ func main() {
 	}
 
 	var platform *mota.PlatformState
-	platformFlag := strings.TrimSpace(strings.ToLower(os.Getenv("PLATFORM__ENABLED")))
-	platformDisabled := platformFlag == "false" || platformFlag == "0" || platformFlag == "off" || platformFlag == "no"
-	platformRequested := platformFlag != "" || os.Getenv("ADMIN__SESSION_SECRET") != "" || os.Getenv("ADMIN__PASSWORD") != "" || os.Getenv("ADMIN__PASSWORD_HASH") != ""
-	if platformRequested && !platformDisabled {
-		platformCfg, loadErr := mota.LoadPlatformConfig()
-		if loadErr != nil {
-			slog.Error("platform config failed", "err", loadErr)
-			os.Exit(1)
-		}
+	platformCfg, loadErr := mota.LoadPlatformConfig()
+	if loadErr != nil {
+		slog.Error("platform config failed", "err", loadErr)
+		os.Exit(1)
+	}
+	if platformCfg.Enabled {
 		// 两个分工不同的 HTTP 客户端(与 rs main.rs 一致):
 		//   - executorHTTPClient 给网关直调(litellm 等)用:不设总超时,
 		//     总时限由 AgentExecutor 的单一 deadline 控制;Client 只限制
 		//     建连并复用长连接,避免全局超时截断长推理请求。
 		//   - callbackHTTPClient 给异步 callback 回传与心跳用:较短的
 		//     连接/总超时,避免下游异常拖住整条回调/心跳循环。
-		executorHTTPClient := &http.Client{
-			Transport: &http.Transport{
-				DialContext: (&net.Dialer{
-					Timeout:   5 * time.Second,
-					KeepAlive: 60 * time.Second,
-				}).DialContext,
-				IdleConnTimeout:     90 * time.Second,
-				MaxIdleConnsPerHost: 32,
-			},
-		}
-		callbackHTTPClient := &http.Client{
-			Transport: &http.Transport{
-				DialContext: (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
-			},
-			Timeout: 30 * time.Second,
-		}
+		executorHTTPClient := newExecutorHTTPClient()
+		callbackHTTPClient := newCallbackHTTPClient()
 
 		platform, loadErr = mota.NewPlatformStateWithDependencies(
 			context.Background(), platformCfg, processor, mota.PlatformDependencies{
@@ -166,6 +191,7 @@ func main() {
 				CallbackHTTPClient:           callbackHTTPClient,
 				SigningSecret:                motaCfg.SigningSecret,
 				CallbackToken:                motaCfg.CallbackToken,
+				CallbackTokenOrigin:          motaCfg.CallbackTokenOrigin,
 				TrustedUsageReportingEnabled: motaCfg.TrustedUsageReportingEnabled,
 				DefaultAgentSlug:             motaCfg.DefaultAgentSlug,
 			})
@@ -203,7 +229,7 @@ func main() {
 
 	built, err := hwhkit.Run(context.Background(),
 		App{processor: processor, config: motaCfg, platform: platform, execution: execution, a2aConfig: a2aConfig},
-		config.DefaultBootstrap())
+		applicationBootstrap())
 	if err != nil {
 		slog.Error("bootstrap failed", "err", err)
 		os.Exit(1)

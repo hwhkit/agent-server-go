@@ -91,9 +91,13 @@ func TestConfigPushRequiresSecret(t *testing.T) {
 }
 
 func TestConfigPlaceholderSecretRejected(t *testing.T) {
-	placeholder := PlaceholderSecret
-	_, err := configFromFile(&motaFile{SigningSecret: &placeholder})
-	requireErrContains(t, err, "placeholder")
+	for _, placeholder := range []string{PlaceholderSecret, ExampleSigningSecret} {
+		placeholder := placeholder
+		t.Run(placeholder, func(t *testing.T) {
+			_, err := configFromFile(&motaFile{SigningSecret: &placeholder})
+			requireErrContains(t, err, "placeholder")
+		})
+	}
 }
 
 func TestConfigPushPathMustStartWithSlash(t *testing.T) {
@@ -139,6 +143,12 @@ func TestConfigInvalidPushModeRejected(t *testing.T) {
 	requireErrContains(t, err, "[mota].push_mode")
 }
 
+func TestConfigRejectsWeakSigningSecret(t *testing.T) {
+	cfg := baseConfig()
+	cfg.SigningSecret = "short"
+	requireErrContains(t, cfg.Validate(), "16-512 bytes")
+}
+
 // Rust 侧自 2026-08-17 起 callback 令牌可选:async 不再强制要求 callback_token。
 func TestConfigAsyncDoesNotRequireCallbackToken(t *testing.T) {
 	cfg := baseConfig()
@@ -152,9 +162,17 @@ func TestConfigAsyncOKWithCallbackToken(t *testing.T) {
 	cfg := baseConfig()
 	cfg.PushMode = PushModeAsync
 	cfg.CallbackToken = "mpk_test"
+	cfg.CallbackTokenOrigin = "https://api.example.test"
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("expected valid async config, got %v", err)
 	}
+}
+
+func TestConfigCallbackTokenRequiresBoundOrigin(t *testing.T) {
+	cfg := baseConfig()
+	cfg.PushMode = PushModeAsync
+	cfg.CallbackToken = "mpk_test"
+	requireErrContains(t, cfg.Validate(), "callback_token_origin is required")
 }
 
 func TestConfigTrustedUsageReportingRequiresExplicitOptIn(t *testing.T) {
@@ -198,16 +216,36 @@ func TestConfigDefaultAgentSlugIsNormalizedAndValidated(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestConfigHeartbeatURLValidation(t *testing.T) {
-	cfg := baseConfig()
-	cfg.HeartbeatURL = "not-a-url"
-	requireErrContains(t, cfg.Validate(), "[mota].heartbeat_url")
+	for _, test := range []struct {
+		target string
+		want   string
+	}{
+		{target: "not-a-url", want: "[mota].heartbeat_url"},
+		{target: "ftp://example.com/hb", want: "[mota].heartbeat_url"},
+		{target: "http://example.com/hb", want: "must use HTTPS"},
+		{target: "https://user:password@example.com/hb", want: "embedded credentials"},
+		{target: "http://user:password@127.0.0.1/hb", want: "embedded credentials"},
+	} {
+		t.Run("reject_"+strings.NewReplacer(":", "_", "/", "_").Replace(test.target), func(t *testing.T) {
+			cfg := baseConfig()
+			cfg.HeartbeatURL = test.target
+			requireErrContains(t, cfg.Validate(), test.want)
+		})
+	}
 
-	cfg.HeartbeatURL = "ftp://example.com/hb"
-	requireErrContains(t, cfg.Validate(), "[mota].heartbeat_url")
-
-	cfg.HeartbeatURL = "https://example.com/hb"
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("expected valid heartbeat URL, got %v", err)
+	for _, target := range []string{
+		"https://example.com/hb",
+		"http://localhost:8080/hb",
+		"http://127.1.2.3:8080/hb",
+		"http://[::1]:8080/hb",
+	} {
+		t.Run("allow_"+strings.NewReplacer(":", "_", "/", "_").Replace(target), func(t *testing.T) {
+			cfg := baseConfig()
+			cfg.HeartbeatURL = target
+			if err := cfg.Validate(); err != nil {
+				t.Fatalf("expected valid heartbeat URL %q, got %v", target, err)
+			}
+		})
 	}
 }
 
@@ -227,7 +265,7 @@ func TestConfigPullRequiresQueueTokenWorker(t *testing.T) {
 			c.QueueURL = "q.example.com"
 			c.BindToken = "t"
 			c.WorkerID = "w"
-		}, "[mota].queue_url must be an absolute HTTP(S) URL"},
+		}, "[mota].queue_url must be an absolute HTTPS URL"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := baseConfig()
@@ -236,6 +274,52 @@ func TestConfigPullRequiresQueueTokenWorker(t *testing.T) {
 			requireErrContains(t, cfg.Validate(), tc.wantIn)
 		})
 	}
+}
+
+func TestConfigQueueURLTransportSecurity(t *testing.T) {
+	build := func(target string) *Config {
+		cfg := baseConfig()
+		cfg.PullEnabled = true
+		cfg.QueueURL = target
+		cfg.BindToken = "bind-token"
+		cfg.WorkerID = "worker-1"
+		return cfg
+	}
+
+	for _, test := range []struct {
+		target string
+		want   string
+	}{
+		{target: "http://queue.example.com", want: "must use HTTPS"},
+		{target: "https://user:password@queue.example.com", want: "embedded credentials"},
+		{target: "http://user:password@127.0.0.1:8080", want: "embedded credentials"},
+	} {
+		t.Run("reject_"+strings.NewReplacer(":", "_", "/", "_").Replace(test.target), func(t *testing.T) {
+			requireErrContains(t, build(test.target).Validate(), test.want)
+		})
+	}
+
+	for _, target := range []string{
+		"https://queue.example.com",
+		"http://localhost:8080",
+		"http://127.9.8.7:8080",
+		"http://[::1]:8080",
+	} {
+		t.Run("allow_"+strings.NewReplacer(":", "_", "/", "_").Replace(target), func(t *testing.T) {
+			if err := build(target).Validate(); err != nil {
+				t.Fatalf("expected valid queue URL %q, got %v", target, err)
+			}
+		})
+	}
+}
+
+func TestConfigPullRejectsPublicTemplateBindToken(t *testing.T) {
+	cfg := baseConfig()
+	cfg.PullEnabled = true
+	cfg.QueueURL = "https://queue.example.com"
+	cfg.BindToken = ExampleBindToken
+	cfg.WorkerID = "worker-1"
+	requireErrContains(t, cfg.Validate(), "public template placeholder")
 }
 
 func TestConfigPullOKWhenConfigured(t *testing.T) {
@@ -274,6 +358,15 @@ func TestConfigZeroIntervalsRejected(t *testing.T) {
 			requireErrContains(t, cfg.Validate(), tc.name+" must be greater than 0")
 		})
 	}
+}
+
+func TestConfigDurationOverflowIsRejected(t *testing.T) {
+	tooLarge := ^uint64(0)
+	secret := "a-real-secret-0123456789"
+	_, err := configFromFile(&motaFile{
+		SigningSecret: &secret, HeartbeatIntervalSecs: &tooLarge,
+	})
+	requireErrContains(t, err, "heartbeat_interval_secs must not exceed 86400")
 }
 
 // ---------------------------------------------------------------------------

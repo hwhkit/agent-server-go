@@ -27,6 +27,7 @@ func TestPlatformDependenciesFlowIntoState(t *testing.T) {
 			CallbackHTTPClient:           callbackClient,
 			SigningSecret:                "mbt_test_secret",
 			CallbackToken:                "mpk_test_token",
+			CallbackTokenOrigin:          "https://api.example.test",
 			TrustedUsageReportingEnabled: true,
 			DefaultAgentSlug:             "default-agent",
 		})
@@ -46,6 +47,9 @@ func TestPlatformDependenciesFlowIntoState(t *testing.T) {
 	}
 	if state.CallbackToken != "mpk_test_token" {
 		t.Errorf("CallbackToken = %q", state.CallbackToken)
+	}
+	if state.CallbackTokenOrigin != "https://api.example.test" {
+		t.Errorf("CallbackTokenOrigin = %q", state.CallbackTokenOrigin)
 	}
 	if !state.TrustedUsageReportingEnabled {
 		t.Error("TrustedUsageReportingEnabled must be true")
@@ -69,7 +73,8 @@ func TestNewPlatformStateIsEquivalentToEmptyDependencies(t *testing.T) {
 	if state.HTTPClient != nil {
 		t.Error("HTTPClient should be nil without injected dependencies")
 	}
-	if state.SigningSecret != "" || state.CallbackToken != "" || state.DefaultAgentSlug != "" {
+	if state.SigningSecret != "" || state.CallbackToken != "" ||
+		state.CallbackTokenOrigin != "" || state.DefaultAgentSlug != "" {
 		t.Error("MOTA-derived fields should be empty without injected dependencies")
 	}
 	if state.TrustedUsageReportingEnabled {

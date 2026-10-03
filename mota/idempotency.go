@@ -23,13 +23,11 @@ import (
 // 抢早了就等于重复执行一次有副作用的任务。
 const pushLeaseStaleAfterSecs = 15 * 60
 
-// pushRecordRetentionSecs 是已完成记录的保留时长。
-const pushRecordRetentionSecs = 7 * 24 * 60 * 60
-
-// Push 幂等记录的三种状态。
+// Push 幂等记录的状态。
 const (
 	pushStatusProcessing    = "processing"
 	pushStatusSyncDone      = "sync_done"
+	pushStatusSyncFailed    = "sync_failed"
 	pushStatusAsyncAccepted = "async_accepted"
 )
 
@@ -43,13 +41,17 @@ const (
 	PushInProgress
 	// PushSyncCached 表示命中已完成的同步响应,直接回放。
 	PushSyncCached
+	// PushSyncFailed 表示执行已经发生，但结果无法安全序列化。
+	// 必须回放终态失败，不能再次执行可能有副作用的任务。
+	PushSyncFailed
 	// PushAsyncAccepted 表示命中已受理的异步请求,回放 202。
 	PushAsyncAccepted
 	// PushConflict 表示同一个键配了不同的 runId 或请求体。
 	PushConflict
 )
 
-// PushDecision 是幂等查询结果。ResponseBody 仅在 PushSyncCached 时有意义。
+// PushDecision 是幂等查询结果。ResponseBody 在 PushSyncCached 时是完整响应，
+// 在 PushSyncFailed 时是稳定的内部失败原因。
 type PushDecision struct {
 	Kind         PushDecisionKind
 	ResponseBody string
@@ -141,12 +143,29 @@ func (s *PushIdempotencyStore) initialize(ctx context.Context) error {
 			return fmt.Errorf("initialize Push idempotency schema: %w", err)
 		}
 	}
-	// 只删七天前**已完成**的记录;执行中的租约不自动清理,避免慢任务被重复执行。
-	if _, err := s.pool.Exec(ctx,
-		`DELETE FROM push_idempotency WHERE status != $1 AND updated_at < $2`,
-		pushStatusProcessing, time.Now().Unix()-pushRecordRetentionSecs); err != nil {
-		return fmt.Errorf("prune Push idempotency records: %w", err)
+	// The Push HMAC covers the body (and therefore body.runId), but not the
+	// idempotency header. A caller must not be able to execute the same signed
+	// run twice by changing only that header. Refuse to start on an ambiguous
+	// legacy database instead of silently deleting evidence of duplicate runs.
+	var duplicateRunID string
+	err := s.pool.QueryRow(ctx,
+		`SELECT run_id FROM push_idempotency GROUP BY run_id HAVING COUNT(*) > 1 LIMIT 1`).
+		Scan(&duplicateRunID)
+	switch {
+	case err == nil:
+		return fmt.Errorf("initialize Push idempotency schema: duplicate run_id %q; "+
+			"reconcile duplicate rows before starting", duplicateRunID)
+	case !errors.Is(err, pgx.ErrNoRows):
+		return fmt.Errorf("inspect Push idempotency run_id uniqueness: %w", err)
 	}
+	if _, err := s.pool.Exec(ctx,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_push_idempotency_run_id `+
+			`ON push_idempotency(run_id)`); err != nil {
+		return fmt.Errorf("enforce Push idempotency run_id uniqueness: %w", err)
+	}
+	// Do not time-prune terminal rows. Push signatures have no timestamp, so a
+	// captured old request would become executable again after deletion. A
+	// future retention feature must first add a compact durable run-id tombstone.
 	return nil
 }
 
@@ -155,10 +174,11 @@ func (s *PushIdempotencyStore) initialize(ctx context.Context) error {
 // 决策优先级(顺序有意义):
 //  1. runId 或请求体哈希与既有记录不符 → Conflict(同一个键不能改内容重投);
 //  2. 已完成的同步响应 → SyncCached 回放;
-//  3. 已受理的异步请求 → AsyncAccepted 回放 202;
-//  4. processing 且已陈旧(> 15 分钟)→ 接管,返回 New;
-//  5. processing 且不陈旧 → InProgress;
-//  6. 无记录 → 插入 processing,返回 New。
+//  3. 已执行但无法序列化的同步结果 → SyncFailed;
+//  4. 已受理的异步请求 → AsyncAccepted 回放 202;
+//  5. processing 且已陈旧(> 15 分钟)→ 接管,返回 New;
+//  6. processing 且不陈旧 → InProgress;
+//  7. 无记录 → 插入 processing,返回 New。
 func (s *PushIdempotencyStore) Begin(ctx context.Context, key, runID, requestHash string) (*PushDecision, error) {
 	if s.IsInMemory() {
 		return s.beginInMemory(key, runID, requestHash), nil
@@ -188,7 +208,7 @@ func (s *PushIdempotencyStore) Begin(ctx context.Context, key, runID, requestHas
 		// 直接裸插会让后到的请求撞唯一键约束,把并发退化成 500。
 		tag, err := tx.Exec(ctx,
 			`INSERT INTO push_idempotency (key, run_id, request_hash, status, response_body, updated_at) `+
-				`VALUES ($1, $2, $3, $4, NULL, $5) ON CONFLICT (key) DO NOTHING`,
+				`VALUES ($1, $2, $3, $4, NULL, $5) ON CONFLICT DO NOTHING`,
 			key, runID, requestHash, pushStatusProcessing, time.Now().Unix())
 		if err != nil {
 			return nil, err
@@ -196,7 +216,34 @@ func (s *PushIdempotencyStore) Begin(ctx context.Context, key, runID, requestHas
 		if tag.RowsAffected() == 1 {
 			decision = &PushDecision{Kind: PushNew}
 		} else {
-			decision = &PushDecision{Kind: PushInProgress}
+			// ON CONFLICT may have matched either the primary key or the unique
+			// run_id fence. A different key for the same signed run is a conflict,
+			// never a second execution.
+			var existingKey, existingHash string
+			lookupErr := tx.QueryRow(ctx,
+				`SELECT key, request_hash FROM push_idempotency WHERE run_id = $1`, runID).
+				Scan(&existingKey, &existingHash)
+			switch {
+			case lookupErr == nil && (existingKey != key || existingHash != requestHash):
+				decision = &PushDecision{Kind: PushConflict}
+			case lookupErr == nil:
+				decision = &PushDecision{Kind: PushInProgress}
+			case errors.Is(lookupErr, pgx.ErrNoRows):
+				// The primary-key conflict can be an existing key whose signed
+				// runId differs from this request.
+				var existingRunID string
+				if keyErr := tx.QueryRow(ctx,
+					`SELECT run_id FROM push_idempotency WHERE key = $1`, key).
+					Scan(&existingRunID); keyErr != nil {
+					if errors.Is(keyErr, pgx.ErrNoRows) {
+						return nil, errors.New("Push idempotency conflict disappeared during claim")
+					}
+					return nil, keyErr
+				}
+				decision = &PushDecision{Kind: PushConflict}
+			default:
+				return nil, lookupErr
+			}
 		}
 	case err != nil:
 		return nil, err
@@ -209,6 +256,8 @@ func (s *PushIdempotencyStore) Begin(ctx context.Context, key, runID, requestHas
 		} else {
 			decision = &PushDecision{Kind: PushSyncCached, ResponseBody: *responseBody}
 		}
+	case status == pushStatusSyncFailed:
+		decision = &PushDecision{Kind: PushSyncFailed, ResponseBody: derefOrEmpty(responseBody)}
 	case status == pushStatusAsyncAccepted:
 		decision = &PushDecision{Kind: PushAsyncAccepted}
 	case updatedAt <= time.Now().Unix()-pushLeaseStaleAfterSecs:
@@ -235,6 +284,13 @@ func (s *PushIdempotencyStore) beginInMemory(key, runID, requestHash string) *Pu
 	defer s.mu.Unlock()
 	now := time.Now().Unix()
 	record, exists := s.records[key]
+	if !exists {
+		for otherKey, other := range s.records {
+			if otherKey != key && other.runID == runID {
+				return &PushDecision{Kind: PushConflict}
+			}
+		}
+	}
 	switch {
 	case !exists:
 		s.records[key] = &pushMemoryRecord{
@@ -249,6 +305,8 @@ func (s *PushIdempotencyStore) beginInMemory(key, runID, requestHash string) *Pu
 			return &PushDecision{Kind: PushConflict}
 		}
 		return &PushDecision{Kind: PushSyncCached, ResponseBody: record.responseBody}
+	case record.status == pushStatusSyncFailed:
+		return &PushDecision{Kind: PushSyncFailed, ResponseBody: record.responseBody}
 	case record.status == pushStatusAsyncAccepted:
 		return &PushDecision{Kind: PushAsyncAccepted}
 	case record.updatedAt <= now-pushLeaseStaleAfterSecs:
@@ -264,7 +322,17 @@ func (s *PushIdempotencyStore) beginInMemory(key, runID, requestHash string) *Pu
 
 // CompleteSync 记录同步响应,供后续同键请求回放。
 func (s *PushIdempotencyStore) CompleteSync(ctx context.Context, key, runID, requestHash, responseBody string) error {
+	ctx, cancel := stateFinalizationContext(ctx)
+	defer cancel()
 	return s.update(ctx, key, runID, requestHash, pushStatusSyncDone, &responseBody)
+}
+
+// FailSync records a terminal post-execution failure. Unlike Release, this
+// deliberately prevents a retry from executing the same task again.
+func (s *PushIdempotencyStore) FailSync(ctx context.Context, key, runID, requestHash, reason string) error {
+	ctx, cancel := stateFinalizationContext(ctx)
+	defer cancel()
+	return s.update(ctx, key, runID, requestHash, pushStatusSyncFailed, &reason)
 }
 
 // AcceptAsync 记录异步受理,供后续同键请求回放 202。
@@ -276,6 +344,8 @@ func (s *PushIdempotencyStore) AcceptAsync(ctx context.Context, key, runID, requ
 //
 // 只删自己的、且仍处于 processing 的记录 —— 不能把别人已完成的结果删掉。
 func (s *PushIdempotencyStore) Release(ctx context.Context, key, runID, requestHash string) error {
+	ctx, cancel := stateFinalizationContext(ctx)
+	defer cancel()
 	if s.IsInMemory() {
 		s.mu.Lock()
 		defer s.mu.Unlock()

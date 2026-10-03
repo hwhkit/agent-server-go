@@ -82,6 +82,9 @@ func HashAdminPassword(password string) (string, error) {
 //
 // 参数必须从存储的哈希里读出来(而不是用当前默认值),否则换过参数的老哈希就验不过了。
 func parseArgon2Hash(encoded string) (*argon2Hash, error) {
+	if len(encoded) > 1024 {
+		return nil, errors.New("argon2 hash exceeds the supported length")
+	}
 	// 形如 ["", "argon2id", "v=19", "m=19456,t=2,p=1", salt, hash]
 	parts := strings.Split(encoded, "$")
 	if len(parts) != 6 || parts[0] != "" {
@@ -110,6 +113,9 @@ func parseArgon2Hash(encoded string) (*argon2Hash, error) {
 	if parsed.memory == 0 || parsed.time == 0 || parsed.threads == 0 {
 		return nil, errors.New("argon2 parameters must be positive")
 	}
+	if parsed.memory > 256*1024 || parsed.time > 10 || parsed.threads > 16 {
+		return nil, errors.New("argon2 parameters exceed the supported resource limits")
+	}
 	salt, err := phcBase64.DecodeString(parts[4])
 	if err != nil {
 		return nil, fmt.Errorf("decode argon2 salt: %w", err)
@@ -118,8 +124,8 @@ func parseArgon2Hash(encoded string) (*argon2Hash, error) {
 	if err != nil {
 		return nil, fmt.Errorf("decode argon2 hash: %w", err)
 	}
-	if len(salt) == 0 || len(digest) == 0 {
-		return nil, errors.New("argon2 salt and hash must be non-empty")
+	if len(salt) < 8 || len(salt) > 64 || len(digest) < 16 || len(digest) > 64 {
+		return nil, errors.New("argon2 salt or hash length is outside the supported range")
 	}
 	parsed.salt = salt
 	parsed.digest = digest
@@ -170,11 +176,19 @@ type AdminAuth struct {
 
 	// loginSlots 限制并发口令校验数(argon2 是 CPU/内存密集的)。
 	loginSlots *semaphore
-	// throttleMu 保护失败计数与封禁截止时刻。
-	throttleMu   sync.Mutex
+	// throttleMu 保护「规范化账号+直接来源」失败桶。组合维度避免一个匿名
+	// 来源锁死所有账号，也避免其他账号的成功登录清空目标账号的退避。
+	throttleMu sync.Mutex
+	throttles  map[string]*loginThrottleState
+}
+
+type loginThrottleState struct {
 	failures     uint32
 	blockedUntil time.Time
+	lastSeen     time.Time
 }
+
+const maxLoginThrottleBuckets = 4096
 
 // LoginOutcomeKind 是登录结果种类。
 type LoginOutcomeKind int
@@ -237,6 +251,7 @@ func NewAdminAuth(config *PlatformConfig, store *AgentStore) (*AdminAuth, error)
 		secureCookie:      config.SecureCookies,
 		store:             store,
 		loginSlots:        newSemaphore(loginSlotCount),
+		throttles:         make(map[string]*loginThrottleState),
 	}, nil
 }
 
@@ -248,13 +263,24 @@ func (a *AdminAuth) Username() string { return a.bootstrapUsername }
 // 两道限流:并发闸(非阻塞,满了直接限流)与失败退避(连续失败 >= 3 次后
 // 按 2^(failures-3) 秒封禁,封顶 32 秒)。成功登录会把两者都清零。
 func (a *AdminAuth) Login(ctx context.Context, username, password string) (*LoginOutcome, error) {
+	return a.LoginFromSource(ctx, username, password, "local")
+}
+
+// LoginFromSource applies independent throttles to the normalized account and
+// network source. source must come from the direct peer, not an untrusted
+// forwarded header.
+func (a *AdminAuth) LoginFromSource(
+	ctx context.Context, username, password, source string,
+) (*LoginOutcome, error) {
 	if !a.loginSlots.TryAcquire() {
 		return &LoginOutcome{Kind: LoginRateLimited, RetryAfterSecs: 1}, nil
 	}
 	// 许可要一直持有到 argon2 算完 —— 请求提前断开不能让容量提前释放。
 	defer a.loginSlots.Release()
 
-	if retryAfter, blocked := a.blockedFor(); blocked {
+	username = strings.TrimSpace(username)
+	source = normalizeLoginSource(source)
+	if retryAfter, blocked := a.blockedForKeys(loginThrottleKeys(username, source)...); blocked {
 		return &LoginOutcome{Kind: LoginRateLimited, RetryAfterSecs: retryAfter}, nil
 	}
 
@@ -270,10 +296,12 @@ func (a *AdminAuth) Login(ctx context.Context, username, password string) (*Logi
 	}
 	// 不存在的用户名也校验 dummy hash，避免账号枚举产生明显时序差异。
 	if !VerifyAdminPassword(hash, password) || !enabled {
-		a.recordFailure()
+		a.recordFailureFor(username, source)
 		return &LoginOutcome{Kind: LoginInvalid}, nil
 	}
-	a.clearFailures()
+	// Clear only this normalized account+source bucket; another account's
+	// success can never reset the target account's backoff.
+	a.clearFailureBucket(accountSourceThrottleKey(username, source))
 
 	token := randomToken(32)
 	csrfToken := randomToken(24)
@@ -290,47 +318,120 @@ func (a *AdminAuth) Login(ctx context.Context, username, password string) (*Logi
 	}, nil
 }
 
+func normalizeLoginSource(source string) string {
+	source = strings.TrimSpace(strings.ToLower(source))
+	if source == "" {
+		return "unknown"
+	}
+	if len(source) > 128 {
+		return source[:128]
+	}
+	return source
+}
+
+func accountSourceThrottleKey(username, source string) string {
+	return "account:" + strings.ToLower(strings.TrimSpace(username)) + "\x00" + normalizeLoginSource(source)
+}
+
+func loginThrottleKeys(username, source string) []string {
+	return []string{accountSourceThrottleKey(username, source)}
+}
+
 // blockedFor 报告当前是否处于退避封禁中,以及还要等几秒(至少 1)。
 func (a *AdminAuth) blockedFor() (int64, bool) {
+	return a.blockedForKeys(accountSourceThrottleKey(a.bootstrapUsername, "local"))
+}
+
+func (a *AdminAuth) blockedForKeys(keys ...string) (int64, bool) {
 	a.throttleMu.Lock()
 	defer a.throttleMu.Unlock()
-	if a.blockedUntil.IsZero() {
-		return 0, false
+	var retryAfter int64
+	for _, key := range keys {
+		state := a.throttles[key]
+		if state == nil {
+			continue
+		}
+		remaining := time.Until(state.blockedUntil)
+		if remaining <= 0 {
+			continue
+		}
+		seconds := int64(remaining.Seconds())
+		if seconds < 1 {
+			seconds = 1
+		}
+		if seconds > retryAfter {
+			retryAfter = seconds
+		}
 	}
-	remaining := time.Until(a.blockedUntil)
-	if remaining <= 0 {
-		return 0, false
-	}
-	seconds := int64(remaining.Seconds())
-	if seconds < 1 {
-		seconds = 1
-	}
-	return seconds, true
+	return retryAfter, retryAfter > 0
 }
 
 // recordFailure 累加失败次数并在超过宽限后设置封禁。
 func (a *AdminAuth) recordFailure() {
+	a.recordFailureFor(a.bootstrapUsername, "local")
+}
+
+func (a *AdminAuth) recordFailureFor(username, source string) {
 	a.throttleMu.Lock()
 	defer a.throttleMu.Unlock()
-	if a.failures < ^uint32(0) {
-		a.failures++
+	now := time.Now()
+	a.pruneThrottleBucketsLocked(now)
+	for _, key := range loginThrottleKeys(username, source) {
+		state := a.throttles[key]
+		if state == nil {
+			state = &loginThrottleState{}
+			a.throttles[key] = state
+		}
+		state.lastSeen = now
+		if state.failures < ^uint32(0) {
+			state.failures++
+		}
+		if state.failures < loginFailureGrace {
+			continue
+		}
+		exponent := state.failures - loginFailureGrace
+		if exponent > loginBackoffMaxExponent {
+			exponent = loginBackoffMaxExponent
+		}
+		state.blockedUntil = now.Add(time.Duration(uint64(1)<<exponent) * time.Second)
 	}
-	if a.failures < loginFailureGrace {
-		return
-	}
-	exponent := a.failures - loginFailureGrace
-	if exponent > loginBackoffMaxExponent {
-		exponent = loginBackoffMaxExponent
-	}
-	a.blockedUntil = time.Now().Add(time.Duration(uint64(1)<<exponent) * time.Second)
 }
 
 // clearFailures 清空退避状态。
 func (a *AdminAuth) clearFailures() {
 	a.throttleMu.Lock()
 	defer a.throttleMu.Unlock()
-	a.failures = 0
-	a.blockedUntil = time.Time{}
+	a.throttles = make(map[string]*loginThrottleState)
+}
+
+func (a *AdminAuth) clearFailureBucket(key string) {
+	a.throttleMu.Lock()
+	defer a.throttleMu.Unlock()
+	delete(a.throttles, key)
+}
+
+func (a *AdminAuth) pruneThrottleBucketsLocked(now time.Time) {
+	if a.throttles == nil {
+		a.throttles = make(map[string]*loginThrottleState)
+	}
+	for key, state := range a.throttles {
+		if now.Sub(state.lastSeen) > 10*time.Minute && now.After(state.blockedUntil) {
+			delete(a.throttles, key)
+		}
+	}
+	for len(a.throttles) >= maxLoginThrottleBuckets {
+		var oldestKey string
+		var oldest time.Time
+		for key, state := range a.throttles {
+			if oldestKey == "" || state.lastSeen.Before(oldest) {
+				oldestKey, oldest = key, state.lastSeen
+			}
+		}
+		if oldestKey == "" {
+			break
+		}
+		delete(a.throttles, oldestKey)
+	}
 }
 
 // Authenticate 从请求 Cookie 里取出会话;没有 Cookie 时返回 (nil, nil)。

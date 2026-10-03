@@ -72,6 +72,8 @@ func pushDecisionName(kind PushDecisionKind) string {
 		return "PushInProgress"
 	case PushSyncCached:
 		return "PushSyncCached"
+	case PushSyncFailed:
+		return "PushSyncFailed"
 	case PushAsyncAccepted:
 		return "PushAsyncAccepted"
 	case PushConflict:
@@ -177,6 +179,19 @@ func TestPushIdempotencyBeginConflictsOnDifferentRequestHash(t *testing.T) {
 	})
 }
 
+// runId 在签名 body 内，幂等键却是未签名 header：同一个已签 runId
+// 换一个键也不能再执行。
+func TestPushIdempotencyRunIDCannotMoveToDifferentKey(t *testing.T) {
+	forEachPushIdempotencyBackend(t, func(t *testing.T, store *PushIdempotencyStore) {
+		lease := newPushLease()
+		requireDecision(t, mustBegin(t, store, lease), PushNew)
+
+		other := lease
+		other.key = unique("idem-key-other")
+		requireDecision(t, mustBegin(t, store, other), PushConflict)
+	})
+}
+
 // sync_done → 回放缓存的响应体。
 func TestPushIdempotencyCompleteSyncReplaysBody(t *testing.T) {
 	forEachPushIdempotencyBackend(t, func(t *testing.T, store *PushIdempotencyStore) {
@@ -194,6 +209,54 @@ func TestPushIdempotencyCompleteSyncReplaysBody(t *testing.T) {
 		if decision.ResponseBody != body {
 			t.Fatalf("replayed body mismatch:\n got: %s\nwant: %s", decision.ResponseBody, body)
 		}
+	})
+}
+
+func TestPushIdempotencyFailSyncIsTerminal(t *testing.T) {
+	forEachPushIdempotencyBackend(t, func(t *testing.T, store *PushIdempotencyStore) {
+		lease := newPushLease()
+		requireDecision(t, mustBegin(t, store, lease), PushNew)
+		if err := store.FailSync(context.Background(),
+			lease.key, lease.runID, lease.requestHash, "invalid_result"); err != nil {
+			t.Fatalf("FailSync: %v", err)
+		}
+		decision := mustBegin(t, store, lease)
+		requireDecision(t, decision, PushSyncFailed)
+		if decision.ResponseBody != "invalid_result" {
+			t.Fatalf("failure reason = %q", decision.ResponseBody)
+		}
+	})
+}
+
+func TestPushIdempotencyFinalizationSurvivesCanceledContext(t *testing.T) {
+	forEachPushIdempotencyBackend(t, func(t *testing.T, store *PushIdempotencyStore) {
+		lease := newPushLease()
+		requireDecision(t, mustBegin(t, store, lease), PushNew)
+		cancelled, cancel := context.WithCancel(context.Background())
+		cancel()
+		body := `{"contract_version":"V2"}`
+		if err := store.CompleteSync(cancelled,
+			lease.key, lease.runID, lease.requestHash, body); err != nil {
+			t.Fatalf("CompleteSync with canceled request context: %v", err)
+		}
+		decision := mustBegin(t, store, lease)
+		requireDecision(t, decision, PushSyncCached)
+		if decision.ResponseBody != body {
+			t.Fatalf("response body = %q", decision.ResponseBody)
+		}
+	})
+}
+
+func TestPushIdempotencyReleaseSurvivesCanceledContext(t *testing.T) {
+	forEachPushIdempotencyBackend(t, func(t *testing.T, store *PushIdempotencyStore) {
+		lease := newPushLease()
+		requireDecision(t, mustBegin(t, store, lease), PushNew)
+		cancelled, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := store.Release(cancelled, lease.key, lease.runID, lease.requestHash); err != nil {
+			t.Fatalf("Release with canceled request context: %v", err)
+		}
+		requireDecision(t, mustBegin(t, store, lease), PushNew)
 	})
 }
 
@@ -396,6 +459,52 @@ func TestPushIdempotencyConcurrentBeginGrantsSingleLease(t *testing.T) {
 		}
 		if got := inProgressCount.Load(); got != callers-1 {
 			t.Fatalf("expected %d PushInProgress, got %d", callers-1, got)
+		}
+	})
+}
+
+func TestPushIdempotencyConcurrentDifferentKeysShareSingleRunFence(t *testing.T) {
+	forEachPushIdempotencyBackend(t, func(t *testing.T, store *PushIdempotencyStore) {
+		base := newPushLease()
+		leases := []pushLease{base, base}
+		leases[1].key = unique("idem-key-other")
+
+		results := make(chan PushDecisionKind, len(leases))
+		errs := make(chan error, len(leases))
+		var wg sync.WaitGroup
+		for _, lease := range leases {
+			lease := lease
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				decision, err := store.Begin(
+					context.Background(), lease.key, lease.runID, lease.requestHash)
+				if err != nil {
+					errs <- err
+					return
+				}
+				results <- decision.Kind
+			}()
+		}
+		wg.Wait()
+		close(results)
+		close(errs)
+		for err := range errs {
+			t.Fatal(err)
+		}
+		var newCount, conflictCount int
+		for kind := range results {
+			switch kind {
+			case PushNew:
+				newCount++
+			case PushConflict:
+				conflictCount++
+			default:
+				t.Fatalf("unexpected decision %s", pushDecisionName(kind))
+			}
+		}
+		if newCount != 1 || conflictCount != 1 {
+			t.Fatalf("new=%d conflict=%d, want one of each", newCount, conflictCount)
 		}
 	})
 }

@@ -137,14 +137,24 @@ func (r *AgentRegistry) Remove(slug string) bool {
 	return existed
 }
 
-// ReplaceAll 整体替换注册表内容,信号量全部重建。
+// ReplaceAll 整体替换注册表内容。容量参数不变的 Agent 复用已有信号量，
+// 避免多实例刷新时让在途任务与新任务各持一套容量、瞬时突破上限。
 func (r *AgentRegistry) ReplaceAll(agents []*AgentConfig) {
-	next := make(map[string]*AgentRuntime, len(agents))
-	for _, agent := range agents {
-		next[agent.Slug] = newAgentRuntime(agent)
-	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	next := make(map[string]*AgentRuntime, len(agents))
+	for _, agent := range agents {
+		if existing := r.agents[agent.Slug]; existing != nil &&
+			existing.Config.MaxConcurrency == agent.MaxConcurrency &&
+			existing.Config.QueueCapacity == agent.QueueCapacity {
+			next[agent.Slug] = &AgentRuntime{
+				Config: agent, ExecutionSlots: existing.ExecutionSlots,
+				AdmissionSlots: existing.AdmissionSlots,
+			}
+			continue
+		}
+		next[agent.Slug] = newAgentRuntime(agent)
+	}
 	r.agents = next
 }
 

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"time"
 )
 
 // PlatformState 是管理平台的共享状态。
@@ -41,6 +42,8 @@ type PlatformState struct {
 	SigningSecret string
 	// CallbackToken 是可选回调令牌(mpk_*);非空时附加到 callback URL 的 ?token=。
 	CallbackToken string
+	// CallbackTokenOrigin 限定 legacy token 只能发送到这一受信 origin。
+	CallbackTokenOrigin string
 	// TrustedUsageReportingEnabled 只有平台登记的受信 Investor Workflow Host 可开启;
 	// 开启后拿不到 FINAL usage 的运行必须判失败,不能静默降级。
 	TrustedUsageReportingEnabled bool
@@ -64,14 +67,25 @@ type PlatformState struct {
 	dispatcherOnce sync.Once
 	dispatcher     *AgentDispatcher
 	dispatcherErr  error
+
+	providerRefreshCancel context.CancelFunc
+	providerRefreshDone   chan struct{}
+	agentRefreshDone      chan struct{}
 }
 
 // Executor 返回共享的 Agent 执行器。首次调用时构造并缓存结果(含失败)。
 func (s *PlatformState) Executor() (*AgentExecutor, error) {
 	s.executorOnce.Do(func() {
-		s.executor, s.executorErr = NewAgentExecutor(s.Processor, s.HTTPClient, s.ConfigSnapshot())
+		// 与 ApplyConfig 共用 configMu，避免首次懒构造正好撞上 Provider
+		// 热更新时把旧快照永久装进执行器。
+		s.configMu.Lock()
+		s.executor, s.executorErr = NewAgentExecutor(s.Processor, s.HTTPClient, s.Config)
+		s.configMu.Unlock()
 	})
-	return s.executor, s.executorErr
+	s.configMu.RLock()
+	executor, err := s.executor, s.executorErr
+	s.configMu.RUnlock()
+	return executor, err
 }
 
 // ConfigSnapshot 返回当前不可变配置快照。调用方不得修改返回值。
@@ -85,17 +99,22 @@ func (s *PlatformState) ConfigSnapshot() *PlatformConfig {
 func (s *PlatformState) ApplyConfig(config *PlatformConfig) {
 	s.configMu.Lock()
 	s.Config = config
-	s.configMu.Unlock()
 	if s.executor != nil {
 		s.executor.SetConfig(config)
 	}
+	s.configMu.Unlock()
 }
 
 // SetExecutor 注入一个已构造好的执行器(装配与测试用),并抑制按需构造。
 func (s *PlatformState) SetExecutor(executor *AgentExecutor) {
 	s.executorOnce.Do(func() {})
+	s.configMu.Lock()
 	s.executor = executor
 	s.executorErr = nil
+	if executor != nil {
+		executor.SetConfig(s.Config)
+	}
+	s.configMu.Unlock()
 }
 
 // Dispatcher 返回共享的 AgentDispatcher。首次调用时构造并缓存结果(含失败),
@@ -137,6 +156,8 @@ type PlatformDependencies struct {
 	SigningSecret string
 	// CallbackToken 是可选回调令牌(mpk_*)。
 	CallbackToken string
+	// CallbackTokenOrigin 把 token 绑定到唯一受信 callback origin。
+	CallbackTokenOrigin string
 	// TrustedUsageReportingEnabled 仅平台登记的受信 Investor Workflow Host 可开启。
 	TrustedUsageReportingEnabled bool
 	// DefaultAgentSlug 是 Push/Pull 的 agentCode 未命中 Registry 时使用的默认
@@ -176,11 +197,13 @@ func NewPlatformStateWithDependencies(
 	if err != nil {
 		return nil, err
 	}
-	if err := LoadSavedProviders(ctx, store, cfg); err != nil {
+	loadedConfig, _, providerRevision, err := LoadConsistentProviderSnapshot(ctx, store, cfg)
+	if err != nil {
 		_ = store.Close()
 		return nil, fmt.Errorf("load Agent Center providers: %w", err)
 	}
-	agents, err := store.ListAgents(ctx)
+	cfg = loadedConfig
+	agents, agentRevision, err := LoadConsistentAgentSnapshot(ctx, store)
 	if err != nil {
 		_ = store.Close()
 		return nil, fmt.Errorf("load Agent registry: %w", err)
@@ -206,7 +229,7 @@ func NewPlatformStateWithDependencies(
 	}
 	slog.Info("multi-agent platform initialized", "storage", "postgresql", "agents", registry.Len())
 
-	return &PlatformState{
+	state := &PlatformState{
 		Config:                       cfg,
 		Store:                        store,
 		Registry:                     registry,
@@ -217,10 +240,132 @@ func NewPlatformStateWithDependencies(
 		CallbackHTTPClient:           deps.CallbackHTTPClient,
 		SigningSecret:                deps.SigningSecret,
 		CallbackToken:                deps.CallbackToken,
+		CallbackTokenOrigin:          deps.CallbackTokenOrigin,
 		TrustedUsageReportingEnabled: deps.TrustedUsageReportingEnabled,
 		DefaultAgentSlug:             deps.DefaultAgentSlug,
-	}, nil
+	}
+	refreshCtx, cancelRefresh := context.WithCancel(context.Background())
+	state.providerRefreshCancel = cancelRefresh
+	state.providerRefreshDone = make(chan struct{})
+	state.agentRefreshDone = make(chan struct{})
+	go state.runProviderRefresh(refreshCtx, providerRevision)
+	go state.runAgentRefresh(refreshCtx, agentRevision)
+	return state, nil
 }
 
 // Close 释放存储连接。
-func (s *PlatformState) Close() error { return s.Store.Close() }
+func (s *PlatformState) Close() error {
+	if s.providerRefreshCancel != nil {
+		s.providerRefreshCancel()
+	}
+	if s.providerRefreshDone != nil {
+		<-s.providerRefreshDone
+	}
+	if s.agentRefreshDone != nil {
+		<-s.agentRefreshDone
+	}
+	return s.Store.Close()
+}
+
+// LoadConsistentAgentSnapshot binds a decrypted registry snapshot to the same
+// global revision. A concurrent CRUD commit causes a bounded retry.
+func LoadConsistentAgentSnapshot(
+	ctx context.Context, store *AgentStore,
+) ([]*AgentConfig, int64, error) {
+	for range 3 {
+		before, err := store.AgentRegistryRevision(ctx)
+		if err != nil {
+			return nil, 0, err
+		}
+		agents, err := store.ListAgents(ctx)
+		if err != nil {
+			return nil, 0, err
+		}
+		after, err := store.AgentRegistryRevision(ctx)
+		if err != nil {
+			return nil, 0, err
+		}
+		if before == after {
+			return agents, after, nil
+		}
+	}
+	return nil, 0, errors.New("Agent registry changed during snapshot read")
+}
+
+func (s *PlatformState) runAgentRefresh(ctx context.Context, appliedRevision int64) {
+	defer close(s.agentRefreshDone)
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		pollCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		revision, err := s.Store.AgentRegistryRevision(pollCtx)
+		cancel()
+		if err != nil {
+			if ctx.Err() == nil {
+				slog.Error("read Agent registry revision failed", "error", err)
+			}
+			continue
+		}
+		if revision == appliedRevision {
+			continue
+		}
+		s.Mutation.Lock()
+		pollCtx, cancel = context.WithTimeout(ctx, 5*time.Second)
+		agents, snapshotRevision, loadErr := LoadConsistentAgentSnapshot(pollCtx, s.Store)
+		cancel()
+		if loadErr == nil {
+			s.Registry.ReplaceAll(agents)
+			appliedRevision = snapshotRevision
+			slog.Info("Agent registry refreshed from PostgreSQL",
+				"revision", snapshotRevision, "agents", len(agents))
+		} else if ctx.Err() == nil {
+			slog.Error("refresh Agent registry failed", "error", loadErr)
+		}
+		s.Mutation.Unlock()
+	}
+}
+
+// runProviderRefresh 通过轻量全局 revision 轮询让同库多副本最终收敛。只有
+// revision 改变时才解密并校验完整 Provider 快照。
+func (s *PlatformState) runProviderRefresh(ctx context.Context, appliedRevision int64) {
+	defer close(s.providerRefreshDone)
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		pollCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		revision, err := s.Store.ExecutorProviderRevision(pollCtx)
+		cancel()
+		if err != nil {
+			if ctx.Err() == nil {
+				slog.Error("read Provider revision failed", "error", err)
+			}
+			continue
+		}
+		if revision == appliedRevision {
+			continue
+		}
+		s.Mutation.Lock()
+		pollCtx, cancel = context.WithTimeout(ctx, 5*time.Second)
+		next, _, snapshotRevision, loadErr := LoadConsistentProviderSnapshot(
+			pollCtx, s.Store, s.ConfigSnapshot())
+		cancel()
+		if loadErr == nil {
+			s.ApplyConfig(next)
+			appliedRevision = snapshotRevision
+			slog.Info("Provider configuration refreshed from PostgreSQL", "revision", snapshotRevision)
+		} else if ctx.Err() == nil {
+			slog.Error("refresh Provider configuration failed", "error", loadErr)
+		}
+		s.Mutation.Unlock()
+	}
+}

@@ -26,6 +26,9 @@ func TestPlatformExecutionBackendsHaveSafeDefaults(t *testing.T) {
 	if cfg.Gateway.Protocol != GatewayProtocolAnthropic {
 		t.Errorf("gateway.protocol = %q, want anthropic", cfg.Gateway.Protocol)
 	}
+	if cfg.AllowLegacyBodySignature {
+		t.Error("legacy dynamic Agent body-only signature must be disabled by default")
+	}
 	if cfg.Gateway.MaxAttempts != 3 {
 		t.Errorf("gateway.max_attempts = %d, want 3", cfg.Gateway.MaxAttempts)
 	}
@@ -234,10 +237,22 @@ func TestPlatformAdminCredentialRules(t *testing.T) {
 			value := "change-me"
 			r.Admin.Password = &value
 		}, "unsafe placeholder"},
+		{"public example password", func(r *platformRootFile) {
+			value := exampleAdminPassword
+			r.Admin.Password = &value
+		}, "unsafe placeholder"},
+		{"password shorter than account policy", func(r *platformRootFile) {
+			value := "too-short"
+			r.Admin.Password = &value
+		}, "password must contain 12-512 bytes"},
 		{"short session secret", func(r *platformRootFile) {
 			value := strings.Repeat("s", 31)
 			r.Admin.SessionSecret = &value
 		}, "[admin].session_secret"},
+		{"public example session secret", func(r *platformRootFile) {
+			value := exampleAdminSessionSecret
+			r.Admin.SessionSecret = &value
+		}, "public template placeholder"},
 		{"session ttl too short", func(r *platformRootFile) {
 			value := uint64(299)
 			r.Admin.SessionTTLSecs = &value
@@ -246,6 +261,10 @@ func TestPlatformAdminCredentialRules(t *testing.T) {
 			value := uint64(30*24*60*60 + 1)
 			r.Admin.SessionTTLSecs = &value
 		}, "[admin].session_ttl_secs"},
+		{"invalid trusted proxy CIDR", func(r *platformRootFile) {
+			value := []string{"not-a-cidr"}
+			r.Admin.TrustedProxyCIDRs = &value
+		}, "trusted_proxy_cidrs"},
 		{"empty username", func(r *platformRootFile) {
 			value := "   "
 			r.Admin.Username = &value
@@ -265,11 +284,35 @@ func TestPlatformAdminCredentialRules(t *testing.T) {
 	}
 }
 
+func TestManagedProvidersRejectPublicTemplateAPIKeys(t *testing.T) {
+	enabled := true
+
+	openAI := validPlatformRoot()
+	openAI.OpenAIAgents.Enabled = &enabled
+	openAIKey := exampleProviderAPIKey
+	openAI.OpenAIAgents.APIKey = &openAIKey
+	_, err := platformConfigFromFile(openAI)
+	requireErrContains(t, err, "openai_agents].api_key is a public template placeholder")
+
+	claude := validPlatformRoot()
+	claude.ClaudeManaged.Enabled = &enabled
+	claudeKey := exampleProviderAPIKey
+	agentID, environmentID := "agent-test", "environment-test"
+	claude.ClaudeManaged.APIKey = &claudeKey
+	claude.ClaudeManaged.AgentID = &agentID
+	claude.ClaudeManaged.EnvironmentID = &environmentID
+	_, err = platformConfigFromFile(claude)
+	requireErrContains(t, err, "claude_managed].api_key is a public template placeholder")
+}
+
 // password_hash 单独提供(不给明文密码)时应通过。
 func TestPlatformArgon2HashAloneIsAccepted(t *testing.T) {
 	root := validPlatformRoot()
 	root.Admin.Password = nil
-	hash := "$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHQ$aGFzaA"
+	hash, err := HashAdminPassword("valid-test-password")
+	if err != nil {
+		t.Fatal(err)
+	}
 	root.Admin.PasswordHash = &hash
 	cfg, err := platformConfigFromFile(root)
 	if err != nil {
@@ -291,6 +334,8 @@ func TestPlatformPublicBaseURLRules(t *testing.T) {
 		{"non-loopback http rejected", "http://agents.example.com", false, "loopback"},
 		{"bad scheme rejected", "ftp://127.0.0.1:8080", false, "must use http or https"},
 		{"relative rejected", "127.0.0.1:8080", false, "public_base_url"},
+		{"credentials rejected", "https://user:pass@agents.example.com", true, "must not contain credentials"},
+		{"query rejected", "https://agents.example.com?token=secret", true, "query string"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := validPlatformRoot()
@@ -319,6 +364,42 @@ func TestPlatformPublicBaseURLRules(t *testing.T) {
 		if _, err := platformConfigFromFile(root); err != nil {
 			t.Errorf("%s should be accepted, got %v", tc.baseURL, err)
 		}
+	}
+}
+
+func TestProviderURLsRejectEmbeddedCredentialsAndMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*platformRootFile)
+	}{
+		{"gateway userinfo", func(root *platformRootFile) {
+			value := "https://user:pass@gateway.example.com/v1"
+			root.Gateway.BaseURL = &value
+		}},
+		{"openai query", func(root *platformRootFile) {
+			value := "https://api.example.com/v1?api_key=secret"
+			root.OpenAIAgents.BaseURL = &value
+		}},
+		{"mcp fragment", func(root *platformRootFile) {
+			value := "https://mcp.example.com/sse#secret"
+			root.OpenAIAgents.MCPServerURL = &value
+		}},
+		{"claude userinfo", func(root *platformRootFile) {
+			value := "https://token@api.example.com/v1"
+			root.ClaudeManaged.BaseURL = &value
+		}},
+		{"gateway remote http", func(root *platformRootFile) {
+			value := "http://gateway.example.com/v1"
+			root.Gateway.BaseURL = &value
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := validPlatformRoot()
+			tc.mutate(root)
+			if _, err := platformConfigFromFile(root); err == nil {
+				t.Fatal("credential-bearing Provider URL must be rejected")
+			}
+		})
 	}
 }
 

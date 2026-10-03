@@ -335,8 +335,8 @@ func TestRegistryReplaceAllSwapsContents(t *testing.T) {
 	}
 }
 
-// ReplaceAll 总是重建信号量,即使 slug 与容量都没变。
-func TestRegistryReplaceAllAlwaysRebuildsPermits(t *testing.T) {
+// 多实例快照刷新在容量不变时必须复用信号量，避免在途任务与新任务各拿一套许可。
+func TestRegistryReplaceAllPreservesPermitsWhenCapacityIsStable(t *testing.T) {
 	registry := NewAgentRegistry([]*AgentConfig{registryAgent("same", 1, 1)})
 	before := registry.Get("same")
 	if !before.ExecutionSlots.TryAcquire() {
@@ -344,11 +344,11 @@ func TestRegistryReplaceAllAlwaysRebuildsPermits(t *testing.T) {
 	}
 	registry.ReplaceAll([]*AgentConfig{registryAgent("same", 1, 1)})
 	after := registry.Get("same")
-	if after.ExecutionSlots == before.ExecutionSlots {
-		t.Error("ReplaceAll must rebuild semaphores")
+	if after.ExecutionSlots != before.ExecutionSlots {
+		t.Error("ReplaceAll must preserve semaphores when capacity is unchanged")
 	}
-	if !after.ExecutionSlots.TryAcquire() {
-		t.Error("a rebuilt semaphore must start empty")
+	if after.ExecutionSlots.TryAcquire() {
+		t.Error("the in-flight permit must remain occupied after refresh")
 	}
 }
 

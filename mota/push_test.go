@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/hwhkit/hwhkit-go/core/apierror"
 )
 
 const testSecret = "test-signing-secret-0123456789"
@@ -60,7 +61,7 @@ func testConfig() *Config {
 		SigningSecret:     testSecret,
 		SignatureEncoding: "hex",
 		PushMode:          PushModeSync,
-		CallbackToken:     "mpk_test_token",
+		CallbackToken:     "",
 		ClaimTimeout:      60 * time.Second,
 		TaskTimeout:       600 * time.Second,
 	}
@@ -440,6 +441,7 @@ func TestPushAsyncReturns202AndSendsCallback(t *testing.T) {
 	cfg := testConfig()
 	cfg.PushMode = PushModeAsync
 	cfg.CallbackToken = "mpk_async_token"
+	cfg.CallbackTokenOrigin = cbSrv.URL
 	srv := newPushServer(t, cfg, PlaceholderProcessor{})
 
 	runID := unique("run-async")
@@ -472,6 +474,7 @@ func TestPushAsyncIdempotencyReplays202(t *testing.T) {
 	cfg := testConfig()
 	cfg.PushMode = PushModeAsync
 	cfg.CallbackToken = "mpk_async_token"
+	cfg.CallbackTokenOrigin = cbSrv.URL
 	srv := newPushServer(t, cfg, PlaceholderProcessor{})
 
 	runID := unique("run-async-idem")
@@ -492,6 +495,168 @@ func TestPushAsyncIdempotencyReplays202(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	if got := cb.count(); got != 1 {
 		t.Fatalf("expected exactly 1 callback after idempotent replay, got %d", got)
+	}
+}
+
+func TestPushAsyncDefinitiveCallbackFailureDoesNotReexecute(t *testing.T) {
+	cbSrv, cb := newCallbackServer(http.StatusBadRequest)
+	defer cbSrv.Close()
+	cfg := testConfig()
+	cfg.PushMode = PushModeAsync
+	srv := newPushServer(t, cfg, PlaceholderProcessor{})
+	runID := unique("run-async-failed-callback")
+	key := unique("idem-async-failed-callback")
+	body := []byte(pushTaskBodyWith(runID, map[string]any{"callbackUrl": cbSrv.URL}))
+	sig := ComputeSignature(testSecret, body, "hex")
+
+	resp, _ := postPush(t, srv.URL, body, sig, runID, key)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("first status = %d", resp.StatusCode)
+	}
+	waitForCondition(t, 5*time.Second, "failed callback", func() bool { return cb.count() >= 1 })
+	// The callback handler records the request before SendCallback observes the
+	// 400. Give the background worker a moment to settle, then replay the same
+	// request. Execution already occurred, so even a definite delivery failure
+	// must retain async_accepted and require reconciliation rather than rerun.
+	time.Sleep(100 * time.Millisecond)
+	resp, _ = postPush(t, srv.URL, body, sig, runID, key)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("replay status = %d", resp.StatusCode)
+	}
+	time.Sleep(150 * time.Millisecond)
+	if cb.count() != 1 {
+		t.Fatalf("callback count = %d, want 1 after failed delivery replay", cb.count())
+	}
+}
+
+func TestPushAsyncRejectedReceiptDoesNotReexecute(t *testing.T) {
+	stub := newCallbackStub(t, callbackStubResponse{
+		status: http.StatusOK,
+		body:   `{"code":"OK","accepted":false,"runStatus":"REJECTED"}`,
+	})
+	cfg := testConfig()
+	cfg.PushMode = PushModeAsync
+	srv := newPushServer(t, cfg, PlaceholderProcessor{})
+	runID := unique("run-async-rejected")
+	key := unique("idem-async-rejected")
+	body := []byte(pushTaskBodyWith(runID, map[string]any{"callbackUrl": stub.server.URL}))
+	sig := ComputeSignature(testSecret, body, "hex")
+
+	resp, _ := postPush(t, srv.URL, body, sig, runID, key)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("first status = %d", resp.StatusCode)
+	}
+	waitForCondition(t, 5*time.Second, "rejected callback", func() bool { return stub.callCount() >= 1 })
+	time.Sleep(100 * time.Millisecond)
+	resp, _ = postPush(t, srv.URL, body, sig, runID, key)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("replay status = %d", resp.StatusCode)
+	}
+	time.Sleep(150 * time.Millisecond)
+	if stub.callCount() != 1 {
+		t.Fatalf("callback count = %d, want 1 after rejected receipt replay", stub.callCount())
+	}
+}
+
+func TestPushAsyncUnconfirmedCallbackDoesNotReexecute(t *testing.T) {
+	stub := newCallbackStub(t, callbackStubResponse{
+		status: http.StatusOK,
+		body:   `not a receipt`,
+	})
+	cfg := testConfig()
+	cfg.PushMode = PushModeAsync
+	srv := newPushServer(t, cfg, PlaceholderProcessor{})
+	runID := unique("run-async-unconfirmed")
+	key := unique("idem-async-unconfirmed")
+	body := []byte(pushTaskBodyWith(runID, map[string]any{"callbackUrl": stub.server.URL}))
+	sig := ComputeSignature(testSecret, body, "hex")
+
+	resp, _ := postPush(t, srv.URL, body, sig, runID, key)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("first status = %d", resp.StatusCode)
+	}
+	waitForCondition(t, 5*time.Second, "unconfirmed callback", func() bool { return stub.callCount() >= 1 })
+	time.Sleep(100 * time.Millisecond)
+	resp, _ = postPush(t, srv.URL, body, sig, runID, key)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("replay status = %d", resp.StatusCode)
+	}
+	time.Sleep(150 * time.Millisecond)
+	if stub.callCount() != 1 {
+		t.Fatalf("callback count = %d, want 1 after unconfirmed receipt replay", stub.callCount())
+	}
+}
+
+type panickingProcessor struct{}
+
+func (panickingProcessor) Process(context.Context, *TaskContext) (*ProcessedOutput, error) {
+	panic("processor panic")
+}
+
+func TestPushRecoversProcessorPanic(t *testing.T) {
+	cfg := testConfig()
+	srv := newPushServer(t, cfg, panickingProcessor{})
+	runID := unique("run-panic")
+	body := []byte(pushTaskBody(runID))
+	sig := ComputeSignature(testSecret, body, "hex")
+	resp, raw := postPush(t, srv.URL, body, sig, runID, unique("idem-panic"))
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d body = %s", resp.StatusCode, raw)
+	}
+}
+
+type unserializableProcessor struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (p *unserializableProcessor) Process(context.Context, *TaskContext) (*ProcessedOutput, error) {
+	p.mu.Lock()
+	p.calls++
+	p.mu.Unlock()
+	return &ProcessedOutput{
+		PayloadResult: map[string]any{"unsupported": func() {}},
+		Summary:       "cannot serialize",
+	}, nil
+}
+
+func (p *unserializableProcessor) callCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
+}
+
+func TestPushSyncSerializationFailureIsTerminal(t *testing.T) {
+	processor := &unserializableProcessor{}
+	cfg := testConfig()
+	srv := newPushServer(t, cfg, processor)
+	runID := unique("run-invalid-result")
+	key := unique("idem-invalid-result")
+	body := []byte(pushTaskBody(runID))
+	sig := ComputeSignature(testSecret, body, "hex")
+
+	first, firstBody := postPush(t, srv.URL, body, sig, runID, key)
+	if first.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("first status = %d", first.StatusCode)
+	}
+	second, secondBody := postPush(t, srv.URL, body, sig, runID, key)
+	if second.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("replay status = %d", second.StatusCode)
+	}
+	if !bytes.Equal(firstBody, secondBody) {
+		t.Fatalf("terminal failure replay changed body:\nfirst: %s\nreplay: %s", firstBody, secondBody)
+	}
+	if processor.callCount() != 1 {
+		t.Fatalf("processor calls = %d, want 1", processor.callCount())
+	}
+}
+
+func TestValidatePushCallbackURLRejectsCredentials(t *testing.T) {
+	value := "https://user:password@api.example.test/callback"
+	var fieldErrors []apierror.FieldError
+	validatePushCallbackURL(&value, &fieldErrors)
+	if len(fieldErrors) != 1 || fieldErrors[0].Field != "callbackUrl" {
+		t.Fatalf("field errors = %+v", fieldErrors)
 	}
 }
 

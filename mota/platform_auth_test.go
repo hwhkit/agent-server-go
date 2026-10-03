@@ -119,6 +119,7 @@ func TestParseArgon2HashRejectsMalformedInput(t *testing.T) {
 		"版本段格式错":       "$argon2id$version$m=19456,t=2,p=1$" + parts[4] + "$" + parts[5],
 		"参数段格式错":       "$argon2id$v=19$memory=1$" + parts[4] + "$" + parts[5],
 		"参数为零":         "$argon2id$v=19$m=0,t=2,p=1$" + parts[4] + "$" + parts[5],
+		"参数资源过大":       "$argon2id$v=19$m=999999999,t=2,p=1$" + parts[4] + "$" + parts[5],
 		"盐不是 base64":   "$argon2id$v=19$m=19456,t=2,p=1$!!!$" + parts[5],
 		"哈希不是 base64":  "$argon2id$v=19$m=19456,t=2,p=1$" + parts[4] + "$!!!",
 		"盐为空":          "$argon2id$v=19$m=19456,t=2,p=1$$" + parts[5],
@@ -344,7 +345,11 @@ func TestAdminAuthLoginBackoffAfterRepeatedFailures(t *testing.T) {
 		t.Error("a successful login must clear the backoff")
 	}
 	auth.throttleMu.Lock()
-	failures := auth.failures
+	state := auth.throttles[accountSourceThrottleKey(auth.Username(), "local")]
+	var failures uint32
+	if state != nil {
+		failures = state.failures
+	}
 	auth.throttleMu.Unlock()
 	if failures != 0 {
 		t.Errorf("failures = %d, want 0 after a successful login", failures)
@@ -370,6 +375,42 @@ func TestAdminAuthBackoffGrowsAndCaps(t *testing.T) {
 		if remaining != want && remaining != want-1 {
 			t.Errorf("failures=%d: retryAfter = %d, want about %d", failures, remaining, want)
 		}
+	}
+}
+
+func TestAdminAuthThrottleIsScopedAndCannotBeClearedByAnotherAccount(t *testing.T) {
+	auth := newTestAuth(t, "pw-correct")
+	const sourceA = "198.51.100.10"
+	const sourceB = "198.51.100.11"
+	for i := 0; i < loginFailureGrace-1; i++ {
+		auth.recordFailureFor(auth.Username(), sourceA)
+	}
+
+	password := "ordinary-user-password"
+	hash, err := HashAdminPassword(password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	username := unique("throttle-user")
+	created, err := auth.store.CreateUser(context.Background(), username, hash, UserRoleUser)
+	if err != nil || !created {
+		t.Fatalf("create user = %t, %v", created, err)
+	}
+	t.Cleanup(func() { _, _ = auth.store.DeleteUser(context.Background(), username) })
+	outcome, err := auth.LoginFromSource(context.Background(), username, password, sourceA)
+	if err != nil || outcome.Kind != LoginAuthenticated {
+		t.Fatalf("ordinary user login = %+v, %v", outcome, err)
+	}
+
+	// The successful user login must not reset sourceA's failures against the
+	// admin. The next failure arms that account+source bucket.
+	auth.recordFailureFor(auth.Username(), sourceA)
+	if _, blocked := auth.blockedForKeys(
+		accountSourceThrottleKey(auth.Username(), sourceA)); !blocked {
+		t.Fatal("a different account login cleared the target-account throttle")
+	}
+	if _, blocked := auth.blockedForKeys(loginThrottleKeys(auth.Username(), sourceB)...); blocked {
+		t.Fatal("failures from sourceA must not lock out sourceB")
 	}
 }
 

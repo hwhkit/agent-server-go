@@ -329,14 +329,14 @@ func TestA2ARPCExecutorFailureBecomesAFailedTaskNotAnRPCError(t *testing.T) {
 	if status["state"] != "TASK_STATE_FAILED" {
 		t.Errorf("state = %v", status["state"])
 	}
-	// 失败原因通过状态消息带回,role 是 agent。
+	// 失败通过稳定公开文案带回，不能泄露子进程状态、路径或 Provider 回执。
 	message := status["message"].(map[string]any)
 	if message["role"] != "ROLE_AGENT" {
 		t.Errorf("role = %v", message["role"])
 	}
 	parts := message["parts"].([]any)
-	if parts[0].(map[string]any)["text"].(string) == "" {
-		t.Error("failure message text must not be empty")
+	if text := parts[0].(map[string]any)["text"].(string); text != "Agent execution failed" {
+		t.Errorf("failure message = %q, want sanitized public text", text)
 	}
 	if artifacts, ok := task["artifacts"].([]any); ok && len(artifacts) != 0 {
 		t.Errorf("artifacts = %v, want empty", artifacts)
@@ -484,6 +484,21 @@ func TestA2ARPCPartWithTwoContentMembersIsRejected(t *testing.T) {
 	violations := data[1].(map[string]any)["fieldViolations"].([]any)
 	if violations[0].(map[string]any)["field"] != "message.parts[0]" {
 		t.Errorf("field = %v", violations[0])
+	}
+}
+
+func TestA2ARPCRejectsInvalidMessageIdentityRoleAndUnsupportedParts(t *testing.T) {
+	h := newA2AHarness(t, a2aOneAgent(), a2aTestConfig(""), a2aPiOutput)
+	for _, message := range []map[string]any{
+		{"messageId": "", "role": "ROLE_USER", "parts": []any{map[string]any{"text": "x"}}},
+		{"messageId": "m", "role": "ROLE_AGENT", "parts": []any{map[string]any{"text": "x"}}},
+		{"messageId": "m", "role": "ROLE_USER", "parts": []any{map[string]any{"url": "https://example.test/file"}}},
+	} {
+		_, body := h.call(t, a2aRPC("SendMessage", map[string]any{"message": message}), "")
+		rpcErr := body["error"].(map[string]any)
+		if int(rpcErr["code"].(float64)) != -32602 {
+			t.Errorf("message=%v code=%v, want invalid params", message, rpcErr["code"])
+		}
 	}
 }
 

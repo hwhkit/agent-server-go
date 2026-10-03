@@ -63,14 +63,31 @@ func a2aSendMessage(
 		return nil, a2aFieldViolation("message", "message is required")
 	}
 	message := params.Message
+	if !trimSpaceNonEmpty(message.MessageID) || len(message.MessageID) > 200 {
+		return nil, a2aFieldViolation("message.messageId", "messageId must contain 1-200 bytes")
+	}
+	if message.Role != A2ARoleUser {
+		return nil, a2aFieldViolation("message.role", "SendMessage requires ROLE_USER")
+	}
+	if message.ContextID != nil &&
+		(!trimSpaceNonEmpty(*message.ContextID) || len(*message.ContextID) > 200) {
+		return nil, a2aFieldViolation("message.contextId", "contextId must contain 1-200 bytes")
+	}
 	if len(message.Parts) == 0 {
 		return nil, a2aFieldViolation("message.parts", "at least one part is required")
 	}
 	for index := range message.Parts {
-		if !message.Parts[index].HasSingleContent() {
+		part := &message.Parts[index]
+		if !part.HasSingleContent() {
 			return nil, a2aFieldViolation(
 				fieldIndexName("message.parts", index),
 				"each part must set exactly one of text, raw, url, or data")
+		}
+		kind, _ := part.Content()
+		if kind != A2APartIsText && kind != A2APartIsData {
+			return nil, a2aFieldViolation(
+				fieldIndexName("message.parts", index),
+				"raw and url parts are not supported by this execution endpoint")
 		}
 	}
 	var configuration A2ASendMessageConfiguration
@@ -120,6 +137,9 @@ func a2aSendMessage(
 	timeout := time.Duration(agent.TimeoutSecs) * time.Second
 	output, execErr := state.dispatcher.Execute(ctx, agent.Slug, mapped.Context, mapped.RawInput, timeout)
 	durationMs := time.Since(started).Milliseconds()
+	if execErr == nil && output == nil {
+		execErr = newDispatchError("invalid_agent_output", "Agent executor returned no output")
+	}
 
 	history := []A2AMessage{*message}
 	ApplyA2AHistoryLength(&history, configuration.HistoryLength)
@@ -241,12 +261,33 @@ func a2aFailureState(dispatchErr *DispatchError) A2ATaskState {
 	}
 }
 
-// a2aFailureMessage 把失败原因作为状态消息带回调用方。
+// a2aFailureMessage 把失败原因收敛成稳定的公开文案后作为状态消息带回调用方。
+//
+// DispatchError.Detail 可能包含本机路径、子进程状态或上游 Provider 响应体，只能
+// 留在服务端日志/运行记录，不能直接进入 A2A 响应。
 func a2aFailureMessage(err error) A2AMessage {
+	text := "Agent execution failed"
+	var dispatchErr *DispatchError
+	if errors.As(err, &dispatchErr) {
+		switch dispatchErr.Code {
+		case "agent_disabled", "agent_not_found":
+			text = "Agent is unavailable"
+		case "agent_overloaded":
+			text = "Agent is overloaded"
+		case "execution_timeout":
+			text = "Agent execution timed out"
+		case "executor_unavailable":
+			text = "Agent executor is unavailable"
+		case "input_too_large":
+			text = "Agent input exceeded the configured limit"
+		case "output_too_large":
+			text = "Agent output exceeded the configured limit"
+		}
+	}
 	return A2AMessage{
 		MessageID: "msg-" + randomToken(12),
 		Role:      A2ARoleAgent,
-		Parts:     []A2APart{A2APartText(err.Error())},
+		Parts:     []A2APart{A2APartText(text)},
 	}
 }
 

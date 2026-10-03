@@ -28,6 +28,7 @@ type ProviderAssignment struct {
 
 type ProviderView struct {
 	ID               string               `json:"id"`
+	Revision         int64                `json:"revision"`
 	Name             string               `json:"name"`
 	Description      string               `json:"description"`
 	Category         string               `json:"category"`
@@ -49,6 +50,13 @@ func providerKnown(id string) bool {
 }
 
 func LoadSavedProviders(ctx context.Context, store *AgentStore, config *PlatformConfig) error {
+	if err := applySavedProviders(ctx, store, config); err != nil {
+		return err
+	}
+	return config.Validate()
+}
+
+func applySavedProviders(ctx context.Context, store *AgentStore, config *PlatformConfig) error {
 	for _, id := range providerIDs {
 		value, err := store.GetExecutorProvider(ctx, id)
 		if err != nil {
@@ -60,7 +68,76 @@ func LoadSavedProviders(ctx context.Context, store *AgentStore, config *Platform
 			}
 		}
 	}
-	return config.Validate()
+	applyProviderSecretEnvOverrides(config)
+	return nil
+}
+
+// applyProviderSecretEnvOverrides keeps deployment secret injection
+// authoritative over encrypted values saved by the management UI. This is
+// essential for emergency rotation: a restart with a new secret must never be
+// silently rolled back by an older database snapshot. Non-secret Provider
+// settings remain managed by the database after first save.
+func applyProviderSecretEnvOverrides(config *PlatformConfig) {
+	if value, ok := lookupNonBlankEnv("AGENT_GATEWAY__API_KEY"); ok {
+		config.Gateway.APIKey = value
+	} else if value, ok := lookupNonBlankEnv("ANTHROPIC_AUTH_TOKEN"); ok {
+		config.Gateway.APIKey = value
+	}
+	if value, ok := lookupNonBlankEnv("OPENAI_AGENTS__API_KEY"); ok {
+		config.OpenAIAgents.APIKey = value
+	}
+	if value, ok := lookupNonBlankEnv("OPENAI_AGENTS__MCP_AUTHORIZATION"); ok {
+		config.OpenAIAgents.MCPAuthorization = value
+	}
+	if value, ok := lookupNonBlankEnv("CLAUDE_MANAGED__API_KEY"); ok {
+		config.ClaudeManaged.APIKey = value
+	}
+}
+
+// RefreshSavedProviders 从 PostgreSQL 合并 Provider 字段，返回新的不可变快照。
+// 运行快照在启动后已清掉管理口令和主密钥，因此只在校验副本中补占位值。
+func RefreshSavedProviders(ctx context.Context, store *AgentStore, current *PlatformConfig) (*PlatformConfig, error) {
+	next := clonePlatformConfig(current)
+	if err := applySavedProviders(ctx, store, next); err != nil {
+		return nil, err
+	}
+	validation := clonePlatformConfig(next)
+	validation.AdminPassword = "provider-refresh-validation"
+	validation.AdminPasswordHash = ""
+	validation.AdminSessionSecret = strings.Repeat("v", 32)
+	if err := validation.Validate(); err != nil {
+		return nil, err
+	}
+	return next, nil
+}
+
+// LoadConsistentProviderSnapshot 用全局 revision 栅栏把配置值和每项 revision
+// 绑定到同一个数据库时刻；有并发写时最多重试三次。
+func LoadConsistentProviderSnapshot(
+	ctx context.Context, store *AgentStore, current *PlatformConfig,
+) (*PlatformConfig, map[string]int64, int64, error) {
+	for range 3 {
+		before, err := store.ExecutorProviderRevision(ctx)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		next, err := RefreshSavedProviders(ctx, store, current)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		revisions, err := store.ListExecutorProviderRevisions(ctx)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		after, err := store.ExecutorProviderRevision(ctx)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		if before == after {
+			return next, revisions, after, nil
+		}
+	}
+	return nil, nil, 0, errors.New("Provider configuration changed during snapshot read")
 }
 
 func ListProviders(config *PlatformConfig) []ProviderView {
@@ -74,6 +151,16 @@ func ListProviders(config *PlatformConfig) []ProviderView {
 func UpdateProvider(current *PlatformConfig, id string, input map[string]any) (*PlatformConfig, map[string]any, error) {
 	if !providerKnown(id) {
 		return nil, nil, errors.New("unknown executor provider")
+	}
+	known, err := storedProviderValue(current, id)
+	if err != nil {
+		return nil, nil, err
+	}
+	delete(known, "mcp_authorization_configured")
+	for key := range input {
+		if _, ok := known[key]; !ok {
+			return nil, nil, fmt.Errorf("unknown Provider field %q", key)
+		}
 	}
 	next := clonePlatformConfig(current)
 	if err := applyProviderValue(next, id, input, true); err != nil {
@@ -94,12 +181,17 @@ func UpdateProvider(current *PlatformConfig, id string, input map[string]any) (*
 
 func clonePlatformConfig(current *PlatformConfig) *PlatformConfig {
 	next := *current
+	next.AdminTrustedProxyCIDRs = append([]string(nil), current.AdminTrustedProxyCIDRs...)
 	next.ClaudeAllowedEnv = append([]string(nil), current.ClaudeAllowedEnv...)
 	next.LocalAgents.AllowedEnv = append([]string(nil), current.LocalAgents.AllowedEnv...)
 	next.LocalAgents.StrategySkillPaths = append([]string(nil), current.LocalAgents.StrategySkillPaths...)
 	next.LocalAgents.AnalysisSkillPaths = append([]string(nil), current.LocalAgents.AnalysisSkillPaths...)
 	next.LocalAgents.WorkflowSkillPaths = append([]string(nil), current.LocalAgents.WorkflowSkillPaths...)
 	next.ClaudeManaged.VaultIDs = append([]string(nil), current.ClaudeManaged.VaultIDs...)
+	if current.ClaudeManaged.MaxListCostCents != nil {
+		value := *current.ClaudeManaged.MaxListCostCents
+		next.ClaudeManaged.MaxListCostCents = &value
+	}
 	return &next
 }
 
@@ -300,6 +392,33 @@ func storedProviderValue(c *PlatformConfig, id string) (map[string]any, error) {
 		value["api_key"] = c.ClaudeManaged.APIKey
 	}
 	return value, nil
+}
+
+// StoredProviderUpdateGroup 返回必须原子保存的一组 Provider。部分 Provider 在
+// 运行配置中共享字段；任一别名更新时要同时刷新全组，避免重启时旧记录按加载顺序
+// 覆盖刚保存的值。
+func StoredProviderUpdateGroup(c *PlatformConfig, id string) (map[string]map[string]any, error) {
+	var ids []string
+	switch id {
+	case "gateway", "deepseek_harness":
+		ids = []string{"gateway", "deepseek_harness"}
+	case "codex_local", "pi_local":
+		ids = []string{"codex_local", "pi_local"}
+	default:
+		if !providerKnown(id) {
+			return nil, errors.New("unknown executor provider")
+		}
+		ids = []string{id}
+	}
+	values := make(map[string]map[string]any, len(ids))
+	for _, providerID := range ids {
+		value, err := storedProviderValue(c, providerID)
+		if err != nil {
+			return nil, err
+		}
+		values[providerID] = value
+	}
+	return values, nil
 }
 
 func applyProviderValue(c *PlatformConfig, id string, value map[string]any, preserveEmptySecrets bool) error {

@@ -159,11 +159,13 @@ func (h *PushHandler) handle(w http.ResponseWriter, r *http.Request) (int, *apie
 	}
 	var task BoundTask
 	if err := json.Unmarshal(body, &task); err != nil {
-		slog.Warn("Push envelope unmarshal failed", "run_id", runID, "body", string(body), "error", err.Error())
+		slog.Warn("Push envelope unmarshal failed",
+			"run_id", runID, "request_bytes", len(body), "error", err.Error())
 		return 0, pushValidation("body", fmt.Sprintf("invalid task envelope: %v", err))
 	}
 	if apiErr := validateTask(&task, runID); apiErr != nil {
-		slog.Warn("Push task validation failed", "run_id", runID, "body", string(body), "api_error", fmt.Sprintf("%+v", apiErr))
+		slog.Warn("Push task validation failed",
+			"run_id", runID, "request_bytes", len(body), "api_error", fmt.Sprintf("%+v", apiErr))
 		return 0, apiErr
 	}
 
@@ -186,6 +188,9 @@ func (h *PushHandler) handle(w http.ResponseWriter, r *http.Request) (int, *apie
 		slog.Info("replaying cached synchronous Push response", "run_id", runID)
 		writePushJSON(w, http.StatusOK, decision.ResponseBody)
 		return http.StatusOK, nil
+	case PushSyncFailed:
+		slog.Warn("replaying terminal synchronous Push failure", "run_id", runID)
+		return 0, syncPushFailure(decision.ResponseBody)
 	case PushAsyncAccepted:
 		slog.Info("replaying asynchronous Push acknowledgement", "run_id", runID)
 		w.WriteHeader(http.StatusAccepted)
@@ -234,8 +239,8 @@ func pushTaskContext(task *BoundTask, raw map[string]any, runID string) *TaskCon
 
 // handleSync 在同步预算内执行并直接回结果信封。
 //
-// 任何失败路径都必须 releaseLease —— 否则同一个幂等键会被 processing 记录永久占住,
-// 平台重投时只会拿到 409。
+// 执行前/执行中失败要 releaseLease；执行已成功但结果无法序列化时，
+// 必须记录终态失败，避免重试再次触发任务副作用。
 func (h *PushHandler) handleSync(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -262,18 +267,25 @@ func (h *PushHandler) handleSync(
 	}
 
 	if h.Config.TrustedUsageReportingEnabled && output.Usage == nil {
-		h.releaseLease(r.Context(), idempotencyKey, runID, requestHash)
-		return 0, &apierror.ApiError{
-			Status: http.StatusBadGateway, Type: "urn:mota:usage-unavailable",
-			Title:  "Usage Unavailable",
-			Detail: "executor did not return final provider token usage",
+		if persistErr := h.Idempotency.FailSync(
+			r.Context(), idempotencyKey, runID, requestHash, "usage_unavailable"); persistErr != nil {
+			slog.Error("persist synchronous Push usage failure failed",
+				"run_id", runID, "error", persistErr)
+			return 0, apierror.Internal("persist task failure failed")
 		}
+		return 0, syncPushFailure("usage_unavailable")
 	}
 
 	payload := output.ToTransportPayload(taskContext.Language)
 	encoded, err := json.Marshal(payload)
 	if err != nil {
-		return 0, apierror.Internal("serialize task result failed")
+		if persistErr := h.Idempotency.FailSync(
+			r.Context(), idempotencyKey, runID, requestHash, "invalid_result"); persistErr != nil {
+			slog.Error("persist synchronous Push failure failed",
+				"run_id", runID, "error", persistErr)
+			return 0, apierror.Internal("persist task failure failed")
+		}
+		return 0, syncPushFailure("invalid_result")
 	}
 	responseBody := string(encoded)
 	if err := h.Idempotency.CompleteSync(r.Context(), idempotencyKey, runID, requestHash, responseBody); err != nil {
@@ -282,6 +294,17 @@ func (h *PushHandler) handleSync(
 	}
 	writePushJSON(w, http.StatusOK, responseBody)
 	return http.StatusOK, nil
+}
+
+func syncPushFailure(reason string) *apierror.ApiError {
+	if reason == "usage_unavailable" {
+		return &apierror.ApiError{
+			Status: http.StatusBadGateway, Type: "urn:mota:usage-unavailable",
+			Title:  "Usage Unavailable",
+			Detail: "executor did not return final provider token usage",
+		}
+	}
+	return apierror.Internal("previous task result could not be serialized")
 }
 
 // ---------------------------------------------------------------------------
@@ -311,8 +334,17 @@ func (h *PushHandler) handleAsync(
 	if client == nil {
 		client = http.DefaultClient
 	}
+	signingSecret := h.Config.SigningSecret
+	callbackToken := h.Config.CallbackToken
+	callbackTokenOrigin := h.Config.CallbackTokenOrigin
 
 	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				slog.Error("asynchronous Push worker panicked; acceptance retained for reconciliation",
+					"run_id", runID)
+			}
+		}()
 		// 已经 202 了,后台执行完全脱离请求生命周期。
 		ctx := context.Background()
 		output, err, timedOut := h.executeWithBudget(ctx, agentCode, taskContext, raw, timeout)
@@ -323,7 +355,8 @@ func (h *PushHandler) handleAsync(
 			slog.Error("asynchronous processor timed out",
 				"run_id", runID, "timeout_secs", int64(timeout.Seconds()))
 			if trusted {
-				// 受信通道拿不到 FINAL usage 就不投递 —— 宁可让平台超时重推。
+				// 受信通道拿不到 FINAL usage 就不投递。执行已经开始，保留
+				// async_accepted 防止平台重投再次触发可能有副作用的任务。
 				slog.Error("trusted async execution timed out without FINAL usage; callback suppressed",
 					"run_id", runID)
 				return
@@ -347,10 +380,13 @@ func (h *PushHandler) handleAsync(
 		}
 
 		receipt, err := SendCallback(ctx, client, callbackURL, runID,
-			h.Config.SigningSecret, h.Config.CallbackToken, payload)
+			signingSecret, callbackToken, callbackTokenOrigin, payload)
 		switch {
 		case err != nil:
-			slog.Error("callback delivery exhausted", "run_id", runID, "error", err)
+			slog.Error("callback delivery exhausted; acceptance retained for reconciliation",
+				"run_id", runID, "error", err)
+		case receipt == nil:
+			slog.Error("callback delivery returned no receipt", "run_id", runID)
 		case receipt.Accepted:
 			slog.Info("async Push completed",
 				"run_id", runID, "run_status", derefOrEmpty(receipt.RunStatus))
@@ -390,12 +426,20 @@ func (h *PushHandler) executeWithBudget(
 	}
 	done := make(chan result, 1)
 	go func() {
+		defer func() {
+			if recover() != nil {
+				done <- result{err: fmt.Errorf("task execution panicked")}
+			}
+		}()
 		got, err := execution.Execute(execCtx, agentCode, taskContext, raw, timeout)
 		done <- result{output: got, err: err}
 	}()
 
 	select {
 	case got := <-done:
+		if got.err == nil && got.output == nil {
+			return nil, fmt.Errorf("task execution returned a nil output"), false
+		}
 		return got.output, got.err, false
 	case <-execCtx.Done():
 		return nil, nil, true
@@ -671,6 +715,10 @@ func validatePushCallbackURL(value *string, errors *[]apierror.FieldError) {
 	parsed, err := url.Parse(*value)
 	if err != nil || !parsed.IsAbs() || parsed.Host == "" {
 		*errors = append(*errors, fieldError("callbackUrl", message))
+		return
+	}
+	if parsed.User != nil {
+		*errors = append(*errors, fieldError("callbackUrl", "must not contain credentials"))
 		return
 	}
 	if parsed.Scheme == "https" {

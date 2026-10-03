@@ -1,7 +1,13 @@
 # hwhkit 标准配置段(server / observability / runtime / integrations)
 [server]
-host = "0.0.0.0"
-port = 8080
+bind_addr = "0.0.0.0:8080"
+read_timeout_ms = 10000
+# Agent/A2A 同步执行最长允许 3600 秒；给终态落库与响应写出留 10 秒余量。
+write_timeout_ms = 3610000
+idle_timeout_ms = 60000
+body_limit_bytes = 4194304
+drain_timeout_ms = 30000
+handler_timeout_ms = 3610000
 
 [observability]
 service_name = "mota-agent-server"
@@ -56,6 +62,8 @@ default_agent_slug = ""
 # 可选的回调令牌(mpk_*)。配置了会在 callback URL 上附加 ?token=,
 # 兼容要求「令牌+签名」双凭证的存量平台;新平台(2026-08-17 起)令牌可选,可留空。
 # callback_token = "mpk_xxxxxxxx"
+# 配置 token 时必须同时绑定唯一受信 origin，禁止把全局 token 发往任务指定的第三方地址。
+# callback_token_origin = "https://api.example.com"
 # 信封 usage 自 2026-09-16 起总是回传（RULE-BND-001）：执行器有计量用真实值，没有则兜底最小合规值（平台要求 totalTokens > 0）。
 # 本开关只对「受信 Investor Workflow Host」生效：开启后拿不到供应商 FINAL usage 的结果直接判失败
 # （同步 502 / 异步抑制 callback），不再走零值兜底。
@@ -65,10 +73,14 @@ trusted_usage_reporting_enabled = false
 # 管理页面、管理 API、动态 /agent/{slug} 接口、PostgreSQL 与执行器全部运行在
 # 当前 Go 进程内。生产环境建议通过环境变量覆盖密码和 session secret。
 [platform]
-enabled = true
+# 安全默认：仅在显式提供数据库与管理员凭据后开启管理面。
+enabled = false
 public_base_url = "http://127.0.0.1:8080"
 max_request_body_bytes = 2097152
 global_max_concurrency = 16
+# 动态 /agent/{slug} 默认只接受带 timestamp + nonce 的 X-Agent-Signature v1。
+# 旧 X-MoTA-Signature 只签 body、无法防重放；仅迁移期临时开启。
+allow_legacy_body_signature = false
 
 [admin]
 username = "admin"
@@ -79,6 +91,8 @@ username = "admin"
 # 管理会话有效期必须为 300-2592000 秒（最长 30 天）。
 session_ttl_secs = 259200
 secure_cookies = false
+# 反向代理部署时显式列出可信直连代理 CIDR；空列表时忽略所有转发来源头。
+# trusted_proxy_cidrs = ["127.0.0.1/32", "::1/128"]
 
 [claude]
 # Claude Code 以服务进程的 OS 权限运行，并非文件系统沙箱；只有在已完成
@@ -87,7 +101,6 @@ enabled = false
 workspace_root = "."
 binary = "claude"
 max_output_bytes = 1048576
-max_prompt_bytes = 131072
 allowed_env = [
   "HOME", "PATH", "USER", "TMPDIR", "XDG_CONFIG_HOME",
   "ANTHROPIC_API_KEY", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
@@ -153,6 +166,7 @@ openhands_default_model = ""
 # workflow_skill_paths = []
 default_model = "litellm/dsk_4f"
 max_output_bytes = 1048576
+max_prompt_bytes = 131072
 allowed_env = [
   "HOME", "PATH", "USER", "TMPDIR", "XDG_CONFIG_HOME", "CODEX_HOME",
   "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
@@ -173,8 +187,9 @@ allowed_env = [
 [a2a]
 enabled = false
 base_path = "/a2a"
-# 声明并提供 SendStreamingMessage / SubscribeToTask。
-stream_enabled = true
+# 当前未实现 SendStreamingMessage / SubscribeToTask，不声明流式能力。
+# 设置为 true 会在启动校验时报错，避免 Agent Card 误报能力。
+stream_enabled = false
 # 强制 Authorization: Bearer;仅在受信内网且已有其他鉴权时才可关闭。
 require_bearer_auth = true
 # 对外 card 的 version 字段(Agent 自身版本，不是协议版本)；留空取内置版本号。

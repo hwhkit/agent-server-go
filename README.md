@@ -1,227 +1,259 @@
 # mota-agent-server-go
 
-基于 [hwhkit-go](https://github.com/hwhkit/hwhkit-go)(`RunAndServe` / `Application` 新 API)构建的
-MOTA <-> 自托管 agent 桥接服务,与 [`mota-agent-server-rs`](../mota-agent-server-rs) /
-[`mota-agent-server-py`](../mota-agent-server-py) 同构,一个服务同时覆盖协议文档中的两种接入方式:
+Go 实现的 MOTA 自托管 Agent 桥接服务。一个进程可同时提供：
 
-| 接入方式 | 方向 | 本服务的实现 |
-|---|---|---|
-| **Push** | MOTA 调用你的接口 | `POST <endpoint>` 接收任务,校验 `X-MoTA-Signature`,处理并回传结果 |
-| **Pull** | 你的 worker 轮询队列 | `claim`(长轮询)→ 处理 → `complete` 回传;期间 `renew` 续租;`heartbeat` 上报存活 |
+- Push：MOTA 调用 `POST /mota/push`，服务同步返回或异步回调结果；
+- Pull：worker 通过 `claim → renew → complete` 消费平台队列，并独立上报心跳；
+- 动态 Agent：`POST /agent/{slug}` 与 `/agent-center-go/{slug}`；
+- 管理台：`GET /admin`，包含 Provider、岗位职能体、运行、账号与审计管理；
+- A2A v1.0：默认关闭，启用后暴露 Agent Card 与同步 `SendMessage` / `GetTask`；
+  当前不声明尚未实现的流式能力。
 
-hwhkit-go 开箱即用能力: `/health`、`/health/ready`、`/metrics`、`/version`、`/info`、
-标准中间件束(request-id、panic-recover → RFC 7807、CORS、gzip/br、body limit、timeout)、
-SIGTERM 优雅退出(先广播 `ShutdownToken` 再 drain)。
+HTTP 服务基于
+[hwhkit-go](https://github.com/hwhkit/hwhkit-go)，包含健康检查、指标、请求 ID、
+panic recovery、请求体限制、超时和优雅退出。
 
-## 单体多 Agent 管理平台
+## 当前能力与边界
 
-Go 版以 Rust 实现为行为基准，现已在同一进程内增加：
+- PostgreSQL 保存 Agent、Provider、运行、审计、会话、nonce 和幂等状态；
+- Agent 与 Provider 密钥使用 AES-256-GCM 加密，管理 API 不回显明文；
+- 管理账号支持 `admin` / `user`，密码使用 Argon2id；
+- Provider 保存后对后续任务热更新；运行中的任务继续使用启动时快照；
+- Provider API 返回 `revision`，PUT 可用 `If-Match` 防止并发覆盖；连接同一数据库的
+  多实例通过版本轮询最终收敛；
+- Agent 更新同样使用 revision/`If-Match`，CRUD 在事务中递增全局注册表版本；多实例
+  会自动收敛停用、删除与签名密钥轮换，运行中的任务继续使用已取得的旧快照；
+- Agent 与全局并发限制是**单进程**限制，多副本的总容量需要由外层调度控制；
+- 异步 callback 只有收到 `HTTP 200 + code=OK + accepted=true` 才算投递成功；
+  明确拒绝、确定投递失败与无法确认的回执分别记录，不把不确定结果当作可安全重试；
+- 动态 Agent callback 目前不是持久化 outbox。服务在返回 202 后崩溃仍可能留下需要按
+  原 `runId` 核对的结果窗口；相同幂等请求可能持续重放 202，并不会自动恢复后台任务。
 
-- `GET /admin` 与 `/api/admin/*` 管理面（HttpOnly Session、CSRF、登录退避）
-- `POST /agent/{slug}` 动态 Agent 网关与热更新 Registry；外部前缀别名为
-  `POST /agent-center-go/{slug}`，两者签名 canonical 都固定使用 `/agent/{slug}`
-- PostgreSQL Agent 配置、Provider 配置、run、nonce、幂等 lease/缓存与管理 Session
-- AES-256-GCM 加密的 per-Agent Signing Secret，管理 API 永不回显明文
-- 智能体中心：本地系统与远端托管智能体分组，配置完成后才能分配给岗位
-- 本地真实 Harness：Codex、Pi、OpenCode、Qwen Code、Gemini CLI、OpenHands、Claude Code、DeepSeek Harness
-- 远端托管运行时：OpenAI Agents API 与 Claude Managed Agents Session/SSE
-- Agent/全局双层并发门、有界 admission、运行日志和 Provider 热更新
-- 账号管理：数据库多账号登录、`admin/user` 角色、停用/改密踢下线、管理员保护与审计日志
-- Rust 同款 HMAC v1 canonical、防重放 5 分钟窗口和兼容 `X-MoTA-Signature`
+更完整的运维边界见 [维护说明](doc/MAINTENANCE.md) 和
+[生产协议](doc/PUSH-PRODUCTION.md)。
 
-```bash
-export PLATFORM__ENABLED=true
-export ADMIN__PASSWORD='<强管理员密码>'
-export ADMIN__SESSION_SECRET='<至少 32 字节的稳定随机值>'
-export PLATFORM__PUBLIC_BASE_URL='http://127.0.0.1:8080'
-export DATABASE_URL='postgres://postgres:postgres@127.0.0.1:5432/mota_agent'
-```
+## 环境要求
 
-浏览器打开 `http://127.0.0.1:8080/admin`。Provider 密钥与 MCP Authorization 会作为
-整份配置使用平台主密钥加密后写入 PostgreSQL，管理 API 只返回“已配置”状态，不回显明文。
-配置保存后立即对新任务生效；正在运行的任务继续使用启动时的配置快照。
+- Go 1.26.8 工具链（模块最低语言版本为 1.26）；
+- PostgreSQL 15、16 或 17；
+- 构建期所需的 hwhkit-go 固定源码；
+- 可选的本地 Agent CLI（Codex、Pi、OpenCode、Qwen Code、Gemini CLI、
+  OpenHands、Claude Code、DeepSeek Harness）。
 
-### 账号与审计
-
-启动时 `ADMIN__USERNAME` 和管理员密码会幂等迁移为数据库中的初始 `admin` 账号；
-之后可在“账号管理”页面创建管理员或普通用户。管理员可以管理全部账号并查看全部
-审计记录，普通用户只能查看自己的审计。修改密码、停用或删除账号会立即撤销该账号
-的现有会话；系统禁止当前管理员降级、停用或删除自己，并保护至少一个已启用管理员。
-账号密码使用 Argon2id 存储，用户列表与审计 API 不返回密码哈希。
-
-OpenAI 托管智能体启用示例：
+当前 hwhkit-go 模块仍通过 `go.mod` 的 sibling `replace` 引用
+`../.hwhkit-go-src/*`。首次检出后运行：
 
 ```bash
-export OPENAI_AGENTS__ENABLED=true
-export OPENAI_AGENTS__API_KEY='<OpenAI API key>'
+make bootstrap-hwhkit
 ```
 
-Claude 托管智能体启用示例：
+该命令会把固定版本检出到仓库同级的 `.hwhkit-go-src`。手工执行时也必须在
+`mota-agent-server-go` 的**父目录**创建该目录，不能克隆到本仓库内部。
+
+## 快速开始
+
+先准备一个专用 PostgreSQL 数据库，再从模板创建本地环境文件：
 
 ```bash
-export CLAUDE_MANAGED__ENABLED=true
-export CLAUDE_MANAGED__API_KEY='<Anthropic API key>'
-export CLAUDE_MANAGED__AGENT_ID='agent_...'
-export CLAUDE_MANAGED__ENVIRONMENT_ID='env_...'
+cp .env.example .env.dev
 ```
 
-v1 canonical 与 Rust/Python 相同：
+至少设置：
+
+```bash
+MOTA__SIGNING_SECRET='<平台签发的 mbt_ 密钥>'
+DATABASE_URL='postgres://postgres:postgres@127.0.0.1:5432/mota_agent'
+# 只验证协议桥时关闭管理平台；启用管理平台则按下文补齐管理员凭据。
+PLATFORM__ENABLED=false
+```
+
+不要把模板中的说明文字当作密钥。推荐生成管理 Session Secret：
+
+```bash
+openssl rand -base64 48
+```
+
+构建和启动：
+
+```bash
+make bootstrap-hwhkit
+make build
+set -a; . ./.env.dev; set +a
+./dist/mota-agent-server
+```
+
+验证健康状态：
+
+```bash
+curl -fsS http://127.0.0.1:8080/health
+curl -fsS http://127.0.0.1:8080/health/ready
+```
+
+最小 Push 请求必须包含 run ID、幂等键和完整 bound-task v1 信封：
+
+```bash
+RUN_ID='run-1'
+IDEMPOTENCY_KEY='delivery-1'
+BODY='{"schemaVersion":"1.0","runId":"run-1","agentCode":"demo","positionType":"FUNDAMENTAL_ANALYST","templateInputData":[],"taskBrief":{},"callbackUrl":"https://platform.example.com/callback"}'
+SIG=$(python3 -c 'import hmac,hashlib,os,sys; print(hmac.new(os.environ["MOTA__SIGNING_SECRET"].encode(),sys.argv[1].encode(),hashlib.sha256).hexdigest())' "$BODY")
+
+curl -fsS -X POST http://127.0.0.1:8080/mota/push \
+  -H 'Content-Type: application/json' \
+  -H "X-MoTA-Run-ID: $RUN_ID" \
+  -H "X-MoTA-Idempotency-Key: $IDEMPOTENCY_KEY" \
+  -H "X-MoTA-Signature: $SIG" \
+  --data-binary "$BODY"
+```
+
+## 管理平台
+
+启用管理平台需要显式配置：
+
+```bash
+PLATFORM__ENABLED=true
+PLATFORM__PUBLIC_BASE_URL='http://127.0.0.1:8080'
+ADMIN__USERNAME='admin'
+ADMIN__PASSWORD='<独立强密码>'
+ADMIN__SESSION_SECRET='<至少 32 字节的稳定随机值>'
+DATABASE_URL='postgres://postgres:postgres@127.0.0.1:5432/mota_agent'
+```
+
+打开 `http://127.0.0.1:8080/admin`。生产环境还应设置：
+
+- `PLATFORM__PUBLIC_BASE_URL=https://...`；
+- `ADMIN__SECURE_COOKIES=true`；
+- 独立低权限服务账号与受限的 CLI 工作区；
+- 可靠备份 PostgreSQL 和 `ADMIN__SESSION_SECRET`。丢失主密钥将无法解密已保存密钥。
+
+启动时会把 `ADMIN__USERNAME` 与管理员密码幂等迁移为初始管理员。管理员可管理账号、
+Provider 和岗位职能体并查看全部审计；普通用户只有只读访问权，且只能查看自己的审计。
+停用、删除或修改密码会撤销该账号现有会话，系统会保护最后一个已启用管理员。
+
+### 动态 Agent 签名
+
+v1 canonical 与其他实现一致：
 
 ```text
 v1\nPOST\n/agent/{slug}\n{unix_timestamp}\n{nonce}\n{run_id}\n{idempotency_key}\n{sha256_hex(body)}
 ```
 
-## 环境要求
+外部别名 `/agent-center-go/{slug}` 仍使用 `/agent/{slug}` 参与 canonical 计算。
 
-- **Go >= 1.25**
-- hwhkit-go 子模块的 go.mod 使用 workspace 内相对 `replace`(未随 tag 发布),
-  因此依赖本地源码(`.hwhkit-go-src/`,由仓库根 sparse-checkout 生成)。
-  `git pull` 后如源码缺失,重新执行:
+### Provider 并发更新
+
+Provider 列表中的每项都带 `revision`。管理台会把当前 revision 作为 `If-Match` 发回：
+
+```http
+PUT /api/admin/providers/gateway
+If-Match: "7"
+Content-Type: application/json
+X-CSRF-Token: ...
+```
+
+过期 revision 返回 `412 stale_provider_revision`，调用方应重新读取后再合并。未发送
+`If-Match` 时服务端仍使用数据库 revision 合并有限次数，避免不同 Provider 或共享配置组
+并发保存时互相覆盖。Provider 密钥空值表示保留原密钥，不会通过列表 API 回显。
+
+## Push 协议摘要
+
+默认路径为 `/mota/push`，可通过 `MOTA__PUSH_PATH` 修改。
+
+必需请求头：
+
+- `Content-Type: application/json`；
+- `X-MoTA-Run-ID`；
+- `X-MoTA-Idempotency-Key`；
+- `X-MoTA-Signature`。
+
+服务对**原始请求体字节**计算 HMAC-SHA256，再解析 JSON。签名编码默认为小写 hex，
+也可设置 `MOTA__SIGNATURE_ENCODING=base64`。
+
+常见状态码：
+
+| 状态 | 含义 |
+|---|---|
+| 200 | 同步执行成功或同步缓存重放 |
+| 202 | 异步任务已由当前进程接收 |
+| 400 | JSON 无法解析 |
+| 401 | 签名缺失或不匹配 |
+| 409 | 幂等冲突或相同请求仍在处理 |
+| 415 | Content-Type 不受支持 |
+| 422 | 信封、请求头唯一性或字段约束不合法 |
+| 502 | 受信通道缺失 FINAL usage 等上游结果问题 |
+| 503 | Provider/状态不可用，或 callback 是否已接收无法确认 |
+| 504 | 同步执行超时 |
+
+异步 callback 使用签名 v2，每次重试重新签名。网络错误、HTTP 408、429 和 5xx 使用
+`1s / 3s / 10s / 30s / 60s` 退避，最多六次。单次请求和回执读取合计限制为 30 秒，
+响应体最多读取 64 KiB。详见 [生产协议](doc/PUSH-PRODUCTION.md)。
+
+动态 `/agent/{slug}` 默认只接受覆盖 timestamp、nonce、run ID、幂等键和 body 摘要的
+`X-Agent-Signature` v1。旧 `X-MoTA-Signature` 仅在迁移期显式设置
+`PLATFORM__ALLOW_LEGACY_BODY_SIGNATURE=true` 后启用；它缺少防重放能力，不应长期使用。
+
+## Pull 协议摘要
+
+设置：
 
 ```bash
-git clone --depth 1 --filter=blob:none --sparse https://github.com/hwhkit/hwhkit-go .hwhkit-go-src
-cd .hwhkit-go-src && git sparse-checkout set buildinfo config core observability hwhkit
+MOTA__PULL_ENABLED=true
+MOTA__QUEUE_URL='https://...'
+MOTA__BIND_TOKEN='<平台签发的绑定令牌>'
+MOTA__WORKER_ID='worker-1'
 ```
 
-## 目录结构
+- `claim` 是长轮询，`MOTA__CLAIM_TIMEOUT_SECS` 不得小于 35；
+- 执行期间按 `MOTA__RENEW_INTERVAL_SECS` 续租；
+- `complete` 只有 `accepted=true` 才视为平台采纳；
+- heartbeat 与 claim 使用独立循环；
+- `MOTA__TASK_TIMEOUT_SECS` 限制单任务最长处理时间。
 
-```
-mota-agent-server-go/
-├── go.mod               # require + replace(指向 ../.hwhkit-go-src)
-├── main.go              # Application impl + hwhkit.Run + Pull worker + production.Serve
-└── mota/
-    ├── config.go        # MotaConfig(MOTA__* 环境变量 + 启动校验)
-    ├── signature.go     # HMAC-SHA256(hex | base64,常数时间比较)
-    ├── processor.go     # Processor 接口 + PlaceholderProcessor 占位实现
-    ├── push.go          # Push handler(chi route)
-    ├── worker.go        # PullWorker(claim/complete/renew/heartbeat)
-	├── platform_*.go     # 多智能体配置、PostgreSQL、智能体中心、管理面与网关
-	├── executor_*        # 本地 CLI、网关、OpenAI/Claude 托管执行器
-    ├── types.go         # 协议数据结构
-    └── *_test.go        # 单元 + 集成测试
-```
+## 配置优先级
 
-## 快速开始
+配置按以下顺序覆盖：
+
+1. `config/default.toml`；
+2. `config/{MOTA_ENV}.toml`（`MOTA_ENV=default` 时跳过）；
+3. 环境变量。
+
+空环境变量不会覆盖文件值。完整可用项见 [.env.example](.env.example) 和
+[config/default.toml](config/default.toml)。秘密只应由运行环境或秘密管理系统注入，
+不要提交 `.env.dev`、生产 TOML、密钥或数据库转储。
+
+## 开发与验证
 
 ```bash
-cd mota-agent-server-go
-make build
-
-# 注入 MOTA 平台签发的签名密钥(占位值 change-me 会被启动校验拒绝,防伪造)
-export MOTA__SIGNING_SECRET="<平台签发的 signing secret>"
-./dist/mota-agent-server
+make lint                 # gofmt + go vet
+make test                 # 非数据库测试
+make race                 # race detector
+make test-pg              # 需要专用 TEST_DATABASE_URL
+make test-deploy-scripts  # 部署脚本模拟回归
+make ci                   # 本地综合门禁；PostgreSQL 矩阵由独立任务运行
 ```
 
-验证:
+PostgreSQL 测试必须使用可销毁的专用数据库，绝不能指向生产库。缺少
+`TEST_DATABASE_URL` 时，数据库测试会跳过，因此发布记录必须明确写出是否真实执行。
+
+当前契约一致性测试还会读取同级 Rust 仓库；standalone 环境缺少该源码时会跳过。
+不要把带 skip 的结果描述为完整跨实现验证。
+
+## 部署
 
 ```bash
-curl -s http://127.0.0.1:8080/health          # {"status":"healthy"}
-
-BODY='{"taskBrief":"assess AAPL","params":{"symbols":["AAPL"]}}'
-SIG=$(python3 -c "import hmac,hashlib,sys,os; print(hmac.new(os.environ['MOTA__SIGNING_SECRET'].encode(), sys.argv[1].encode(), hashlib.sha256).hexdigest())" "$BODY")
-curl -s -X POST http://127.0.0.1:8080/mota/push \
-  -H 'Content-Type: application/json' \
-  -H "X-MoTA-Signature: $SIG" \
-  -H 'X-MoTA-Run-Id: run-1' \
-  -d "$BODY"
-# -> {"assessments":[...],"summary":"...","extensions":{...}}
+make deploy                  # build + upload + verified restart
+# 或分步执行：make deploy-build && make deploy-check && make deploy-upload && make deploy-restart
 ```
 
-## Push 接入
+默认构建 Linux ARM64 静态二进制。部署流程会校验 SHA-256、使用唯一暂存文件与远端锁，
+原子替换后轮询 `/health/ready` 并核对实际运行进程的二进制哈希；失败时尝试恢复上一版本。
+完整变量、回滚边界和 Pi CLI 要求见 [部署手册](doc/DEPLOYMENT.md)。
 
-MOTA 用 HTTPS POST 把任务推送到登记 endpoint,本服务从响应体取结果。
+## 维护与贡献
 
-- 请求: `POST <your endpoint>`(默认 `/mota/push`,可用 `MOTA__PUSH_PATH` 改)
-  - 头: `X-MoTA-Signature: <hmac-sha256(body, signing secret)>`、`X-MoTA-Run-Id`
-  - 体: `{ "taskBrief": …, "params": { symbols, financial_analysis, company_announcement, consensus_estimate, research_report } }`
-- 响应(200): `{ "assessments": …, "summary": …, "extensions": … }`
-- 签名缺失 / 不匹配一律 `401`(RFC 7807 problem+json);body 非法 JSON 返回 `422`;
-  处理器异常返回 `500`(内部细节只记日志,不回显)。
+- [贡献指南](CONTRIBUTING.md)
+- [安全策略](SECURITY.md)
+- [变更记录](CHANGELOG.md)
+- [发布就绪清单](doc/RELEASE-READINESS.md)
+- [通信流程](doc/COMMUNICATION-FLOW.md)
 
-签名编码默认为 **hex 小写**;若平台签发 base64,设 `MOTA__SIGNATURE_ENCODING=base64`。
-校验用 `crypto/subtle.ConstantTimeCompare` 常数时间比较。
-
-## Pull 接入
-
-worker 随进程启动(main 里在 `production.Serve` 前 `Start()`,退出时 `Stop()`),
-轮询由平台签发的队列地址,`Authorization: Bearer <bind token>` 认证。
-
-- `claim`: 长轮询 `POST {queue}/claim?workerId=<id>`,HTTP 读超时由 `MOTA__CLAIM_TIMEOUT_SECS`
-  控制(默认 60s,校验强制 >= 35s);收到 `204` 立即重新 claim。
-- `complete`: 处理完 `POST {queue}/complete`(带 `X-MoTA-Run-ID`),回执
-  `{ code, accepted, runStatus, runMsg }`;仅 `accepted=true` 视为被采纳。
-- `renew`: 任务处理期间每 `MOTA__RENEW_INTERVAL_SECS` 续租一次;收到 `409 BOUND_CLAIM_CONFLICT`
-  立即放弃该任务(租约已被抢走)。
-- `heartbeat`: 独立 goroutine 按回执 `heartbeatIntervalSeconds`(默认 60s)上报存活;
-  心跳与 claim **各跑一条循环**(协议要求)。
-
-启用 Pull: 设 `MOTA__PULL_ENABLED=true` 并配置 `MOTA__QUEUE_URL` /
-`MOTA__BIND_TOKEN` / `MOTA__WORKER_ID`。
-
-## 配置
-
-加载优先级为 `config/default.toml` → `config/{MOTA_ENV}.toml` → 环境变量
-`MOTA__*`；空环境变量不会覆盖文件层。
-
-| 环境变量 | 默认 | 说明 |
-|---|---|---|
-| `MOTA__PUSH_ENABLED` | `true` | 是否挂载 Push endpoint |
-| `MOTA__PUSH_PATH` | `/mota/push` | Push endpoint 路径 |
-| `MOTA__SIGNING_SECRET` | — | HMAC-SHA256 签名密钥;空或占位 `change-me` 拒绝启动 |
-| `MOTA__SIGNATURE_ENCODING` | `hex` | `hex` 或 `base64` |
-| `MOTA__PULL_ENABLED` | `false` | 是否启动 Pull worker |
-| `MOTA__QUEUE_URL` | — | 绑定后由平台签发的队列地址 |
-| `MOTA__BIND_TOKEN` | — | 绑定令牌 |
-| `MOTA__WORKER_ID` | — | worker 标识 |
-| `MOTA__CLAIM_TIMEOUT_SECS` | `60` | claim 读超时,强制 >= 35 |
-| `MOTA__HEARTBEAT_INTERVAL_SECS` | `60` | 心跳间隔(回执可覆盖) |
-| `MOTA__RENEW_INTERVAL_SECS` | `30` | 续租间隔 |
-| `MOTA__TASK_TIMEOUT_SECS` | `600` | 单任务处理超时,超时放弃 |
-
-启动校验: Push 启用但签名密钥为空/占位、Pull 启用但缺队列/令牌/workerId、claim 超时 < 35 均拒绝启动。
-
-## 接入真实业务(替换占位处理器)
-
-`Processor` 是唯一业务扩展点,Push 与 Pull 共用。在 `main.go` 替换:
-
-```go
-// mota/processor.go
-type Processor interface {
-    Process(ctx context.Context, task *TaskContext) (*ProcessedOutput, error)
-}
-
-// main.go
-type MyAnalysisProcessor struct{ /* ... */ }
-func (MyAnalysisProcessor) Process(ctx context.Context, task *mota.TaskContext) (*mota.ProcessedOutput, error) {
-    // 用 task.Params(symbols / financial_analysis / ...) 做真实分析
-    return &mota.ProcessedOutput{Assessments: ..., Summary: "...", Extensions: ...}, nil
-}
-
-processor := MyAnalysisProcessor{}   // 替换 PlaceholderProcessor{}
-```
-
-## Makefile 常用入口
-
-```bash
-make help             # 查看开发、部署和运维命令
-make ci               # gofmt + vet + test + build + module verify
-make deploy-build     # Linux ARM64 静态二进制
-```
-
-部署目标默认使用独立的 Go 服务目录和 systemd 名称；可通过 `REMOTE_HOST`、
-`REMOTE_ROOT`、`REMOTE_BIN`、`REMOTE_SERVICE`、`REMOTE_ENV` 和 `HEALTH_URL`
-覆盖，无需修改 Makefile。
-
-## 测试
-
-```bash
-go test ./...        # 协议桥 + 智能体中心 + 执行器 + 平台安全/管理/幂等集成
-go vet ./...
-```
-
-## 生产部署注意
-
-- 签名密钥、bind token 一律通过环境变量注入,不要提交明文到仓库。
-- Push endpoint 必须在 MOTA 平台登记,且能被公网 HTTPS 访问。
-- 连续 15 分钟无心跳会判离线,部署时确保进程存活(如 systemd `Restart=always`)。
-- hwhkit-go 尚未发布可安装的 tag(子模块 go.mod 带本地 replace),部署需携带 `.hwhkit-go-src/` 源码。
+本项目按 `MIT OR Apache-2.0` 双许可证发布，参见 [LICENSE](LICENSE)。

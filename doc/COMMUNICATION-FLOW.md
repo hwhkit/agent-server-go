@@ -1,105 +1,130 @@
-# 管理台 × MoTA 平台接口通信顺序
+# 管理台、MOTA 平台与执行器通信流程
 
-> 关联服务:`mota-agent-server-rs`(agent-center:8080)、agent-gateway(caddy)、MoTA 平台(api-ctr.mota.ai)、litellm 网关(litellm.traderwtf.ai)。
-> 部署拓扑见 `PUSH-PRODUCTION.md`。
+本文描述 Go 服务的主要数据流。示例公网前缀 `/center` 由反向代理剥离；服务内部路由
+仍是 `/admin`、`/agent/{slug}` 和 `/api/admin/*`。
 
-## 1. 打开管理台(`/center/admin#agents-section`)的请求顺序
+## 1. 管理台
 
-管理台页面自身不直接与 MoTA 平台通信，全部数据来自 Rust 服务连接的 PostgreSQL（`DATABASE_URL`）。
-
-```
+```text
 浏览器
- 1. GET  https://agent.mota.ai/center/admin
-      → Cloudflare → agent-gateway(caddy,剥 /center)→ agent-center:8080 GET /admin
-      → 返回 admin.html(无登录态时先显示登录页)
- 2. POST /api/admin/login(admin 凭据)→ 返回 session(csrfToken + HttpOnly cookie)
- 3. GET  /api/admin/session(校验会话)
- 4. GET  /api/admin/agents                       → 智能体列表(state.agents)
- 5. GET  /api/admin/runs?limit=50                → 最近运行(state.runs,全智能体)
- 6. 前端计算统计卡:智能体总数 / 已启用 / 执行中 / 异常运行
- 7. 点击某个智能体 → GET /api/admin/runs?slug={slug} → 该智能体的运行记录(含输入/输出)
+  GET  /admin
+  POST /api/admin/login       -> HttpOnly Session Cookie + CSRF token
+  GET  /api/admin/session
+  GET  /api/admin/providers   -> Provider 配置与 revision（不含密钥）
+  GET  /api/admin/agents      -> 岗位职能体
+  GET  /api/admin/runs        -> 最近运行
+  GET  /api/admin/audit-logs  -> admin 看全部，user 仅看本人
 ```
 
-## 2. 运行记录的产生链路(平台 → 服务 → 平台)
+写操作同时要求有效 Session 与 `X-CSRF-Token`。Provider、Agent 与账号变更仅允许
+`admin`；普通 `user` 保留只读页面和本人审计权限。权限由服务端执行，不能通过直接调用
+API 绕过。
 
-管理台里的每条 run,是 MoTA 平台评测/任务走如下时序落库的:
+Provider 更新流程：
 
-```
-MoTA 平台(api-ctr.mota.ai)
- 1. 发起任务(评测 / 连通测试 / 真实业务):
-    POST https://agent.mota.ai/center/agent/{slug}
-      → Cloudflare → agent-gateway(caddy,剥 /center)
-      → agent-center:8080  POST /agent/{slug}
- 2. 服务验签:核对 X-MoTA-Signature(= HMAC(mbt_通道密钥, 原始 body))
- 3. 幂等检查 + start_run 落库(agent_runs,status=running,存 request_json)
- 4. 返回 202(异步)或 200(同步)
- 5. 执行器按 Agent.execution_mode 执行:
-    local   → 本机 codex / pi / reasonix / claude CLI（统一 deadline 与进程组清理）
-    gateway → Anthropic /v1/messages 或 OpenAI /v1/chat/completions
-    rust    → 进程内 Processor（不调外部）
- 6. 输出规范化:岗位契约键裁剪 / 枚举归一 / symbol 标准化与覆盖补全(与平台岗位 schema 对齐)
- 7. finalize_run 落库(completed/failed + result_json + 耗时 + 响应码)
- 8. 结果回传平台:
-    POST https://api-ctr.mota.ai/mota/creator/publics/bound/callback
-      (头:X-MoTA-Run-ID + X-Creator-Signature v2,平台验签)
- 9. 平台接受(accepted=true)→ 该 run 计入评测/连通结果
+```text
+GET Provider + revision
+  -> PUT Provider + If-Match
+  -> PostgreSQL CAS 保存加密配置并递增共享 revision
+  -> 原子发布新的不可变配置快照
+  -> 后续任务使用新快照
 ```
 
-## 3. 持续的后台通信(心跳)
+运行中的任务保留启动时快照。连接同一数据库的其他实例通过版本轮询最终收敛；实例间
+不共享内存信号量，因此总并发仍取决于副本数。
 
-```
-每 60s(平台回执动态调整):
-  POST https://api-ctr.mota.ai/mota/creator/publics/bound/heartbeat
-    Authorization: Bearer mbt_*(通道密钥)
-    body: {} 或 { selfCheck: { pass, latencyMs, error } }
-  → 平台返回 { selfCheckRequired, heartbeatIntervalSeconds, selfCheckIntervalSeconds }
-  → selfCheckRequired=true 时,下一次心跳先跑一次真任务自检再上报
-  → 连续 15 分钟无有效心跳 → 平台判离线
-```
+## 2. 动态 Agent 同步请求
 
-## 4. 完整时序图
-
-```
-MoTA平台                agent-gateway            agent-center(8080)            litellm
-   │  任务(POST /agent/buffett) │                         │                        │
-   ├──────────────────────────►│  /center 剥前缀          │                        │
-   │                           ├────────────────────────►│ 验签→start_run→202     │
-   │                           │                         ├───────────────────────►│ 执行
-   │                           │                         │◄───────────────────────┤ 结果
-   │                           │                         │ 规范化→finalize_run    │
-   │ 回调(callback)            │                         │                        │
-   │◄────────────────────────────────────────────────────┤ POST /publics/bound/   │
-   │                           │                         │   callback             │
-   │ 心跳(heartbeat)           │                         │                        │
-   │◄────────────────────────────────────────────────────┤ POST .../bound/heartbeat│
-   │                           │                         │                        │
-管理台 ← GET /center/admin → GET /api/admin/agents+runs（读 PostgreSQL，展示以上记录）
+```text
+MOTA 平台
+  -> POST /agent/{slug}
+  -> 验签 / nonce 防重放 / 幂等认领
+  -> agent_runs: running
+  -> 获取 Agent 与 Provider 配置快照
+  -> 本地 CLI、托管 Agent 或 Gateway 执行
+  -> 结果归一化与 usage 校验
+  -> 同一事务写运行终态与幂等响应
+  <- 200 + V2 结果，或稳定的 4xx/5xx 错误
 ```
 
-## 5. 外部接口清单
+外部别名 `/agent-center-go/{slug}` 的签名 canonical 仍使用 `/agent/{slug}`。
 
-### 入站(外部 → 服务)
+## 3. 动态 Agent 异步请求
 
-| 接口 | 方法 | 用途 | 认证 |
-|---|---|---|---|
-| `/agent/{slug}`(公网 `/center/agent/{slug}`) | POST | 智能体执行接口(平台任务主入口) | X-MoTA-Signature / X-Agent-Signature v1 |
-| `/mota/push`(可配 `MOTA__PUSH_PATH`) | POST | MOTA Push 接入 | X-MoTA-Signature + X-MoTA-Run-ID |
-| `/health`、`/health/ready` | GET | 健康检查 | 无 |
-| `/metrics` | GET | Prometheus 指标 | 无 |
-| `/version`、`/info` | GET | 版本/信息 | 无 |
-| `/admin`、`/api/admin/*` | — | 管理端(登录、智能体、运行记录) | 管理会话 + CSRF |
+请求体有非空 `callbackUrl` 时：
 
-### 出站(服务 → 外部)
+```text
+MOTA 平台
+  -> POST /agent/{slug}
+  -> 验签 / 幂等认领 / agent_runs: running
+  <- 202
 
-| 目标 | 接口 | 用途 |
+Go 服务后台任务
+  -> 执行并生成 V2 结果
+  -> callback v2（最多六次有界尝试）
+  -> accepted=true
+       -> agent_runs: completed
+       -> 保存成功通道事件
+     accepted=false
+       -> agent_runs: failed, callback_rejected
+       -> 保存拒绝通道事件
+     确定投递失败
+       -> agent_runs: failed, callback_delivery_failed
+     已发送但没有可信回执
+       -> agent_runs: failed, outcome_uncertain
+       -> 保存安全错误摘要
+```
+
+这条链路当前由进程内后台任务完成，没有 PostgreSQL callback outbox。202 后到终态写入前
+若进程退出，可能留下未完成运行；相同幂等请求可能只重放 202 而不恢复后台任务。应按
+原 `runId` 核对平台与外部副作用，再决定人工修复或新的授权请求。不能把网络错误简单
+解释成“平台肯定没有收到”。
+
+## 4. Push 与 Pull
+
+Push：
+
+```text
+POST /mota/push
+  -> 原始 body HMAC
+  -> PostgreSQL push_idempotency
+  -> 同步 200，或异步 202 + callback
+```
+
+`/mota/push` 不写 `agent_runs`；其可恢复状态保存在 Push 幂等表。完整信封、错误码和
+callback 规则见 [PUSH-PRODUCTION.md](PUSH-PRODUCTION.md)。
+
+Pull：
+
+```text
+claim 长轮询 -> 执行
+             -> renew 独立续租
+             -> complete（accepted=true 才算采纳）
+heartbeat 独立循环
+```
+
+## 5. 外部接口
+
+### 入站
+
+| 路径 | 用途 | 认证 |
 |---|---|---|
-| MoTA 平台 | `POST /mota/creator/publics/bound/callback` | 异步任务结果回传 |
-| MoTA 平台 | `POST /mota/creator/publics/bound/heartbeat` | Push 心跳(已启用) |
-| Agent 网关 | `POST /v1/messages` 或 `/v1/chat/completions` | Anthropic/OpenAI 兼容调用 |
+| `/mota/push` | bound-task Push | MOTA HMAC + run ID + 幂等键 |
+| `/agent/{slug}` | 动态 Agent | MOTA 兼容签名或 v1 时间戳/nonce 签名 |
+| `/agent-center-go/{slug}` | 动态 Agent 公网别名 | canonical 仍为 `/agent/{slug}` |
+| `/a2a/*` | A2A v1.0（可选） | 派生 Bearer token |
+| `/admin`、`/api/admin/*` | 管理面 | Session + 写操作 CSRF + 角色 |
+| `/health`、`/health/ready` | 存活与就绪 | 无；生产可由边缘限制 |
+| `/metrics` | Prometheus 指标 | 无；生产应限制访问 |
 
-## 6. 要点
+### 出站
 
-- **管理台不直接调用 MoTA 平台**；智能体、运行记录和输入输出来自 PostgreSQL。
-- **平台 ↔ 服务三个通信点**:入站任务(`/agent/{slug}`)、出站结果回调(`callback`)、出站心跳(`heartbeat`)。
-- **执行器双路径**：`local` 派生本机 Agent CLI；`gateway` 走共享 HTTP Client，并支持两种兼容协议。
-- **`/mota/push` 通道不落 `agent_runs`**：只写 PostgreSQL `push_idempotency`；动态 `/agent/{slug}` 才写运行记录。
+| 目标 | 用途 | 敏感数据 |
+|---|---|---|
+| MOTA callback | 异步结果 | callback v2 签名、可选旧 token |
+| MOTA heartbeat / Pull 队列 | 通道状态与任务 | Bearer bind token |
+| LiteLLM / OpenAI / Anthropic | 模型与托管 Agent | Provider API key |
+| 本地 Agent CLI | 本机执行 | 受限环境变量与工作区 |
+
+带凭据的生产 HTTP 客户端不得跨 origin 跟随重定向。callback 当前没有 DNS/IP 级 SSRF
+阻断，生产环境应在入口或出口代理限制目标 origin。

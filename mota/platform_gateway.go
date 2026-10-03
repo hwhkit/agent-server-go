@@ -6,6 +6,7 @@ package mota
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -86,6 +87,17 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 // writeAgentSuccess 输出成功响应并带上 Agent 溯源头。
 func writeAgentSuccess(w http.ResponseWriter, body, slug string, revision int64, runID string, replayed bool) {
+	writeAgentResponse(w, http.StatusOK, body, slug, revision, runID, replayed)
+}
+
+func writeAgentResponse(
+	w http.ResponseWriter,
+	status int,
+	body, slug string,
+	revision int64,
+	runID string,
+	replayed bool,
+) {
 	w.Header().Set("Content-Type", jsonContentType)
 	w.Header().Set("X-Agent-Slug", slug)
 	w.Header().Set("X-Agent-Revision", strconv.FormatInt(revision, 10))
@@ -93,8 +105,28 @@ func writeAgentSuccess(w http.ResponseWriter, body, slug string, revision int64,
 	if replayed {
 		w.Header().Set("X-Idempotent-Replay", "true")
 	}
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(status)
 	_, _ = io.WriteString(w, body)
+}
+
+func cachedGatewayErrorStatus(body string) (int, bool) {
+	var envelope struct {
+		Error *struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(body), &envelope) != nil || envelope.Error == nil ||
+		envelope.Error.Code == "" {
+		return 0, false
+	}
+	switch envelope.Error.Code {
+	case "callback_rejected", "callback_delivery_failed":
+		return http.StatusBadGateway, true
+	case "outcome_uncertain":
+		return http.StatusServiceUnavailable, true
+	default:
+		return executionErrorStatus(envelope.Error.Code), true
+	}
 }
 
 // executionErrorStatus 把执行/分发错误码映射成 HTTP 状态。
@@ -290,7 +322,9 @@ func (s *PlatformState) Gateway(w http.ResponseWriter, r *http.Request) {
 
 // readGatewayBody 读取并限制请求体大小。
 func (s *PlatformState) readGatewayBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
-	limit := int64(s.Config.MaxRequestBodyBytes)
+	// Provider refresh replaces the immutable PlatformConfig pointer. Always
+	// obtain it through the snapshot lock; direct reads race with ApplyConfig.
+	limit := int64(s.ConfigSnapshot().MaxRequestBodyBytes)
 	// 多读 1 字节以便区分「正好等于上限」与「超过上限」。
 	body, err := io.ReadAll(io.LimitReader(r.Body, limit+1))
 	if err != nil {
@@ -364,6 +398,11 @@ func (s *PlatformState) authenticateGateway(
 			return "", "", false
 		}
 	case motaSignature != "":
+		if !s.ConfigSnapshot().AllowLegacyBodySignature {
+			writeAuthError(w, http.StatusUnauthorized, "legacy_signature_disabled",
+				"X-MoTA-Signature is disabled for dynamic Agent requests; use X-Agent-Signature v1")
+			return "", "", false
+		}
 		if !VerifySignature(runtime.Config.SigningSecret, body, motaSignature,
 			runtime.Config.SignatureEncodingOrHex()) {
 			slog.Warn("MoTA-compatible Agent request rejected: signature mismatch", "agent", slug)
@@ -508,6 +547,13 @@ func (s *PlatformState) parseGatewayEnvelope(
 	default:
 		runID = "run_" + randomToken(12)
 	}
+	if callbackURL := gatewayCallbackURL(&task); callbackURL != "" {
+		if err := validateCallbackInputs(callbackURL, runID, runtime.Config.SigningSecret); err != nil {
+			writeAPIError(w, http.StatusUnprocessableEntity, "invalid_callback_url",
+				"Callback URL is invalid")
+			return nil, false
+		}
+	}
 
 	if signedIdempotencyKey != "" && !metadataValid(signedIdempotencyKey, 200) {
 		writeAPIError(w, http.StatusUnprocessableEntity, "invalid_idempotency_key",
@@ -583,6 +629,11 @@ func (s *PlatformState) beginGatewayIdempotency(
 	}
 	switch decision.Kind {
 	case IdempotencyCached:
+		if status, failed := cachedGatewayErrorStatus(decision.ResponseBody); failed {
+			writeAgentResponse(w, status, decision.ResponseBody, request.slug,
+				request.runtime.Config.Revision, decision.RunID, true)
+			return false
+		}
 		writeAgentSuccess(w, decision.ResponseBody, request.slug,
 			request.runtime.Config.Revision, decision.RunID, true)
 		return false
@@ -696,6 +747,8 @@ func gatewayReleaseTransition(request *agentRequest) *IdempotencyFinalization {
 // int64Ptr 便于填 RunFinalization 的可选字段。
 func int64Ptr(value int64) *int64 { return &value }
 
+func textPtr(value string) *string { return &value }
+
 // ---------------------------------------------------------------------------
 // 同步执行
 // ---------------------------------------------------------------------------
@@ -739,6 +792,13 @@ func (s *PlatformState) runGatewaySync(
 			return
 		}
 		writeAPIError(w, status, execution.Code, execution.PublicMessage())
+		return
+	}
+	if output == nil {
+		s.finalizeGatewayFailure(ctx, request, "invalid_agent_output",
+			"Agent executor returned no output", http.StatusBadGateway, nil, durationMs)
+		writeAPIError(w, http.StatusBadGateway, "invalid_agent_output",
+			"Agent output was unavailable")
 		return
 	}
 
@@ -809,6 +869,32 @@ func (s *PlatformState) finalizeGatewayFailure(
 	return true
 }
 
+// finalizeGatewayAcceptedFailure records a terminal failure after the caller
+// has already received 202. Execution may have produced side effects, so cache
+// the error under the current lease instead of releasing it for re-execution.
+func (s *PlatformState) finalizeGatewayAcceptedFailure(
+	ctx context.Context,
+	request *agentRequest,
+	code, message string,
+	responseStatus int,
+	executorResultJSON *string,
+	durationMs int64,
+) bool {
+	body := serializedError(code, message)
+	if err := s.Store.FinalizeRun(ctx, RunFinalization{
+		AgentSlug: request.slug, RunID: request.runID, Status: "failed",
+		DurationMs: durationMs, ErrorCode: &code,
+		ResponseCode: int64Ptr(int64(responseStatus)), ResultJSON: &body,
+		ExecutorResultJSON: executorResultJSON,
+		Idempotency:        gatewayCompleteTransition(request, body),
+	}); err != nil {
+		slog.Error("record accepted run failure failed",
+			"agent", request.slug, "run_id", request.runID, "error", err)
+		return false
+	}
+	return true
+}
+
 // ---------------------------------------------------------------------------
 // 异步执行(callbackUrl 分支)
 // ---------------------------------------------------------------------------
@@ -830,10 +916,28 @@ func (s *PlatformState) runGatewayAsync(
 		// 与 rs 把 permit move 进 spawn task 的生命周期一致。
 		defer releaseSlots()
 		ctx := context.Background()
+		defer func() {
+			if recover() == nil {
+				return
+			}
+			slog.Error("asynchronous Agent worker panicked",
+				"agent", request.slug, "run_id", request.runID)
+			body := serializedError("callback_delivery_failed", "Callback delivery failed")
+			if err := s.Store.FinalizeRun(ctx, RunFinalization{
+				AgentSlug: request.slug, RunID: request.runID, Status: "failed",
+				DurationMs:   time.Since(started).Milliseconds(),
+				ErrorCode:    textPtr("callback_delivery_failed"),
+				ResponseCode: int64Ptr(http.StatusBadGateway), ResultJSON: &body,
+				Idempotency: gatewayCompleteTransition(request, body),
+			}); err != nil {
+				slog.Error("record asynchronous Agent panic failed",
+					"agent", request.slug, "run_id", request.runID, "error", err)
+			}
+		}()
 		executor, err := s.Executor()
 		if err != nil {
 			slog.Error("build agent executor failed", "agent", request.slug, "error", err)
-			s.finalizeGatewayFailure(ctx, request, "executor_unavailable",
+			s.finalizeGatewayAcceptedFailure(ctx, request, "executor_unavailable",
 				"agent executor is unavailable", http.StatusAccepted,
 				nil, time.Since(started).Milliseconds())
 			return
@@ -846,8 +950,14 @@ func (s *PlatformState) runGatewayAsync(
 			slog.Error("async agent execution failed",
 				"agent", request.slug, "run_id", request.runID, "error", execErr)
 			// 异步分支的 response_code 记 202(已 ack 的那次响应),不是错误码对应的状态。
-			s.finalizeGatewayFailure(ctx, request, execution.Code, execution.PublicMessage(),
+			s.finalizeGatewayAcceptedFailure(ctx, request, execution.Code, execution.PublicMessage(),
 				http.StatusAccepted, execution.ExecutorResultJSON(), durationMs)
+			return
+		}
+		if output == nil {
+			s.finalizeGatewayAcceptedFailure(ctx, request, "invalid_agent_output",
+				"Agent executor returned no output", http.StatusBadGateway,
+				nil, durationMs)
 			return
 		}
 
@@ -855,7 +965,7 @@ func (s *PlatformState) runGatewayAsync(
 		if s.TrustedUsageReportingEnabled && output.Usage == nil {
 			// 受信通道拿不到 FINAL usage 时**连 callback 都不发** ——
 			// 宁可让平台侧超时重推,也不能投递一份不带用量的结果。
-			s.finalizeGatewayFailure(ctx, request, "usage_unavailable", usageUnavailableDetail,
+			s.finalizeGatewayAcceptedFailure(ctx, request, "usage_unavailable", usageUnavailableDetail,
 				http.StatusBadGateway, executorResultJSON, durationMs)
 			slog.Error("trusted callback suppressed because FINAL usage is unavailable",
 				"agent", request.slug, "run_id", request.runID)
@@ -867,23 +977,48 @@ func (s *PlatformState) runGatewayAsync(
 		if err != nil {
 			slog.Error("serialize async agent output failed",
 				"agent", request.slug, "run_id", request.runID, "error", err)
-			s.finalizeGatewayFailure(ctx, request, "invalid_agent_output",
+			s.finalizeGatewayAcceptedFailure(ctx, request, "invalid_agent_output",
 				"Agent output could not be serialized", http.StatusAccepted,
 				executorResultJSON, durationMs)
 			return
 		}
 		bodyText := string(encoded)
-		transition := gatewayCompleteTransition(request, bodyText)
+		receipt, callbackErr := s.deliverGatewayCallback(
+			ctx, request, callbackURL, payload, bodyText)
 
-		s.deliverGatewayCallback(ctx, request, callbackURL, payload, bodyText)
-
-		// 无论 callback 成功与否都把运行记为 completed:结果确实产出了,
-		// 投递失败是通道问题,已经单独记进 channel_events。
+		runStatus := "completed"
+		var errorCode *string
+		responseCode := int64Ptr(http.StatusAccepted)
+		resultJSON := bodyText
+		switch {
+		case callbackErr != nil:
+			runStatus = "failed"
+			code, status := callbackDeliveryOutcome(callbackErr)
+			errorCode = textPtr(code)
+			responseCode = int64Ptr(int64(status))
+			message := "Callback delivery failed"
+			if code == "outcome_uncertain" {
+				message = "Callback delivery outcome is uncertain"
+			}
+			resultJSON = serializedError(code, message)
+		case receipt == nil:
+			runStatus = "failed"
+			errorCode = textPtr("callback_delivery_failed")
+			responseCode = int64Ptr(http.StatusBadGateway)
+			resultJSON = serializedError("callback_delivery_failed", "Callback delivery returned no receipt")
+		case !receipt.Accepted:
+			runStatus = "failed"
+			errorCode = textPtr("callback_rejected")
+			responseCode = int64Ptr(http.StatusBadGateway)
+			resultJSON = serializedError("callback_rejected", "Callback result was not accepted")
+		}
+		transition := gatewayCompleteTransition(request, resultJSON)
 		if err := s.Store.FinalizeRun(ctx, RunFinalization{
-			AgentSlug: request.slug, RunID: request.runID, Status: "completed",
-			DurationMs: durationMs, ResponseCode: int64Ptr(http.StatusAccepted),
-			ResultJSON: &bodyText, ExecutorResultJSON: executorResultJSON,
-			Idempotency: transition,
+			AgentSlug: request.slug, RunID: request.runID, Status: runStatus,
+			DurationMs: time.Since(started).Milliseconds(), ErrorCode: errorCode,
+			ResponseCode: responseCode, ResultJSON: &resultJSON,
+			ExecutorResultJSON: executorResultJSON,
+			Idempotency:        transition,
 		}); err != nil {
 			slog.Error("record async run completion failed",
 				"agent", request.slug, "run_id", request.runID, "error", err)
@@ -898,24 +1033,47 @@ func (s *PlatformState) deliverGatewayCallback(
 	callbackURL string,
 	payload *PayloadV1,
 	bodyText string,
-) {
+) (*CallbackReceipt, error) {
 	client := s.CallbackHTTPClient
 	if client == nil {
 		client = s.HTTPClient
 	}
 	callbackStarted := time.Now()
 	receipt, err := SendCallback(ctx, client, callbackURL, request.runID,
-		request.runtime.Config.SigningSecret, s.CallbackToken, payload)
+		request.runtime.Config.SigningSecret, s.CallbackToken, s.CallbackTokenOrigin, payload)
 	if err != nil {
-		detail := err.Error()
-		errorJSON := serializedError("callback_delivery_failed", detail)
+		detail := callbackDeliveryDetail(err)
+		code, _ := callbackDeliveryOutcome(err)
+		errorJSON := serializedError(code, detail)
+		var statusCode *int64
+		var delivery *CallbackDeliveryError
+		if errors.As(err, &delivery) && delivery.StatusCode != 0 {
+			statusCode = int64Ptr(int64(delivery.StatusCode))
+		}
+		elapsedMs := time.Since(callbackStarted).Milliseconds()
 		slog.Warn("async callback delivery failed",
 			"agent", request.slug, "run_id", request.runID, "error", err)
 		_ = s.Store.RecordChannelEvent(ctx, ChannelEventRecord{
 			EventType: "callback", AgentSlug: &request.slug, RunID: &request.runID,
-			URL: callbackURL, Detail: &detail, Input: &bodyText, Output: &errorJSON,
+			URL: callbackOrigin(callbackURL), StatusCode: statusCode,
+			LatencyMs: int64Ptr(elapsedMs), Detail: &detail,
+			Input: &bodyText, Output: &errorJSON,
 		})
-		return
+		return nil, err
+	}
+	if receipt == nil {
+		err := callbackDeliveryError(http.StatusOK, 1,
+			errors.New("callback delivery returned no receipt"))
+		detail := callbackDeliveryDetail(err)
+		errorJSON := serializedError("callback_delivery_failed", detail)
+		elapsedMs := time.Since(callbackStarted).Milliseconds()
+		_ = s.Store.RecordChannelEvent(ctx, ChannelEventRecord{
+			EventType: "callback", AgentSlug: &request.slug, RunID: &request.runID,
+			URL: callbackOrigin(callbackURL), StatusCode: int64Ptr(http.StatusOK),
+			LatencyMs: int64Ptr(elapsedMs), Detail: &detail,
+			Input: &bodyText, Output: &errorJSON,
+		})
+		return nil, err
 	}
 	elapsedMs := time.Since(callbackStarted).Milliseconds()
 	receiptJSON := `{"code":"OK"}`
@@ -927,10 +1085,31 @@ func (s *PlatformState) deliverGatewayCallback(
 		"accepted", receipt.Accepted, "run_status", derefOrEmpty(receipt.RunStatus))
 	_ = s.Store.RecordChannelEvent(ctx, ChannelEventRecord{
 		EventType: "callback", AgentSlug: &request.slug, RunID: &request.runID,
-		URL: callbackURL, StatusCode: int64Ptr(http.StatusOK),
+		URL: callbackOrigin(callbackURL), StatusCode: int64Ptr(http.StatusOK),
 		Accepted: &receipt.Accepted, RunStatus: receipt.RunStatus,
 		LatencyMs: int64Ptr(elapsedMs), Input: &bodyText, Output: &receiptJSON,
 	})
+	return receipt, nil
+}
+
+func callbackDeliveryDetail(err error) string {
+	var delivery *CallbackDeliveryError
+	if !errors.As(err, &delivery) {
+		return "callback delivery failed"
+	}
+	return fmt.Sprintf("callback delivery failed after %d attempt(s), status=%d: %s",
+		delivery.Attempts, delivery.StatusCode, delivery.Error())
+}
+
+// callbackDeliveryOutcome separates a definite pre-acceptance failure from a
+// missing or untrustworthy receipt. The latter must never be advertised as a
+// safe-to-retry 502 because the platform may already have accepted the result.
+func callbackDeliveryOutcome(err error) (string, int) {
+	var delivery *CallbackDeliveryError
+	if errors.As(err, &delivery) && delivery.Unconfirmed {
+		return "outcome_uncertain", http.StatusServiceUnavailable
+	}
+	return "callback_delivery_failed", http.StatusBadGateway
 }
 
 // ---------------------------------------------------------------------------

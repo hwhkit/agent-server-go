@@ -42,7 +42,10 @@ func A2ABuildCard(agent *AgentConfig, config *A2AConfig, publicBaseURL string) A
 		documentationURL = &config.DocumentationURL
 	}
 
-	streaming := config.StreamEnabled
+	// SendStreamingMessage / SubscribeToTask are not implemented. Keep the
+	// public card truthful even if a caller constructed A2AConfig without
+	// passing it through validation.
+	streaming := false
 	// 推送通知订阅尚未实现;声明 false,避免调用方发起后被拒。
 	pushNotifications := false
 	extendedAgentCard := false

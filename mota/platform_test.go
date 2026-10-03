@@ -24,8 +24,12 @@ func testPlatformConfig(t *testing.T) *PlatformConfig {
 	ttl := uint64(3600)
 	baseURL := "http://127.0.0.1:8080"
 	concurrency := 4
+	allowLegacy := true
 	root := &platformRootFile{
-		Platform: platformSectionFile{PublicBaseURL: &baseURL, GlobalMaxConcurrency: &concurrency},
+		Platform: platformSectionFile{
+			PublicBaseURL: &baseURL, GlobalMaxConcurrency: &concurrency,
+			AllowLegacyBodySignature: &allowLegacy,
+		},
 		Admin: adminSectionFile{
 			Username:       &username,
 			Password:       &password,
@@ -108,7 +112,7 @@ func TestPlatformAdminAndGateway(t *testing.T) {
 		`id="providers-section"`,
 		`id="agent-execution-mode"`,
 		`<option value="opencode">OpenCode</option>`,
-		`<option value="openai_agent">OpenAI 托管智能体</option>`,
+		`value="openai_agent"`,
 		`id="runs-title" class="page-title"`,
 		`id="audit-section"`,
 		`id="users-section"`,

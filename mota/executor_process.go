@@ -5,6 +5,7 @@ package mota
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -34,6 +35,7 @@ const processTerminationGrace = 2 * time.Second
 // 无论是否超时,stdout 与 stderr 都会被持续排空,避免 verbose CLI 因管道写满而
 // 阻塞。stderr 只用于诊断,不参与岗位结果解析。
 func runCommand(
+	ctx context.Context,
 	cmd *exec.Cmd,
 	stdinPayload []byte,
 	timeout time.Duration,
@@ -41,6 +43,11 @@ func runCommand(
 	capture OutputCapture,
 	label string,
 ) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, newExecutionError("execution_timeout",
+			fmt.Sprintf("%s was canceled before execution started: %v", label, err))
+	}
+
 	var stdoutSink boundedSink
 	if capture == CaptureEventStreamTail {
 		stdoutSink = newTailSink(outputLimit)
@@ -100,12 +107,20 @@ func runCommand(
 	defer timer.Stop()
 
 	var waitErr error
-	timedOut := false
+	var stopReason error
+	stoppedByParent := false
 	select {
 	case waitErr = <-waitDone:
 	case <-timer.C:
+		stopReason = context.DeadlineExceeded
+	case <-ctx.Done():
+		stopReason = ctx.Err()
+		stoppedByParent = true
+	}
+	if stopReason != nil {
+		// 自身超时和父请求取消必须共用同一套进程组终止与 Wait 收尸流程，
+		// 避免调用方断开后留下本机 CLI 或其 fork 出的后台进程。
 		terminateChildTree(cmd, guard, waitDone)
-		timedOut = true
 	}
 
 	// 进程已退出;SIGKILL 整个进程组,回收仍持有继承管道的孙进程,读端随之 EOF。
@@ -115,9 +130,13 @@ func runCommand(
 	// 收拢读协程。若有进程逃出了进程组,用读超时强制解阻塞,绝不无限等待。
 	pipes.AwaitDrain(stdoutDone, stderrDone, stdinDone)
 
-	if timedOut {
+	if stopReason != nil {
+		detail := fmt.Sprintf("%s exceeded its deadline", label)
+		if stoppedByParent {
+			detail = fmt.Sprintf("%s was canceled by its parent context: %v", label, stopReason)
+		}
 		return nil, newExecutionError("execution_timeout",
-			fmt.Sprintf("%s exceeded its deadline", label))
+			detail)
 	}
 
 	stdout, stdoutTruncated := stdoutSink.Bytes(), stdoutSink.Truncated()
@@ -370,24 +389,27 @@ func (p *stdioPipes) AwaitDrain(done ...<-chan struct{}) {
 	timer := time.NewTimer(drainDeadline)
 	defer timer.Stop()
 
-	pending := make([]<-chan struct{}, 0, len(done))
-	for _, channel := range done {
-		select {
-		case <-channel:
-		case <-timer.C:
-			pending = append(pending, channel)
+	// 聚合等待所有流，共享同一个总截止时间。不能依次用同一个 timer 等待每条
+	// 流：timer.C 的唯一事件被第一条流消费后，第二条同样被逃逸进程持有的流会
+	// 永久等待。
+	allDone := make(chan struct{})
+	go func() {
+		defer close(allDone)
+		for _, channel := range done {
+			<-channel
 		}
-	}
-	if len(pending) == 0 {
+	}()
+	select {
+	case <-allDone:
 		return
+	case <-timer.C:
 	}
+
 	expired := time.Now().Add(-time.Second)
 	_ = p.stdoutRead.SetReadDeadline(expired)
 	_ = p.stderrRead.SetReadDeadline(expired)
 	_ = p.stdinWrite.SetWriteDeadline(expired)
-	for _, channel := range pending {
-		<-channel
-	}
+	<-allDone
 }
 
 // drainInto 把 reader 全部读入 sink,并在结束后关闭 reader。

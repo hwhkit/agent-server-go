@@ -59,6 +59,14 @@ func TestA2AConfigProviderFieldsMustBePaired(t *testing.T) {
 	}
 }
 
+func TestA2AConfigRejectsUnimplementedStreamingCapability(t *testing.T) {
+	enabled, streaming := true, true
+	_, err := a2aConfigFromFile(&a2aFile{Enabled: &enabled, StreamEnabled: &streaming})
+	if err == nil || !strings.Contains(err.Error(), "stream_enabled") {
+		t.Fatalf("expected a stream_enabled error, got %v", err)
+	}
+}
+
 func TestA2AConfigDefaultCardSlugFallsBackToMotaDefault(t *testing.T) {
 	enabled := true
 	cfg, err := a2aConfigFromFile(&a2aFile{Enabled: &enabled})

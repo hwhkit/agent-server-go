@@ -26,10 +26,20 @@ import (
 
 const motaEnvPrefix = "MOTA__"
 
+const maxMotaDuration = 24 * time.Hour
+
 // PlaceholderSecret 是 config/default.toml 中的占位签名密钥。启动校验会拒绝
 // 它,避免开箱即可伪造 HMAC 认证的部署。生产必须用 MOTA__SIGNING_SECRET
 // 注入真实密钥。
 const PlaceholderSecret = "change-me"
+
+// ExampleSigningSecret / ExampleBindToken are public values printed in
+// .env.example. Treating a copied template as a real credential would make
+// authentication forgeable, so enabled channels reject them at startup.
+const (
+	ExampleSigningSecret = "replace-with-mota-signing-secret"
+	ExampleBindToken     = "replace-with-bind-token"
+)
 
 // PushMode 是 Push 响应形态。
 type PushMode string
@@ -79,6 +89,9 @@ type Config struct {
 	HeartbeatURL string
 	// CallbackToken 是可选的回调令牌(mpk_*);非空时附加到 callback URL 的 ?token=。
 	CallbackToken string
+	// CallbackTokenOrigin 把 legacy token 绑定到唯一受信 origin，避免签名调用方
+	// 在 callbackUrl 中指定第三方地址并窃取全局 token。
+	CallbackTokenOrigin string
 	// TrustedUsageReportingEnabled 向结果信封写入供应商 FINAL usage;
 	// 普通 Bound 创作者必须保持 false。
 	TrustedUsageReportingEnabled bool
@@ -106,7 +119,8 @@ type motaFile struct {
 	HeartbeatURL *string `toml:"heartbeat_url"`
 	// CallbackToken 可选回调令牌(mpk_*)。配置了就在 callback URL 上附加 ?token=,
 	// 兼容要求双凭证的存量平台;新平台(2026-08-17 起)令牌可选,可留空。
-	CallbackToken *string `toml:"callback_token"`
+	CallbackToken       *string `toml:"callback_token"`
+	CallbackTokenOrigin *string `toml:"callback_token_origin"`
 	// TrustedUsageReportingEnabled 仅平台登记的受信 Investor Workflow Host 可开启。
 	TrustedUsageReportingEnabled *bool   `toml:"trusted_usage_reporting_enabled"`
 	DefaultAgentSlug             *string `toml:"default_agent_slug"`
@@ -161,6 +175,9 @@ func (f *motaFile) merge(other *motaFile) {
 	}
 	if other.CallbackToken != nil {
 		f.CallbackToken = other.CallbackToken
+	}
+	if other.CallbackTokenOrigin != nil {
+		f.CallbackTokenOrigin = other.CallbackTokenOrigin
 	}
 	if other.TrustedUsageReportingEnabled != nil {
 		f.TrustedUsageReportingEnabled = other.TrustedUsageReportingEnabled
@@ -242,13 +259,14 @@ func configFromFile(f *motaFile) (*Config, error) {
 		QueueURL:                     derefOr(f.QueueURL, ""),
 		BindToken:                    derefOr(f.BindToken, ""),
 		WorkerID:                     derefOr(f.WorkerID, ""),
-		ClaimTimeout:                 secondsOr(f.ClaimTimeoutSecs, 60),
-		HeartbeatInterval:            secondsOr(f.HeartbeatIntervalSecs, 60),
-		RenewInterval:                secondsOr(f.RenewIntervalSecs, 30),
-		TaskTimeout:                  secondsOr(f.TaskTimeoutSecs, 600),
+		ClaimTimeout:                 motaSecondsOr(f.ClaimTimeoutSecs, 60),
+		HeartbeatInterval:            motaSecondsOr(f.HeartbeatIntervalSecs, 60),
+		RenewInterval:                motaSecondsOr(f.RenewIntervalSecs, 30),
+		TaskTimeout:                  motaSecondsOr(f.TaskTimeoutSecs, 600),
 		PushMode:                     pushMode,
 		HeartbeatURL:                 derefOr(f.HeartbeatURL, ""),
 		CallbackToken:                derefOr(f.CallbackToken, ""),
+		CallbackTokenOrigin:          strings.TrimSpace(derefOr(f.CallbackTokenOrigin, "")),
 		TrustedUsageReportingEnabled: f.TrustedUsageReportingEnabled != nil && *f.TrustedUsageReportingEnabled,
 		DefaultAgentSlug:             strings.ToLower(strings.TrimSpace(derefOr(f.DefaultAgentSlug, ""))),
 	}
@@ -285,11 +303,14 @@ func (c *Config) Validate() error {
 				"push is enabled but [mota].signing_secret is empty — " +
 					"set MOTA__SIGNING_SECRET or fill config/default.toml")
 		}
-		if strings.TrimSpace(c.SigningSecret) == PlaceholderSecret {
+		if secret := strings.TrimSpace(c.SigningSecret); secret == PlaceholderSecret || secret == ExampleSigningSecret {
 			return fmt.Errorf(
-				"push is enabled but [mota].signing_secret is still the placeholder %q — "+
-					"forgeable HMAC auth; set MOTA__SIGNING_SECRET to the key issued by "+
-					"the MOTA platform", PlaceholderSecret)
+				"push is enabled but [mota].signing_secret is still a public template placeholder — " +
+					"forgeable HMAC auth; set MOTA__SIGNING_SECRET to the key issued by " +
+					"the MOTA platform")
+		}
+		if len(c.SigningSecret) < 16 || len(c.SigningSecret) > 512 {
+			return errors.New("[mota].signing_secret must contain 16-512 bytes")
 		}
 		if !strings.HasPrefix(c.PushPath, "/") {
 			return fmt.Errorf("[mota].push_path must start with '/', got %q", c.PushPath)
@@ -302,9 +323,19 @@ func (c *Config) Validate() error {
 
 	if strings.TrimSpace(c.HeartbeatURL) != "" {
 		if err := validateAbsoluteHTTPURL(c.HeartbeatURL); err != nil {
-			return fmt.Errorf("[mota].heartbeat_url must be an absolute HTTP(S) URL "+
-				"(set MOTA__HEARTBEAT_URL): %w", err)
+			return fmt.Errorf("[mota].heartbeat_url must be an absolute HTTPS URL "+
+				"(HTTP is allowed only for loopback development; set MOTA__HEARTBEAT_URL): %w", err)
 		}
+	}
+	if strings.TrimSpace(c.CallbackToken) != "" {
+		if strings.TrimSpace(c.CallbackTokenOrigin) == "" {
+			return errors.New("[mota].callback_token_origin is required when callback_token is configured")
+		}
+		normalized, err := validateConfiguredCallbackTokenOrigin(c.CallbackTokenOrigin)
+		if err != nil {
+			return fmt.Errorf("[mota].callback_token_origin is invalid: %w", err)
+		}
+		c.CallbackTokenOrigin = normalized
 	}
 
 	if c.PullEnabled {
@@ -314,12 +345,15 @@ func (c *Config) Validate() error {
 		if strings.TrimSpace(c.BindToken) == "" {
 			return errors.New("pull is enabled but [mota].bind_token is empty — set MOTA__BIND_TOKEN")
 		}
+		if strings.TrimSpace(c.BindToken) == ExampleBindToken {
+			return errors.New("pull is enabled but [mota].bind_token is still a public template placeholder")
+		}
 		if strings.TrimSpace(c.WorkerID) == "" {
 			return errors.New("pull is enabled but [mota].worker_id is empty — set MOTA__WORKER_ID")
 		}
 		if err := validateAbsoluteHTTPURL(c.QueueURL); err != nil {
-			return fmt.Errorf("[mota].queue_url must be an absolute HTTP(S) URL "+
-				"(set MOTA__QUEUE_URL): %w", err)
+			return fmt.Errorf("[mota].queue_url must be an absolute HTTPS URL "+
+				"(HTTP is allowed only for loopback development; set MOTA__QUEUE_URL): %w", err)
 		}
 	}
 
@@ -327,6 +361,9 @@ func (c *Config) Validate() error {
 		return fmt.Errorf(
 			"claim_timeout_secs must be >= 35 (long-polling read timeout), got %d",
 			int64(c.ClaimTimeout/time.Second))
+	}
+	if c.ClaimTimeout > maxMotaDuration {
+		return errors.New("claim_timeout_secs must not exceed 86400")
 	}
 	for _, item := range []struct {
 		name     string
@@ -339,6 +376,9 @@ func (c *Config) Validate() error {
 		if item.duration <= 0 {
 			return fmt.Errorf("%s must be greater than 0", item.name)
 		}
+		if item.duration > maxMotaDuration {
+			return fmt.Errorf("%s must not exceed 86400", item.name)
+		}
 	}
 	return nil
 }
@@ -346,6 +386,9 @@ func (c *Config) Validate() error {
 // validDefaultAgentSlug 只接受小写字母/数字/连字符,且不以连字符开头或结尾、
 // 不含连续连字符。
 func validDefaultAgentSlug(slug string) bool {
+	if len(slug) < 2 || len(slug) > 64 {
+		return false
+	}
 	if strings.HasPrefix(slug, "-") || strings.HasSuffix(slug, "-") || strings.Contains(slug, "--") {
 		return false
 	}
@@ -359,8 +402,8 @@ func validDefaultAgentSlug(slug string) bool {
 	return true
 }
 
-// validateAbsoluteHTTPURL 要求带 http/https scheme 且带 host 的绝对 URL,
-// 与 Rust 侧 reqwest::Url::parse 的语义对齐。
+// validateAbsoluteHTTPURL 要求带 host 的 HTTPS 绝对 URL。HTTP 只对回环
+// 地址放行，便于本地集成测试，同时禁止 URL 内嵌凭据。
 func validateAbsoluteHTTPURL(raw string) error {
 	parsed, err := url.Parse(raw)
 	if err != nil {
@@ -371,6 +414,12 @@ func validateAbsoluteHTTPURL(raw string) error {
 	}
 	if parsed.Host == "" {
 		return errors.New("missing host")
+	}
+	if parsed.User != nil {
+		return errors.New("must not contain embedded credentials")
+	}
+	if parsed.Scheme == "http" && !isLoopbackHost(parsed.Hostname()) {
+		return errors.New("must use HTTPS except for loopback development")
 	}
 	return nil
 }
@@ -405,6 +454,7 @@ func applyMotaEnv(f *motaFile) {
 	envString("PUSH_MODE", &f.PushMode)
 	envString("HEARTBEAT_URL", &f.HeartbeatURL)
 	envString("CALLBACK_TOKEN", &f.CallbackToken)
+	envString("CALLBACK_TOKEN_ORIGIN", &f.CallbackTokenOrigin)
 	envString("DEFAULT_AGENT_SLUG", &f.DefaultAgentSlug)
 
 	envBoolPtr("PUSH_ENABLED", &f.PushEnabled)
@@ -465,10 +515,27 @@ func derefOr(value *string, fallback string) string {
 	return *value
 }
 
+func motaSecondsOr(value *uint64, fallback uint64) time.Duration {
+	seconds := fallback
+	if value != nil {
+		seconds = *value
+	}
+	if seconds > uint64(maxMotaDuration/time.Second) {
+		// Return a stable out-of-range sentinel instead of overflowing
+		// time.Duration before Validate can reject it.
+		return maxMotaDuration + time.Second
+	}
+	return time.Duration(seconds) * time.Second
+}
+
 func secondsOr(value *uint64, fallback uint64) time.Duration {
 	seconds := fallback
 	if value != nil {
 		seconds = *value
+	}
+	const maxDurationSeconds = uint64((1<<63 - 1) / int64(time.Second))
+	if seconds > maxDurationSeconds {
+		return time.Duration(1<<63 - 1)
 	}
 	return time.Duration(seconds) * time.Second
 }

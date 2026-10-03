@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -20,6 +21,12 @@ import (
 	"time"
 
 	toml "github.com/pelletier/go-toml/v2"
+)
+
+const (
+	exampleAdminPassword      = "replace-with-a-strong-admin-password"
+	exampleAdminSessionSecret = "replace-with-at-least-32-random-bytes"
+	exampleProviderAPIKey     = "replace-me"
 )
 
 // GatewayProtocol 是网关兼容协议。LiteLLM 同时支持 Anthropic Messages 与
@@ -119,13 +126,17 @@ type PlatformConfig struct {
 	PublicBaseURL        string
 	MaxRequestBodyBytes  int
 	GlobalMaxConcurrency int
+	// AllowLegacyBodySignature 仅用于迁移旧动态 Agent 调用方。旧
+	// X-MoTA-Signature 只覆盖 body、没有 timestamp/nonce，默认必须关闭。
+	AllowLegacyBodySignature bool
 
-	AdminUsername      string
-	AdminPassword      string
-	AdminPasswordHash  string
-	AdminSessionSecret string
-	AdminSessionTTL    time.Duration
-	SecureCookies      bool
+	AdminUsername          string
+	AdminPassword          string
+	AdminPasswordHash      string
+	AdminSessionSecret     string
+	AdminSessionTTL        time.Duration
+	SecureCookies          bool
+	AdminTrustedProxyCIDRs []string
 
 	WorkspaceRoot string
 	ClaudeEnabled bool
@@ -157,19 +168,21 @@ type platformRootFile struct {
 }
 
 type platformSectionFile struct {
-	Enabled              *bool   `toml:"enabled"`
-	PublicBaseURL        *string `toml:"public_base_url"`
-	MaxRequestBodyBytes  *int    `toml:"max_request_body_bytes"`
-	GlobalMaxConcurrency *int    `toml:"global_max_concurrency"`
+	Enabled                  *bool   `toml:"enabled"`
+	PublicBaseURL            *string `toml:"public_base_url"`
+	MaxRequestBodyBytes      *int    `toml:"max_request_body_bytes"`
+	GlobalMaxConcurrency     *int    `toml:"global_max_concurrency"`
+	AllowLegacyBodySignature *bool   `toml:"allow_legacy_body_signature"`
 }
 
 type adminSectionFile struct {
-	Username       *string `toml:"username"`
-	Password       *string `toml:"password"`
-	PasswordHash   *string `toml:"password_hash"`
-	SessionSecret  *string `toml:"session_secret"`
-	SessionTTLSecs *uint64 `toml:"session_ttl_secs"`
-	SecureCookies  *bool   `toml:"secure_cookies"`
+	Username          *string   `toml:"username"`
+	Password          *string   `toml:"password"`
+	PasswordHash      *string   `toml:"password_hash"`
+	SessionSecret     *string   `toml:"session_secret"`
+	SessionTTLSecs    *uint64   `toml:"session_ttl_secs"`
+	SecureCookies     *bool     `toml:"secure_cookies"`
+	TrustedProxyCIDRs *[]string `toml:"trusted_proxy_cidrs"`
 }
 
 type claudeSectionFile struct {
@@ -251,6 +264,7 @@ func (r *platformRootFile) merge(other *platformRootFile) {
 	mergePtr(&r.Platform.PublicBaseURL, other.Platform.PublicBaseURL)
 	mergePtr(&r.Platform.MaxRequestBodyBytes, other.Platform.MaxRequestBodyBytes)
 	mergePtr(&r.Platform.GlobalMaxConcurrency, other.Platform.GlobalMaxConcurrency)
+	mergePtr(&r.Platform.AllowLegacyBodySignature, other.Platform.AllowLegacyBodySignature)
 
 	mergePtr(&r.Admin.Username, other.Admin.Username)
 	mergePtr(&r.Admin.Password, other.Admin.Password)
@@ -258,6 +272,7 @@ func (r *platformRootFile) merge(other *platformRootFile) {
 	mergePtr(&r.Admin.SessionSecret, other.Admin.SessionSecret)
 	mergePtr(&r.Admin.SessionTTLSecs, other.Admin.SessionTTLSecs)
 	mergePtr(&r.Admin.SecureCookies, other.Admin.SecureCookies)
+	mergePtr(&r.Admin.TrustedProxyCIDRs, other.Admin.TrustedProxyCIDRs)
 
 	mergePtr(&r.Claude.Enabled, other.Claude.Enabled)
 	mergePtr(&r.Claude.WorkspaceRoot, other.Claude.WorkspaceRoot)
@@ -373,17 +388,19 @@ func platformConfigFromFile(root *platformRootFile) (*PlatformConfig, error) {
 	}
 
 	config := &PlatformConfig{
-		Enabled:              derefBoolOr(root.Platform.Enabled, true),
-		PublicBaseURL:        strings.TrimRight(derefOr(root.Platform.PublicBaseURL, "http://127.0.0.1:8080"), "/"),
-		MaxRequestBodyBytes:  derefIntOr(root.Platform.MaxRequestBodyBytes, 2*1024*1024),
-		GlobalMaxConcurrency: derefIntOr(root.Platform.GlobalMaxConcurrency, 16),
+		Enabled:                  derefBoolOr(root.Platform.Enabled, true),
+		PublicBaseURL:            strings.TrimRight(derefOr(root.Platform.PublicBaseURL, "http://127.0.0.1:8080"), "/"),
+		MaxRequestBodyBytes:      derefIntOr(root.Platform.MaxRequestBodyBytes, 2*1024*1024),
+		GlobalMaxConcurrency:     derefIntOr(root.Platform.GlobalMaxConcurrency, 16),
+		AllowLegacyBodySignature: derefBoolOr(root.Platform.AllowLegacyBodySignature, false),
 
-		AdminUsername:      strings.TrimSpace(derefOr(root.Admin.Username, "admin")),
-		AdminPassword:      nonEmpty(derefOr(root.Admin.Password, "")),
-		AdminPasswordHash:  nonEmpty(derefOr(root.Admin.PasswordHash, "")),
-		AdminSessionSecret: derefOr(root.Admin.SessionSecret, ""),
-		AdminSessionTTL:    secondsOr(root.Admin.SessionTTLSecs, 72*60*60),
-		SecureCookies:      derefBoolOr(root.Admin.SecureCookies, false),
+		AdminUsername:          strings.TrimSpace(derefOr(root.Admin.Username, "admin")),
+		AdminPassword:          nonEmpty(derefOr(root.Admin.Password, "")),
+		AdminPasswordHash:      nonEmpty(derefOr(root.Admin.PasswordHash, "")),
+		AdminSessionSecret:     derefOr(root.Admin.SessionSecret, ""),
+		AdminSessionTTL:        secondsOr(root.Admin.SessionTTLSecs, 72*60*60),
+		SecureCookies:          derefBoolOr(root.Admin.SecureCookies, false),
+		AdminTrustedProxyCIDRs: derefSliceOr(root.Admin.TrustedProxyCIDRs, nil),
 
 		WorkspaceRoot:        derefOr(root.Claude.WorkspaceRoot, "."),
 		ClaudeEnabled:        derefBoolOr(root.Claude.Enabled, false),
@@ -535,6 +552,7 @@ func applyPlatformEnv(root *platformRootFile) error {
 	setEnvString("ADMIN__PASSWORD", &root.Admin.Password)
 	setEnvString("ADMIN__PASSWORD_HASH", &root.Admin.PasswordHash)
 	setEnvString("ADMIN__SESSION_SECRET", &root.Admin.SessionSecret)
+	setEnvCSV("ADMIN__TRUSTED_PROXY_CIDRS", &root.Admin.TrustedProxyCIDRs)
 	setEnvString("CLAUDE__WORKSPACE_ROOT", &root.Claude.WorkspaceRoot)
 	setEnvString("CLAUDE__BINARY", &root.Claude.Binary)
 	setEnvString("CLAUDE__DEFAULT_MODEL", &root.Claude.DefaultModel)
@@ -584,6 +602,9 @@ func applyPlatformEnv(root *platformRootFile) error {
 		return err
 	}
 	if err := setEnvBool("PLATFORM__ENABLED", &root.Platform.Enabled); err != nil {
+		return err
+	}
+	if err := setEnvBool("PLATFORM__ALLOW_LEGACY_BODY_SIGNATURE", &root.Platform.AllowLegacyBodySignature); err != nil {
 		return err
 	}
 	if err := setEnvBool("ADMIN__SECURE_COOKIES", &root.Admin.SecureCookies); err != nil {
@@ -802,6 +823,9 @@ func (c *PlatformConfig) Validate() error {
 	if baseURL.Host == "" {
 		return errors.New("[platform].public_base_url must be an absolute HTTP(S) URL: missing host")
 	}
+	if baseURL.User != nil || baseURL.RawQuery != "" || baseURL.Fragment != "" {
+		return errors.New("[platform].public_base_url must not contain credentials, query string, or fragment")
+	}
 	if baseURL.Scheme == "https" && !c.SecureCookies {
 		return errors.New("HTTPS public_base_url requires [admin].secure_cookies=true (ADMIN__SECURE_COOKIES=true)")
 	}
@@ -831,14 +855,25 @@ func (c *PlatformConfig) Validate() error {
 		return errors.New("[admin].password_hash must be an Argon2 PHC string")
 	}
 	switch c.AdminPassword {
-	case "admin", "password", "change-me":
+	case "admin", "password", "change-me", exampleAdminPassword:
 		return errors.New("[admin].password is an unsafe placeholder; configure a strong password")
+	}
+	if c.AdminPassword != "" && (len(c.AdminPassword) < 12 || len(c.AdminPassword) > 512) {
+		return errors.New("[admin].password must contain 12-512 bytes")
 	}
 	if len(c.AdminSessionSecret) < 32 {
 		return errors.New("[admin].session_secret must contain at least 32 bytes; set ADMIN__SESSION_SECRET")
 	}
+	if c.AdminSessionSecret == exampleAdminSessionSecret {
+		return errors.New("[admin].session_secret is a public template placeholder; configure a random secret")
+	}
 	if c.AdminSessionTTL < 300*time.Second || c.AdminSessionTTL > 30*24*time.Hour {
 		return errors.New("[admin].session_ttl_secs must be between 300 and 2592000")
+	}
+	for _, raw := range c.AdminTrustedProxyCIDRs {
+		if _, err := netip.ParsePrefix(strings.TrimSpace(raw)); err != nil {
+			return fmt.Errorf("[admin].trusted_proxy_cidrs contains invalid CIDR %q", raw)
+		}
 	}
 
 	if strings.TrimSpace(c.WorkspaceRoot) == "" {
@@ -852,15 +887,8 @@ func (c *PlatformConfig) Validate() error {
 	}
 
 	if strings.TrimSpace(c.Gateway.BaseURL) != "" {
-		gatewayURL, err := url.Parse(c.Gateway.BaseURL)
-		if err != nil {
-			return fmt.Errorf("[gateway].base_url must be an absolute HTTP(S) URL: %w", err)
-		}
-		if gatewayURL.Scheme != "http" && gatewayURL.Scheme != "https" {
-			return errors.New("[gateway].base_url must use http or https")
-		}
-		if gatewayURL.Host == "" {
-			return errors.New("[gateway].base_url must be an absolute HTTP(S) URL: missing host")
+		if err := validateManagedURL("[gateway].base_url", c.Gateway.BaseURL); err != nil {
+			return err
 		}
 	}
 	if strings.TrimSpace(c.Gateway.Model) == "" {
@@ -938,6 +966,9 @@ func (c *PlatformConfig) Validate() error {
 	if c.OpenAIAgents.Enabled && strings.TrimSpace(c.OpenAIAgents.APIKey) == "" {
 		return errors.New("[openai_agents].enabled=true requires api_key")
 	}
+	if c.OpenAIAgents.Enabled && strings.TrimSpace(c.OpenAIAgents.APIKey) == exampleProviderAPIKey {
+		return errors.New("[openai_agents].api_key is a public template placeholder")
+	}
 	if c.OpenAIAgents.DefaultModel == "" {
 		return errors.New("[openai_agents].default_model must not be empty")
 	}
@@ -966,6 +997,9 @@ func (c *PlatformConfig) Validate() error {
 		if strings.TrimSpace(c.ClaudeManaged.APIKey) == "" || c.ClaudeManaged.AgentID == "" || c.ClaudeManaged.EnvironmentID == "" {
 			return errors.New("[claude_managed].enabled=true requires api_key, agent_id, and environment_id")
 		}
+		if strings.TrimSpace(c.ClaudeManaged.APIKey) == exampleProviderAPIKey {
+			return errors.New("[claude_managed].api_key is a public template placeholder")
+		}
 	}
 	if c.ClaudeManaged.MaxResponseBytes < 4096 || c.ClaudeManaged.MaxResponseBytes > 16*1024*1024 {
 		return errors.New("[claude_managed].max_response_bytes must be between 4096 and 16777216")
@@ -985,6 +1019,15 @@ func validateManagedURL(name, value string) error {
 	parsed, err := url.Parse(strings.TrimSpace(value))
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 		return fmt.Errorf("%s must be an absolute HTTP(S) URL", name)
+	}
+	if parsed.User != nil {
+		return fmt.Errorf("%s must not contain embedded credentials", name)
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("%s must not contain a query string or fragment; use the dedicated credential field", name)
+	}
+	if parsed.Scheme == "http" && !isLoopbackHost(parsed.Hostname()) {
+		return fmt.Errorf("%s must use HTTPS except for loopback development", name)
 	}
 	return nil
 }

@@ -3,6 +3,7 @@ package mota
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -62,19 +63,36 @@ func TestCallbackSignatureV2IsByteExact(t *testing.T) {
 func TestAppendCallbackToken(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		url, token, want string
+		url, token, origin, want string
 	}{
-		{"https://api.example.com/callback", "", "https://api.example.com/callback"},
-		{"https://api.example.com/callback", "   ", "https://api.example.com/callback"},
+		{"https://api.example.com/callback", "", "", "https://api.example.com/callback"},
+		{"https://api.example.com/callback", "   ", "", "https://api.example.com/callback"},
 		{
 			"https://api.example.com/mota/creator/publics/bound/callback", "mpk_probe-token",
+			"https://api.example.com",
 			"https://api.example.com/mota/creator/publics/bound/callback?token=mpk_probe-token",
 		},
-		{"https://api.example.com/callback?a=1", "mpk_x", "https://api.example.com/callback?a=1&token=mpk_x"},
+		{"https://api.example.com/callback?a=1", "mpk_x", "https://api.example.com", "https://api.example.com/callback?a=1&token=mpk_x"},
+		{"https://api.example.com/callback?a=1#section", "mpk_+&", "https://api.example.com", "https://api.example.com/callback?a=1&token=mpk_%2B%26#section"},
 	}
 	for _, item := range cases {
-		if got := appendCallbackToken(item.url, item.token); got != item.want {
+		got, err := appendCallbackToken(item.url, item.token, item.origin)
+		if err != nil {
+			t.Errorf("appendCallbackToken(%q, %q): %v", item.url, item.token, err)
+			continue
+		}
+		if got != item.want {
 			t.Errorf("appendCallbackToken(%q, %q) = %q, want %q", item.url, item.token, got, item.want)
+		}
+	}
+}
+
+func TestAppendCallbackTokenRequiresMatchingOrigin(t *testing.T) {
+	t.Parallel()
+	for _, origin := range []string{"", "https://attacker.example", "https://api.example.com/path"} {
+		if _, err := appendCallbackToken(
+			"https://api.example.com/callback", "mpk_secret", origin); err == nil {
+			t.Errorf("origin %q must not receive the callback token", origin)
 		}
 	}
 }
@@ -102,16 +120,11 @@ func TestMaskCallbackToken(t *testing.T) {
 	}
 }
 
-func TestTruncateForLog(t *testing.T) {
+func TestCallbackOriginRemovesCredentialsPathQueryAndFragment(t *testing.T) {
 	t.Parallel()
-	short := strings.Repeat("x", callbackLogBodyLimit)
-	if truncateForLog(short) != short {
-		t.Error("a body at the limit must be kept verbatim")
-	}
-	long := strings.Repeat("y", callbackLogBodyLimit+10)
-	got := truncateForLog(long)
-	if !strings.HasSuffix(got, "…<truncated 10 bytes>") {
-		t.Errorf("got %q, want a truncation marker", got[len(got)-40:])
+	got := callbackOrigin("https://user:password@example.test/private/callback?token=secret#fragment")
+	if got != "https://example.test" {
+		t.Fatalf("callbackOrigin = %q, want only the origin", got)
 	}
 }
 
@@ -136,10 +149,11 @@ func TestValidateCallbackInputs(t *testing.T) {
 		"http://api.example.com/cb",
 		"ftp://api.example.com/cb",
 		"ws://localhost/cb",
+		"https://user:password@api.example.com/cb",
 	} {
 		err := validateCallbackInputs(target, "run-1", "secret")
-		if err == nil || !strings.Contains(err.Error(), "must use HTTPS") {
-			t.Errorf("%s => %v, want an HTTPS rejection", target, err)
+		if err == nil {
+			t.Errorf("%s must be rejected", target)
 		}
 	}
 	// 非绝对地址。
@@ -189,6 +203,14 @@ func TestParseCallbackReceiptRequiresCodeAndAccepted(t *testing.T) {
 			t.Errorf("%q must be rejected", text)
 		}
 	}
+	for _, text := range []string{
+		`{"code":"BAD\nCODE","accepted":false}`,
+		`{"code":"` + strings.Repeat("A", 129) + `","accepted":false}`,
+	} {
+		if _, err := parseCallbackReceipt(text); err == nil {
+			t.Errorf("unsafe callback code in %q must be rejected", text)
+		}
+	}
 }
 
 func TestHTTPStatusText(t *testing.T) {
@@ -210,11 +232,13 @@ func TestHTTPStatusText(t *testing.T) {
 func TestCallbackResponseCode(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
-		`{"code":"RATE_LIMITED"}`: "RATE_LIMITED",
-		`{"code":123}`:            "no code",
-		`{}`:                      "no code",
-		`not json`:                "no code",
-		``:                        "no code",
+		`{"code":"RATE_LIMITED"}`:                     "RATE_LIMITED",
+		`{"code":"BAD\nCODE"}`:                        "invalid code",
+		`{"code":"` + strings.Repeat("A", 129) + `"}`: "invalid code",
+		`{"code":123}`:                                "no code",
+		`{}`:                                          "no code",
+		`not json`:                                    "no code",
+		``:                                            "no code",
 	}
 	for text, want := range cases {
 		if got := callbackResponseCode(text); got != want {
@@ -302,7 +326,7 @@ func TestSendCallbackHappyPath(t *testing.T) {
 		status: 200, body: `{"code":"OK","accepted":true,"runStatus":"SUCCESS"}`,
 	})
 	receipt, err := SendCallback(context.Background(), stub.server.Client(),
-		stub.server.URL, "run-1", "mbt_secret", "mpk_token", testPayload())
+		stub.server.URL, "run-1", "mbt_secret", "mpk_token", stub.server.URL, testPayload())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -342,7 +366,7 @@ func TestSendCallbackReturnsRejectedReceiptWithoutRetry(t *testing.T) {
 		body:   `{"code":"OK","accepted":false,"runStatus":"FAILED","runMsg":"schema invalid"}`,
 	})
 	receipt, err := SendCallback(context.Background(), stub.server.Client(),
-		stub.server.URL, "run-1", "mbt_secret", "", testPayload())
+		stub.server.URL, "run-1", "mbt_secret", "", "", testPayload())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -368,10 +392,11 @@ func TestSendCallbackRejectsNonOKTransportCode(t *testing.T) {
 		status: 200, body: `{"code":"SIGNATURE_INVALID","accepted":false}`,
 	})
 	_, err := SendCallback(context.Background(), stub.server.Client(),
-		stub.server.URL, "run-1", "mbt_secret", "", testPayload())
+		stub.server.URL, "run-1", "mbt_secret", "", "", testPayload())
 	if err == nil || err.Error() != "callback transport code was SIGNATURE_INVALID" {
 		t.Fatalf("err = %v", err)
 	}
+	assertCallbackDeliveryError(t, err, http.StatusOK, 1)
 	if stub.callCount() != 1 {
 		t.Errorf("callCount = %d, want 1", stub.callCount())
 	}
@@ -383,10 +408,11 @@ func TestSendCallbackRejectsUnparsableReceipt(t *testing.T) {
 	for _, body := range []string{``, `not json`, `{}`, `{"code":"OK"}`} {
 		stub := newCallbackStub(t, callbackStubResponse{status: 200, body: body})
 		_, err := SendCallback(context.Background(), stub.server.Client(),
-			stub.server.URL, "run-1", "mbt_secret", "", testPayload())
+			stub.server.URL, "run-1", "mbt_secret", "", "", testPayload())
 		if err == nil || !strings.HasPrefix(err.Error(), "callback returned an invalid receipt: ") {
 			t.Errorf("body %q => %v", body, err)
 		}
+		assertCallbackDeliveryError(t, err, http.StatusOK, 1)
 		if stub.callCount() != 1 {
 			t.Errorf("body %q: callCount = %d, want 1", body, stub.callCount())
 		}
@@ -402,28 +428,29 @@ func TestSendCallbackDoesNotRetryClientErrors(t *testing.T) {
 			callbackStubResponse{status: 200, body: `{"code":"OK","accepted":true}`},
 		)
 		_, err := SendCallback(context.Background(), stub.server.Client(),
-			stub.server.URL, "run-1", "mbt_secret", "", testPayload())
+			stub.server.URL, "run-1", "mbt_secret", "", "", testPayload())
 		want := "callback rejected with " + httpStatusText(status) + " (BAD_REQUEST)"
 		if err == nil || err.Error() != want {
 			t.Errorf("status %d => %v, want %q", status, err, want)
 		}
+		assertCallbackDeliveryError(t, err, status, 1)
 		if stub.callCount() != 1 {
 			t.Errorf("status %d: callCount = %d, want 1 (no retry)", status, stub.callCount())
 		}
 	}
 }
 
-// 429 与 5xx 会重试。第一次退避 1s,所以这里只验「确实重试了一次并成功」。
+// 408、429 与 5xx 会重试。第一次退避 1s,所以这里只验「确实重试了一次并成功」。
 func TestSendCallbackRetriesTransientRejections(t *testing.T) {
 	t.Parallel()
-	for _, status := range []int{429, 500, 502, 503} {
+	for _, status := range []int{408, 429, 500, 502, 503} {
 		stub := newCallbackStub(t,
 			callbackStubResponse{status: status, body: `{"code":"RETRY_ME"}`},
 			callbackStubResponse{status: 200, body: `{"code":"OK","accepted":true}`},
 		)
 		started := time.Now()
 		receipt, err := SendCallback(context.Background(), stub.server.Client(),
-			stub.server.URL, "run-1", "mbt_secret", "", testPayload())
+			stub.server.URL, "run-1", "mbt_secret", "", "", testPayload())
 		if err != nil {
 			t.Fatalf("status %d: %v", status, err)
 		}
@@ -448,7 +475,7 @@ func TestSendCallbackResignsEachAttempt(t *testing.T) {
 		callbackStubResponse{status: 200, body: `{"code":"OK","accepted":true}`},
 	)
 	if _, err := SendCallback(context.Background(), stub.server.Client(),
-		stub.server.URL, "run-1", "mbt_secret", "", testPayload()); err != nil {
+		stub.server.URL, "run-1", "mbt_secret", "", "", testPayload()); err != nil {
 		t.Fatal(err)
 	}
 	first := stub.nextRequest(t)
@@ -469,7 +496,7 @@ func TestSendCallbackHonoursContextCancellationDuringBackoff(t *testing.T) {
 	defer cancel()
 	started := time.Now()
 	_, err := SendCallback(ctx, stub.server.Client(),
-		stub.server.URL, "run-1", "mbt_secret", "", testPayload())
+		stub.server.URL, "run-1", "mbt_secret", "", "", testPayload())
 	if err == nil || !strings.HasPrefix(err.Error(), "callback retry aborted: ") {
 		t.Fatalf("err = %v, want a retry-aborted error", err)
 	}
@@ -487,7 +514,7 @@ func TestSendCallbackReportsTransportFailure(t *testing.T) {
 	stub.server.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	_, err := SendCallback(ctx, http.DefaultClient, target, "run-1", "mbt_secret", "", testPayload())
+	_, err := SendCallback(ctx, http.DefaultClient, target, "run-1", "mbt_secret", "", "", testPayload())
 	if err == nil {
 		t.Fatal("expected an error against a closed server")
 	}
@@ -510,11 +537,91 @@ func TestSendCallbackValidatesBeforeSending(t *testing.T) {
 	}
 	for _, item := range cases {
 		if _, err := SendCallback(context.Background(), stub.server.Client(),
-			item.url, item.runID, item.secret, "", testPayload()); err == nil {
+			item.url, item.runID, item.secret, "", "", testPayload()); err == nil {
 			t.Errorf("%+v must be rejected", item)
 		}
 	}
 	if stub.callCount() != 0 {
 		t.Errorf("callCount = %d, want 0", stub.callCount())
+	}
+}
+
+func TestSendCallbackRejectsNilPayload(t *testing.T) {
+	t.Parallel()
+	_, err := SendCallback(context.Background(), http.DefaultClient,
+		"https://api.example.test/callback", "run-1", "secret", "", "", nil)
+	if err == nil || err.Error() != "callback result is nil" {
+		t.Fatalf("err = %v", err)
+	}
+	assertCallbackDeliveryError(t, err, 0, 0)
+}
+
+func TestSendCallbackBoundsReceiptBody(t *testing.T) {
+	t.Parallel()
+	stub := newCallbackStub(t, callbackStubResponse{
+		status: http.StatusOK, body: strings.Repeat("x", callbackResponseBodyLimit+1),
+	})
+	_, err := SendCallback(context.Background(), stub.server.Client(),
+		stub.server.URL, "run-large", "secret", "", "", testPayload())
+	if err == nil || !strings.Contains(err.Error(), "exceeded 65536 bytes") {
+		t.Fatalf("err = %v", err)
+	}
+	assertCallbackDeliveryError(t, err, http.StatusOK, 1)
+	if stub.callCount() != 1 {
+		t.Fatalf("callCount = %d, want 1", stub.callCount())
+	}
+}
+
+func TestSendCallbackDoesNotFollowRedirects(t *testing.T) {
+	t.Parallel()
+	var redirected atomic.Int64
+	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		redirected.Add(1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"code":"OK","accepted":true}`)
+	}))
+	defer destination.Close()
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, destination.URL, http.StatusFound)
+	}))
+	defer source.Close()
+
+	_, err := SendCallback(context.Background(), source.Client(),
+		source.URL, "run-redirect", "secret", "mpk_secret", source.URL, testPayload())
+	if err == nil {
+		t.Fatal("redirect must not be followed")
+	}
+	assertCallbackDeliveryError(t, err, http.StatusFound, 1)
+	if redirected.Load() != 0 {
+		t.Fatalf("redirect destination received %d signed requests", redirected.Load())
+	}
+}
+
+type panickingRoundTripper struct{}
+
+func (panickingRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	panic("transport panic")
+}
+
+func TestSendCallbackRecoversTransportPanic(t *testing.T) {
+	t.Parallel()
+	client := &http.Client{Transport: panickingRoundTripper{}}
+	_, err := SendCallback(context.Background(), client,
+		"https://api.example.test/callback", "run-panic", "secret", "", "", testPayload())
+	if err == nil || err.Error() != "callback delivery panicked" {
+		t.Fatalf("err = %v", err)
+	}
+	assertCallbackDeliveryError(t, err, 0, 1)
+}
+
+func assertCallbackDeliveryError(t *testing.T, err error, status, attempts int) {
+	t.Helper()
+	var delivery *CallbackDeliveryError
+	if !errors.As(err, &delivery) {
+		t.Fatalf("error %T is not CallbackDeliveryError: %v", err, err)
+	}
+	if delivery.StatusCode != status || delivery.Attempts != attempts {
+		t.Fatalf("delivery metadata = status %d attempts %d, want status %d attempts %d",
+			delivery.StatusCode, delivery.Attempts, status, attempts)
 	}
 }

@@ -42,12 +42,22 @@ func managedRequest(ctx context.Context, client *http.Client, method, url string
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer resp.Body.Close()
-		limited, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		const errorBodyProbeBytes int64 = 4096
+		observedBytes, readErr := io.Copy(io.Discard, io.LimitReader(resp.Body, errorBodyProbeBytes+1))
+		bodyLength := "unknown"
+		switch {
+		case resp.ContentLength >= 0:
+			bodyLength = fmt.Sprintf("%d", resp.ContentLength)
+		case observedBytes > errorBodyProbeBytes:
+			bodyLength = fmt.Sprintf(">%d", errorBodyProbeBytes)
+		case readErr == nil:
+			bodyLength = fmt.Sprintf("%d", observedBytes)
+		}
 		code := "executor_failed"
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
 			code = "executor_unavailable"
 		}
-		return nil, newExecutionError(code, fmt.Sprintf("managed Agent API returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(limited))))
+		return nil, newExecutionError(code, fmt.Sprintf("managed Agent API returned HTTP %d (response_body_bytes=%s)", resp.StatusCode, bodyLength))
 	}
 	return resp, nil
 }
@@ -82,12 +92,12 @@ func readSSE(ctx context.Context, response *http.Response, maxBytes int, consume
 	var dataLines []string
 	total := 0
 	for {
-		line, err := reader.ReadString('\n')
-		total += len(line)
-		if total > maxBytes {
+		line, readBytes, tooLarge, err := readBoundedSSELine(reader, maxBytes-total, maxBytes)
+		if tooLarge {
 			return newExecutionError("output_too_large", "managed Agent event stream exceeded the configured byte limit")
 		}
-		trimmed := strings.TrimRight(line, "\r\n")
+		total += readBytes
+		trimmed := strings.TrimRight(string(line), "\r\n")
 		if trimmed == "" {
 			if len(dataLines) > 0 {
 				data := strings.Join(dataLines, "\n")
@@ -117,6 +127,26 @@ func readSSE(ctx context.Context, response *http.Response, maxBytes int, consume
 			}
 			return newExecutionError("executor_failed", "read managed Agent event stream: "+err.Error())
 		}
+	}
+}
+
+// readBoundedSSELine reads one physical SSE line without allowing bufio to
+// accumulate an attacker-controlled, unterminated line. Both the remaining
+// stream budget and the per-line budget include the trailing newline.
+func readBoundedSSELine(reader *bufio.Reader, remainingBytes, maxLineBytes int) ([]byte, int, bool, error) {
+	var line []byte
+	readBytes := 0
+	for {
+		fragment, err := reader.ReadSlice('\n')
+		if len(fragment) > remainingBytes-readBytes || len(fragment) > maxLineBytes-readBytes {
+			return nil, readBytes + len(fragment), true, nil
+		}
+		readBytes += len(fragment)
+		line = append(line, fragment...)
+		if err == bufio.ErrBufferFull {
+			continue
+		}
+		return line, readBytes, false, err
 	}
 }
 

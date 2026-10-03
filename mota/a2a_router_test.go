@@ -33,7 +33,7 @@ func a2aTestConfig(defaultCardSlug string) *A2AConfig {
 	return &A2AConfig{
 		Enabled:              true,
 		BasePath:             "/a2a",
-		StreamEnabled:        true,
+		StreamEnabled:        false,
 		RequireBearerAuth:    false,
 		AgentVersion:         a2aAppVersion,
 		ProviderOrganization: "MOTA",
@@ -122,7 +122,7 @@ func TestA2ARouterPerAgentCardDescribesAV1Interface(t *testing.T) {
 		t.Error("v1.0 uses organization, not v0.3's name")
 	}
 	capabilities := card["capabilities"].(map[string]any)
-	if capabilities["streaming"] != true {
+	if capabilities["streaming"] != false {
 		t.Errorf("streaming = %v", capabilities["streaming"])
 	}
 	if capabilities["extendedAgentCard"] != false {
@@ -278,7 +278,7 @@ func TestA2ARouterSlugLookupIsCaseInsensitive(t *testing.T) {
 
 func TestA2ARouterCustomBasePathIsHonouredInRouteAndCard(t *testing.T) {
 	config := &A2AConfig{
-		Enabled: true, BasePath: "/protocol/a2a", StreamEnabled: true,
+		Enabled: true, BasePath: "/protocol/a2a", StreamEnabled: false,
 		RequireBearerAuth: false, AgentVersion: a2aAppVersion, MaxRequestBodyBytes: 1024 * 1024,
 	}
 	state := a2aCardOnlyState(t, []*AgentConfig{a2aAgentConfig("desk-1", "strategist", true)}, config)

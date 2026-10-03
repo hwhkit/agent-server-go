@@ -3,12 +3,14 @@ package mota
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ---------------------------------------------------------------------------
@@ -23,6 +25,22 @@ type adminFixture struct {
 	handler *AdminHandler
 	// session 是已登录会话(newAdminFixture 会自动登录一次)。
 	session *IssuedSession
+}
+
+func TestDecodeAdminJSONRejectsUnknownTrailingAndOversizedInput(t *testing.T) {
+	for _, body := range []string{
+		`{"username":"ok","unknown":true}`,
+		`{"username":"ok"} {"username":"second"}`,
+		`{"username":"` + strings.Repeat("x", 100) + `"}`,
+	} {
+		request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+		var payload struct {
+			Username string `json:"username"`
+		}
+		if err := decodeAdminJSON(request, 64, &payload); err == nil {
+			t.Errorf("body %q must be rejected", body)
+		}
+	}
 }
 
 func newAdminFixture(t *testing.T) *adminFixture {
@@ -488,6 +506,38 @@ func TestAccountManagementRolesRevocationAndAuditScope(t *testing.T) {
 	if userSession.Role != UserRoleUser {
 		t.Fatalf("session role = %q", userSession.Role)
 	}
+	// 普通用户保留控制台只读能力，但 Provider 与 Agent 控制面写操作必须由
+	// 后端强制拒绝，不能只依赖前端隐藏按钮。
+	for _, target := range []string{
+		"/api/admin/providers", "/api/admin/agents", "/api/admin/runs", "/api/admin/channel-events",
+	} {
+		response := fixture.callAs(t, userSession, http.MethodGet, target, "")
+		adminData(t, response, http.StatusOK)
+	}
+	providerResponse := fixture.callAs(t, userSession, http.MethodGet, "/api/admin/providers", "")
+	providerRaw := adminData(t, providerResponse, http.StatusOK)
+	var userProviders []ProviderView
+	if err := json.Unmarshal(providerRaw, &userProviders); err != nil {
+		t.Fatal(err)
+	}
+	for _, provider := range userProviders {
+		if provider.Editable || len(provider.Config) != 0 {
+			t.Fatalf("standard user received editable Provider details: %+v", provider)
+		}
+	}
+	for _, item := range []struct {
+		method string
+		target string
+		body   string
+	}{
+		{http.MethodPut, "/api/admin/providers/gateway", `{}`},
+		{http.MethodPost, "/api/admin/agents", agentPayload(uniqueSlug("readonly"), nil)},
+		{http.MethodPut, "/api/admin/agents/not-present", agentPayload("not-present", nil)},
+		{http.MethodDelete, "/api/admin/agents/not-present", ""},
+	} {
+		response := fixture.callAs(t, userSession, item.method, item.target, item.body)
+		wantAdminError(t, response, http.StatusForbidden, "admin_required")
+	}
 	forbidden := fixture.callAs(t, userSession, http.MethodGet, "/api/admin/users", "")
 	wantAdminError(t, forbidden, http.StatusForbidden, "admin_required")
 	promote := fixture.call(t, http.MethodPut, "/api/admin/users/"+username,
@@ -578,6 +628,23 @@ func TestAccountManagementProtectsCurrentAdminAndValidatesInput(t *testing.T) {
 	invalidRole := fixture.call(t, http.MethodPost, "/api/admin/users",
 		jsonString(map[string]any{"username": "invalid-role", "password": "valid-password-2026", "role": "owner"}), true)
 	wantAdminError(t, invalidRole, http.StatusBadRequest, "invalid_user")
+}
+
+func TestDirectLoginSourceTrustsForwardingHeadersOnlyFromConfiguredProxy(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/api/admin/login", nil)
+	request.RemoteAddr = "10.0.0.5:4321"
+	request.Header.Set("X-Forwarded-For", "198.51.100.20, 10.0.0.4")
+	if got := directLoginSource(request, nil); got != "10.0.0.5" {
+		t.Fatalf("untrusted proxy source = %q", got)
+	}
+	trusted := []string{"10.0.0.0/8"}
+	if got := directLoginSource(request, trusted); got != "198.51.100.20" {
+		t.Fatalf("trusted proxy source = %q, want client address", got)
+	}
+	request.Header.Set("X-Forwarded-For", "forged-value")
+	if got := directLoginSource(request, trusted); got != "10.0.0.5" {
+		t.Fatalf("malformed forwarding chain must fall back to peer, got %q", got)
+	}
 }
 
 // hasAuditAction / countAuditAction 直接查审计表。
@@ -779,6 +846,61 @@ func TestAdminUpdateUsesPathSlug(t *testing.T) {
 	}
 	if view.Slug != slug || view.Name != "by path" {
 		t.Errorf("view = %+v, want the path slug to win", view)
+	}
+}
+
+func TestAdminAgentAuditFailureRollsBackMutationAndRegistry(t *testing.T) {
+	fixture := newAdminFixture(t)
+	slug := uniqueSlug("audit-rollback")
+	t.Cleanup(func() { _, _ = fixture.state.Store.DeleteAgent(context.Background(), slug) })
+
+	createdRaw := adminData(t, fixture.call(t, http.MethodPost, "/api/admin/agents",
+		agentPayload(slug, nil), true), http.StatusCreated)
+	var created AgentView
+	if err := json.Unmarshal(createdRaw, &created); err != nil {
+		t.Fatal(err)
+	}
+
+	// NOT VALID avoids scanning unrelated historical rows but still rejects a
+	// new audit INSERT for this exact target. The Agent UPDATE happens first in
+	// the same transaction, so this exercises a genuine PostgreSQL rollback.
+	constraint := fmt.Sprintf("reject_agent_audit_%d", uniqueSeq.Add(1))
+	if _, err := fixture.state.Store.pool.Exec(context.Background(), fmt.Sprintf(
+		`ALTER TABLE audit_log ADD CONSTRAINT %s CHECK (target <> '%s') NOT VALID`,
+		constraint, slug)); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_, _ = fixture.state.Store.pool.Exec(context.Background(),
+			"ALTER TABLE audit_log DROP CONSTRAINT IF EXISTS "+constraint)
+	}()
+
+	update := agentPayload(slug, map[string]any{
+		"name": "must roll back", "signing_secret": nil,
+	})
+	recorder := fixture.call(t, http.MethodPut, "/api/admin/agents/"+slug, update, true)
+	wantAdminError(t, recorder, http.StatusInternalServerError, "storage_unavailable")
+
+	stored, err := fixture.state.Store.GetAgent(context.Background(), slug)
+	if err != nil || stored == nil {
+		t.Fatalf("get Agent after audit failure: %v", err)
+	}
+	if stored.Name != created.Name || stored.Revision != created.Revision {
+		t.Fatalf("database mutation survived audit rollback: %+v", stored)
+	}
+	runtime := fixture.state.Registry.Get(slug)
+	if runtime == nil || runtime.Config.Name != created.Name ||
+		runtime.Config.Revision != created.Revision {
+		t.Fatalf("Registry changed after rolled-back mutation: %+v", runtime)
+	}
+	var updateAudits int
+	if err := fixture.state.Store.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM audit_log WHERE action = 'agent.update' AND target = $1`, slug).
+		Scan(&updateAudits); err != nil {
+		t.Fatal(err)
+	}
+	if updateAudits != 0 {
+		t.Fatalf("rolled-back Agent update wrote %d audit rows", updateAudits)
 	}
 }
 
@@ -1131,7 +1253,8 @@ func TestMutationContextDropsCancellationKeepsValues(t *testing.T) {
 	type key struct{}
 	base, cancel := context.WithCancel(context.WithValue(context.Background(), key{}, "kept"))
 	request := httptest.NewRequest(http.MethodPost, "/api/admin/agents", nil).WithContext(base)
-	derived := mutationContext(request)
+	derived, cancelDerived := mutationContext(request)
+	defer cancelDerived()
 
 	cancel()
 	if derived.Err() != nil {
@@ -1139,5 +1262,13 @@ func TestMutationContextDropsCancellationKeepsValues(t *testing.T) {
 	}
 	if derived.Value(key{}) != "kept" {
 		t.Errorf("request values were lost: %#v", derived.Value(key{}))
+	}
+	deadline, ok := derived.Deadline()
+	if !ok {
+		t.Fatal("mutation context must have a finite deadline")
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 || remaining > mutationContextTimeout {
+		t.Fatalf("mutation deadline remaining = %v, want (0, %v]", remaining, mutationContextTimeout)
 	}
 }

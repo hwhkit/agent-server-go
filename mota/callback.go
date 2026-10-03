@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -27,6 +28,11 @@ import (
 // callbackAttempts 是一次回传最多尝试的次数。
 const callbackAttempts = 6
 
+// callbackRequestTimeout bounds one complete network attempt, including reading
+// the receipt. Callers may inject an http.Client without a Timeout, so the
+// delivery helper must enforce its own deadline.
+const callbackRequestTimeout = 30 * time.Second
+
 // callbackRetryDelays 是第 1..5 次失败后的退避时长;第 6 次(最后一次)之后不再等待。
 var callbackRetryDelays = [callbackAttempts - 1]time.Duration{
 	1 * time.Second,
@@ -36,8 +42,44 @@ var callbackRetryDelays = [callbackAttempts - 1]time.Duration{
 	60 * time.Second,
 }
 
-// callbackLogBodyLimit 是日志里保留的响应体上限。
-const callbackLogBodyLimit = 1024
+// callbackResponseBodyLimit prevents a callback endpoint from making the
+// service buffer an unbounded receipt in memory.
+const callbackResponseBodyLimit = 64 * 1024
+
+// CallbackDeliveryError keeps machine-readable delivery metadata without
+// exposing the callback URL (which may contain a legacy token).
+type CallbackDeliveryError struct {
+	StatusCode int
+	Attempts   int
+	// Unconfirmed means the callback may already have been accepted but no
+	// trustworthy receipt was obtained. Re-executing the task is unsafe.
+	Unconfirmed bool
+	Err         error
+}
+
+func (e *CallbackDeliveryError) Error() string {
+	if e == nil || e.Err == nil {
+		return "callback delivery failed"
+	}
+	return e.Err.Error()
+}
+
+func (e *CallbackDeliveryError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func callbackDeliveryError(status, attempts int, err error) error {
+	return &CallbackDeliveryError{StatusCode: status, Attempts: attempts, Err: err}
+}
+
+func callbackUnconfirmedError(status, attempts int, err error) error {
+	return &CallbackDeliveryError{
+		StatusCode: status, Attempts: attempts, Unconfirmed: true, Err: err,
+	}
+}
 
 // CallbackReceipt 是平台 callback 的结果层回执。
 //
@@ -77,7 +119,7 @@ func CallbackSignatureV2(signingSecret, runID string, body []byte, timestamp int
 
 // SendCallback 回传结果信封。
 //
-// 重试策略:网络异常、429 与 5xx 会按 1/3/10/30/60 秒退避重试(共 6 次尝试);
+// 重试策略:网络异常、408、429 与 5xx 会按 1/3/10/30/60 秒退避重试(共 6 次尝试);
 // 鉴权/参数类 4xx 与 accepted=false **不重试** —— 前者重试无意义,后者是平台
 // 已经明确表态的业务结论,重复投递只会产生重复运行记录。
 //
@@ -86,21 +128,47 @@ func CallbackSignatureV2(signingSecret, runID string, body []byte, timestamp int
 func SendCallback(
 	ctx context.Context,
 	client *http.Client,
-	callbackURL, runID, signingSecret, callbackToken string,
+	callbackURL, runID, signingSecret, callbackToken, callbackTokenOrigin string,
 	result *PayloadV1,
-) (*CallbackReceipt, error) {
+) (receipt *CallbackReceipt, deliveryErr error) {
+	attemptsMade := 0
+	lastStatus := 0
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			slog.Error("callback delivery panicked",
+				"run_id", runID, "attempt", attemptsMade, "status", lastStatus)
+			receipt = nil
+			deliveryErr = callbackDeliveryError(lastStatus, attemptsMade,
+				errors.New("callback delivery panicked"))
+		}
+	}()
+
 	if err := validateCallbackInputs(callbackURL, runID, signingSecret); err != nil {
-		return nil, err
+		return nil, callbackDeliveryError(0, 0, err)
+	}
+	if result == nil {
+		return nil, callbackDeliveryError(0, 0, errors.New("callback result is nil"))
 	}
 	body, err := json.Marshal(result)
 	if err != nil {
-		return nil, fmt.Errorf("serialize callback result failed: %w", err)
+		return nil, callbackDeliveryError(0, 0,
+			fmt.Errorf("serialize callback result failed: %w", err))
 	}
 	if client == nil {
 		client = http.DefaultClient
 	}
-	target := appendCallbackToken(callbackURL, callbackToken)
-	masked := maskCallbackToken(target)
+	// Never follow redirects for signed callbacks. net/http may copy custom
+	// headers such as X-Creator-Signature to a redirected request, and a legacy
+	// token may also be present in the URL.
+	safeClient := *client
+	safeClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	target, err := appendCallbackToken(callbackURL, callbackToken, callbackTokenOrigin)
+	if err != nil {
+		return nil, callbackDeliveryError(0, 0, err)
+	}
+	logTarget := callbackOrigin(target)
 
 	for attempt := 0; attempt < callbackAttempts; attempt++ {
 		// 最后一次尝试没有后续退避;retryDelay 为 0 表示「不再重试」。
@@ -112,56 +180,72 @@ func SendCallback(
 
 		timestamp := time.Now().Unix()
 		signature := CallbackSignatureV2(signingSecret, runID, body, timestamp)
+		attemptsMade = attempt + 1
 		slog.Info("sending async callback",
-			"run_id", runID, "attempt", attempt+1, "callback_url", masked)
+			"run_id", runID, "attempt", attempt+1, "callback_origin", logTarget)
 
 		status, responseText, requestErr := postCallback(
-			ctx, client, target, runID, signature, body)
+			ctx, &safeClient, target, runID, signature, body)
+		lastStatus = status
 
 		switch {
 		case requestErr != nil:
+			// Once an HTTP response was received, a missing/oversized receipt is
+			// an unconfirmed outcome. Retrying could duplicate an already accepted
+			// result, so return it to the caller with the observed status.
+			if status != 0 && status < 500 && status != http.StatusRequestTimeout &&
+				status != http.StatusTooManyRequests {
+				return nil, callbackUnconfirmedError(status, attemptsMade, requestErr)
+			}
 			if lastAttempt {
-				return nil, fmt.Errorf("callback request failed after %d attempts: %w",
-					callbackAttempts, requestErr)
+				return nil, callbackUnconfirmedError(status, attemptsMade,
+					fmt.Errorf("callback request failed after %d attempts: %w",
+						callbackAttempts, requestErr))
 			}
 			slog.Warn("callback request failed; retrying",
-				"run_id", runID, "attempt", attempt+1, "error", requestErr)
+				"run_id", runID, "attempt", attempt+1,
+				"status", status, "error_kind", callbackRequestErrorKind(requestErr))
 
 		case status == http.StatusOK:
 			receipt, parseErr := parseCallbackReceipt(responseText)
 			if parseErr != nil {
 				slog.Warn("callback returned an unparsable receipt",
-					"run_id", runID, "status", status,
-					"response_body", truncateForLog(responseText))
-				return nil, fmt.Errorf("callback returned an invalid receipt: %w", parseErr)
+					"run_id", runID, "status", status, "response_bytes", len(responseText))
+				return nil, callbackUnconfirmedError(status, attemptsMade,
+					fmt.Errorf("callback returned an invalid receipt: %w", parseErr))
 			}
 			slog.Info("callback response received",
 				"run_id", runID, "status", status, "code", receipt.Code,
 				"accepted", receipt.Accepted, "run_status", derefOrEmpty(receipt.RunStatus),
-				"run_msg", derefOrEmpty(receipt.RunMsg),
-				"response_body", truncateForLog(responseText))
+				"response_bytes", len(responseText))
 			if receipt.Code != "OK" {
-				return nil, fmt.Errorf("callback transport code was %s", receipt.Code)
+				return nil, callbackUnconfirmedError(status, attemptsMade,
+					fmt.Errorf("callback transport code was %s", receipt.Code))
 			}
 			if receipt.Accepted {
 				slog.Info("callback result accepted",
 					"run_id", runID, "run_status", derefOrEmpty(receipt.RunStatus))
 			} else {
 				slog.Warn("callback delivered but result was not accepted; not retrying",
-					"run_id", runID, "run_status", derefOrEmpty(receipt.RunStatus),
-					"run_msg", derefOrEmpty(receipt.RunMsg))
+					"run_id", runID, "run_status", derefOrEmpty(receipt.RunStatus))
 			}
 			return receipt, nil
 
 		default:
-			retryable := status == http.StatusTooManyRequests || status >= 500
+			retryable := status == http.StatusRequestTimeout ||
+				status == http.StatusTooManyRequests || status >= 500
 			responseCode := callbackResponseCode(responseText)
 			slog.Warn("callback rejected",
 				"run_id", runID, "status", status, "attempt", attempt+1,
-				"response_code", responseCode, "response_body", truncateForLog(responseText))
+				"response_code", responseCode, "response_bytes", len(responseText))
 			if !retryable || lastAttempt {
-				return nil, fmt.Errorf("callback rejected with %s (%s)",
-					httpStatusText(status), responseCode)
+				deliveryError := callbackDeliveryError
+				if retryable {
+					deliveryError = callbackUnconfirmedError
+				}
+				return nil, deliveryError(status, attemptsMade,
+					fmt.Errorf("callback rejected with %s (%s)",
+						httpStatusText(status), responseCode))
 			}
 			slog.Warn("transient callback rejection; retrying",
 				"run_id", runID, "status", status, "attempt", attempt+1,
@@ -174,11 +258,13 @@ func SendCallback(
 			case <-timer.C:
 			case <-ctx.Done():
 				timer.Stop()
-				return nil, fmt.Errorf("callback retry aborted: %w", ctx.Err())
+				return nil, callbackUnconfirmedError(lastStatus, attemptsMade,
+					fmt.Errorf("callback retry aborted: %w", ctx.Err()))
 			}
 		}
 	}
-	return nil, errors.New("callback retry loop exhausted")
+	return nil, callbackUnconfirmedError(lastStatus, attemptsMade,
+		errors.New("callback retry loop exhausted"))
 }
 
 // postCallback 发一次回传请求并读回响应体。
@@ -188,7 +274,9 @@ func postCallback(
 	target, runID, signature string,
 	body []byte,
 ) (int, string, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
+	attemptCtx, cancel := context.WithTimeout(ctx, callbackRequestTimeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(attemptCtx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		return 0, "", err
 	}
@@ -197,13 +285,25 @@ func postCallback(
 	request.Header.Set(CreatorSignatureHeader, signature)
 	response, err := client.Do(request)
 	if err != nil {
-		return 0, "", err
+		switch {
+		case errors.Is(err, context.DeadlineExceeded):
+			return 0, "", context.DeadlineExceeded
+		case errors.Is(err, context.Canceled):
+			return 0, "", context.Canceled
+		default:
+			// net/http errors usually embed the complete URL. Never propagate it:
+			// a legacy callback token may be present in the query string.
+			return 0, "", errors.New("callback request failed")
+		}
 	}
 	defer func() { _ = response.Body.Close() }()
-	raw, readErr := io.ReadAll(response.Body)
+	raw, readErr := io.ReadAll(io.LimitReader(response.Body, callbackResponseBodyLimit+1))
 	if readErr != nil {
-		// rs 侧读体失败会退化成一段占位文本而不是整体失败,保持一致。
-		return response.StatusCode, fmt.Sprintf("<unreadable: %v>", readErr), nil
+		return response.StatusCode, "", errors.New("read callback response failed")
+	}
+	if len(raw) > callbackResponseBodyLimit {
+		return response.StatusCode, "",
+			fmt.Errorf("callback response exceeded %d bytes", callbackResponseBodyLimit)
 	}
 	return response.StatusCode, string(raw), nil
 }
@@ -219,6 +319,9 @@ func parseCallbackReceipt(text string) (*CallbackReceipt, error) {
 	}
 	if wire.Accepted == nil {
 		return nil, errors.New("missing field `accepted`")
+	}
+	if safeCallbackCode(*wire.Code) == "invalid code" {
+		return nil, errors.New("field `code` is invalid")
 	}
 	return &CallbackReceipt{
 		Code:      *wire.Code,
@@ -236,9 +339,23 @@ func callbackResponseCode(text string) string {
 		return "no code"
 	}
 	if code, ok := decoded["code"].(string); ok {
-		return code
+		return safeCallbackCode(code)
 	}
 	return "no code"
+}
+
+// safeCallbackCode keeps an untrusted peer from writing an arbitrarily large
+// or control-character-bearing value into structured logs and audit details.
+func safeCallbackCode(code string) string {
+	if code == "" || len(code) > 128 {
+		return "invalid code"
+	}
+	for _, char := range code {
+		if char < 0x20 || char > 0x7e {
+			return "invalid code"
+		}
+	}
+	return code
 }
 
 // httpStatusText 复现 Rust http::StatusCode 的 Display:"429 Too Many Requests"。
@@ -252,17 +369,68 @@ func httpStatusText(status int) string {
 
 // appendCallbackToken 在 callback URL 上附加可选的回调令牌;token 为空时原样返回。
 //
-// 注意不对 token 做百分号转义 —— 与 rs 一致,平台下发的令牌本身就是 URL 安全的,
-// 转义反而会导致校验失败。
-func appendCallbackToken(callbackURL, callbackToken string) string {
+// 使用 net/url 编码 token,避免特殊字符改变 query 边界,并保留 fragment。
+func appendCallbackToken(callbackURL, callbackToken, allowedOrigin string) (string, error) {
 	if strings.TrimSpace(callbackToken) == "" {
-		return callbackURL
+		return callbackURL, nil
 	}
-	separator := "?"
-	if strings.Contains(callbackURL, "?") {
-		separator = "&"
+	targetOrigin, err := callbackOriginKey(callbackURL)
+	if err != nil {
+		return "", errors.New("callbackUrl is not an absolute URL")
 	}
-	return callbackURL + separator + "token=" + callbackToken
+	normalizedAllowed, err := validateConfiguredCallbackTokenOrigin(allowedOrigin)
+	if err != nil {
+		return "", errors.New("callback token origin is not configured")
+	}
+	if targetOrigin != normalizedAllowed {
+		return "", errors.New("callbackUrl origin is not allowed to receive the callback token")
+	}
+	parsed, err := url.Parse(callbackURL)
+	if err != nil || !parsed.IsAbs() || parsed.Host == "" {
+		return "", errors.New("callbackUrl is not an absolute URL")
+	}
+	query := parsed.Query()
+	query.Add("token", callbackToken)
+	parsed.RawQuery = query.Encode()
+	return parsed.String(), nil
+}
+
+func callbackOriginKey(raw string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || !parsed.IsAbs() || parsed.Host == "" ||
+		(parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil {
+		return "", errors.New("invalid callback origin")
+	}
+	return strings.ToLower(parsed.Scheme) + "://" + strings.ToLower(parsed.Host), nil
+}
+
+func validateConfiguredCallbackTokenOrigin(raw string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || !parsed.IsAbs() || parsed.Host == "" || parsed.User != nil ||
+		(parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return "", errors.New("must be an absolute HTTP(S) origin without credentials")
+	}
+	if (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", errors.New("must contain only scheme and host")
+	}
+	if parsed.Scheme == "http" && !isLoopbackHost(parsed.Hostname()) {
+		return "", errors.New("must use HTTPS except for loopback development")
+	}
+	return callbackOriginKey(raw)
+}
+
+// callbackOrigin returns a credential-free log/audit target.
+func callbackOrigin(target string) string {
+	parsed, err := url.Parse(target)
+	if err != nil || !parsed.IsAbs() || parsed.Host == "" {
+		return "<invalid callback URL>"
+	}
+	parsed.User = nil
+	parsed.Path = ""
+	parsed.RawPath = ""
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String()
 }
 
 // maskCallbackToken 把 URL 里的 token 查询参数掩码,避免明文令牌进日志。
@@ -287,13 +455,15 @@ func maskCallbackToken(target string) string {
 	return out.String()
 }
 
-// truncateForLog 截断过长的响应体。
-func truncateForLog(value string) string {
-	if len(value) <= callbackLogBodyLimit {
-		return value
+func callbackRequestErrorKind(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	default:
+		return "request"
 	}
-	return fmt.Sprintf("%s…<truncated %d bytes>",
-		value[:callbackLogBodyLimit], len(value)-callbackLogBodyLimit)
 }
 
 // validateCallbackInputs 在发请求之前挡掉明显不可用的入参。
@@ -311,9 +481,15 @@ func validateCallbackInputs(callbackURL, runID, signingSecret string) error {
 		return errors.New("callbackUrl is not an absolute URL")
 	}
 	if parsed.Scheme == "https" {
+		if parsed.User != nil {
+			return errors.New("callbackUrl must not contain credentials")
+		}
 		return nil
 	}
 	if parsed.Scheme == "http" && isLoopbackHost(parsed.Hostname()) {
+		if parsed.User != nil {
+			return errors.New("callbackUrl must not contain credentials")
+		}
 		return nil
 	}
 	return errors.New("callbackUrl must use HTTPS (HTTP is allowed only for loopback tests)")
@@ -321,12 +497,11 @@ func validateCallbackInputs(callbackURL, runID, signingSecret string) error {
 
 // isLoopbackHost 判断主机名是否为回环地址。
 func isLoopbackHost(host string) bool {
-	switch host {
-	case "localhost", "127.0.0.1", "::1":
+	if strings.EqualFold(host, "localhost") {
 		return true
-	default:
-		return false
 	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // derefOrEmpty 便于把可选字符串写进结构化日志。

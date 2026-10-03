@@ -8,10 +8,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -20,6 +23,25 @@ const idempotencyStaleAfterSecs = 2 * 60 * 60
 
 // periodicGCIntervalSecs 是 nonce / 会话过期清理的最小间隔。
 const periodicGCIntervalSecs = 60
+
+// ErrStaleProviderRevision 表示 Provider 在调用方读取后已被其他请求修改。
+// errors.Is 可用于把它稳定映射为 HTTP 412。
+var ErrStaleProviderRevision = errors.New("Provider revision changed; reload before retrying")
+
+var ErrStaleAgentRevision = errors.New("Agent revision changed; reload before retrying")
+
+// ErrAgentSlugExists provides a stable cross-replica mapping for the agents
+// table's unique slug constraint.
+var ErrAgentSlugExists = errors.New("Agent slug already exists")
+
+// ErrLastEnabledAdmin is returned from the transactional account mutation
+// fence when a change would leave the database without an enabled admin.
+var ErrLastEnabledAdmin = errors.New("at least one enabled administrator is required")
+
+// All account updates/deletes take the same PostgreSQL transaction advisory
+// lock. The in-process mutex in AdminHandler only coordinates one replica;
+// this lock preserves the invariant across every instance sharing the DB.
+const accountMutationAdvisoryLockID int64 = 0x4d4f544141444d49
 
 // agentColumns 是 agents 表的列顺序,decodeAgentRow 依赖该顺序。
 const agentColumns = `id, slug, name, description, enabled, executor_kind, ` +
@@ -33,6 +55,70 @@ type AgentStore struct {
 	cipher        *SecretCipher
 	lastNonceGC   atomic.Int64
 	lastSessionGC atomic.Int64
+}
+
+// AuditEvent describes the redacted security metadata that must commit in the
+// same PostgreSQL transaction as a control-plane mutation. Details must never
+// contain passwords, signing secrets, API keys, bearer tokens, or raw
+// Authorization values; callers should record only facts such as revision,
+// role, enabled state, and whether a secret was rotated.
+type AuditEvent struct {
+	Actor   string
+	Action  string
+	Target  string
+	Details map[string]any
+}
+
+func validateMutationAudit(event AuditEvent, action, target string) error {
+	if strings.TrimSpace(event.Actor) == "" {
+		return errors.New("audit actor must not be empty")
+	}
+	if event.Action != action || event.Target != target {
+		return fmt.Errorf("audit event must use action %q and target %q", action, target)
+	}
+	return nil
+}
+
+func cloneAuditEventWithFields(event *AuditEvent, fields map[string]any) *AuditEvent {
+	if event == nil {
+		return nil
+	}
+	cloned := &AuditEvent{
+		Actor: event.Actor, Action: event.Action, Target: event.Target,
+		Details: make(map[string]any, len(event.Details)+len(fields)),
+	}
+	for key, value := range event.Details {
+		cloned.Details[key] = value
+	}
+	for key, value := range fields {
+		cloned.Details[key] = value
+	}
+	return cloned
+}
+
+func insertAuditTx(ctx context.Context, tx pgx.Tx, event *AuditEvent) error {
+	if event == nil {
+		return nil
+	}
+	if strings.TrimSpace(event.Actor) == "" || strings.TrimSpace(event.Action) == "" ||
+		strings.TrimSpace(event.Target) == "" {
+		return errors.New("audit actor, action, and target must not be empty")
+	}
+	details := event.Details
+	if details == nil {
+		details = map[string]any{}
+	}
+	encoded, err := json.Marshal(details)
+	if err != nil {
+		return fmt.Errorf("encode audit details for %s: %w", event.Action, err)
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO audit_log (actor, action, target, details, created_at) `+
+			`VALUES ($1, $2, $3, $4, $5)`,
+		event.Actor, event.Action, event.Target, string(encoded), nowTimestamp()); err != nil {
+		return fmt.Errorf("insert audit event %s: %w", event.Action, err)
+	}
+	return nil
 }
 
 // ConnectAgentStore 连接 PostgreSQL,并确保表结构存在。
@@ -318,6 +404,22 @@ func (s *AgentStore) GetAgent(ctx context.Context, slug string) (*AgentConfig, e
 
 // CreateAgent 插入一个新 Agent,revision 从 1 开始。
 func (s *AgentStore) CreateAgent(ctx context.Context, input *AgentInput) (*AgentConfig, error) {
+	return s.createAgent(ctx, input, nil)
+}
+
+// CreateAgentAudited atomically inserts an Agent and its audit event.
+func (s *AgentStore) CreateAgentAudited(
+	ctx context.Context, input *AgentInput, audit AuditEvent,
+) (*AgentConfig, error) {
+	if err := validateMutationAudit(audit, "agent.create", input.Slug); err != nil {
+		return nil, err
+	}
+	return s.createAgent(ctx, input, &audit)
+}
+
+func (s *AgentStore) createAgent(
+	ctx context.Context, input *AgentInput, audit *AuditEvent,
+) (*AgentConfig, error) {
 	if input.SigningSecret == nil {
 		return nil, errors.New("signing_secret is required")
 	}
@@ -330,7 +432,12 @@ func (s *AgentStore) CreateAgent(ctx context.Context, input *AgentInput) (*Agent
 		return nil, err
 	}
 	now := nowTimestamp()
-	row := s.pool.QueryRow(ctx,
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	row := tx.QueryRow(ctx,
 		`INSERT INTO agents (slug, name, description, enabled, executor_kind, `+
 			`execution_mode, signing_secret_enc, signature_encoding, system_prompt, `+
 			`workspace_path, claude_model, allowed_tools_json, permission_mode, `+
@@ -346,14 +453,66 @@ func (s *AgentStore) CreateAgent(ctx context.Context, input *AgentInput) (*Agent
 	)
 	stored, err := scanAgentRow(row)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return nil, ErrAgentSlugExists
+		}
 		return nil, err
 	}
-	return decodeAgent(stored, s.cipher)
+	agent, err := decodeAgent(stored, s.cipher)
+	if err != nil {
+		return nil, err
+	}
+	if err := bumpAgentRegistryRevision(ctx, tx); err != nil {
+		return nil, err
+	}
+	audit = cloneAuditEventWithFields(audit, map[string]any{
+		"revision": agent.Revision, "enabled": agent.Enabled,
+		"executorKind": agent.ExecutorKind,
+	})
+	if err := insertAuditTx(ctx, tx, audit); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return agent, nil
 }
 
 // UpdateAgent 整体更新一个 Agent 并把 revision +1。input.SigningSecret 为 nil 时
 // 保留原密钥。Agent 不存在时返回 (nil, nil)。
 func (s *AgentStore) UpdateAgent(ctx context.Context, slug string, input *AgentInput) (*AgentConfig, error) {
+	return s.updateAgentIfRevision(ctx, slug, input, nil, nil)
+}
+
+func (s *AgentStore) UpdateAgentIfRevision(
+	ctx context.Context, slug string, input *AgentInput, expectedRevision *int64,
+) (*AgentConfig, error) {
+	return s.updateAgentIfRevision(ctx, slug, input, expectedRevision, nil)
+}
+
+// UpdateAgentIfRevisionAudited atomically updates an Agent and appends its
+// audit event. A stale revision or audit failure rolls back both writes.
+func (s *AgentStore) UpdateAgentIfRevisionAudited(
+	ctx context.Context,
+	slug string,
+	input *AgentInput,
+	expectedRevision *int64,
+	audit AuditEvent,
+) (*AgentConfig, error) {
+	if err := validateMutationAudit(audit, "agent.update", slug); err != nil {
+		return nil, err
+	}
+	return s.updateAgentIfRevision(ctx, slug, input, expectedRevision, &audit)
+}
+
+func (s *AgentStore) updateAgentIfRevision(
+	ctx context.Context,
+	slug string,
+	input *AgentInput,
+	expectedRevision *int64,
+	audit *AuditEvent,
+) (*AgentConfig, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -362,13 +521,17 @@ func (s *AgentStore) UpdateAgent(ctx context.Context, slug string, input *AgentI
 
 	var currentSecret string
 	var revision int64
-	err = tx.QueryRow(ctx, "SELECT signing_secret_enc, revision FROM agents WHERE slug = $1", slug).
+	err = tx.QueryRow(ctx,
+		"SELECT signing_secret_enc, revision FROM agents WHERE slug = $1 FOR UPDATE", slug).
 		Scan(&currentSecret, &revision)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, err
+	}
+	if expectedRevision != nil && revision != *expectedRevision {
+		return nil, ErrStaleAgentRevision
 	}
 
 	encrypted := currentSecret
@@ -382,13 +545,13 @@ func (s *AgentStore) UpdateAgent(ctx context.Context, slug string, input *AgentI
 	if err != nil {
 		return nil, err
 	}
-	_, err = tx.Exec(ctx,
+	row := tx.QueryRow(ctx,
 		`UPDATE agents SET name = $2, description = $3, enabled = $4, `+
 			`executor_kind = $5, execution_mode = $6, signing_secret_enc = $7, `+
 			`signature_encoding = $8, system_prompt = $9, workspace_path = $10, `+
 			`claude_model = $11, allowed_tools_json = $12, permission_mode = $13, `+
 			`timeout_secs = $14, max_concurrency = $15, queue_capacity = $16, `+
-			`revision = $17, updated_at = $18 WHERE slug = $1`,
+			`revision = $17, updated_at = $18 WHERE slug = $1 RETURNING `+agentColumns,
 		slug, input.Name, input.Description, input.EnabledOrDefault(),
 		string(input.ExecutorKind), string(input.ExecutionMode), encrypted,
 		input.SignatureEncoding, input.SystemPrompt, input.WorkspacePath,
@@ -396,22 +559,95 @@ func (s *AgentStore) UpdateAgent(ctx context.Context, slug string, input *AgentI
 		int64(input.TimeoutSecsOrDefault()), int64(input.MaxConcurrencyOrDefault()),
 		int64(input.QueueCapacityOrDefault()), revision+1, nowTimestamp(),
 	)
+	stored, err := scanAgentRow(row)
 	if err != nil {
+		return nil, err
+	}
+	agent, err := decodeAgent(stored, s.cipher)
+	if err != nil {
+		return nil, err
+	}
+	if err := bumpAgentRegistryRevision(ctx, tx); err != nil {
+		return nil, err
+	}
+	audit = cloneAuditEventWithFields(audit, map[string]any{
+		"revision": agent.Revision, "enabled": agent.Enabled,
+		"executorKind": agent.ExecutorKind,
+	})
+	if err := insertAuditTx(ctx, tx, audit); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
-	return s.GetAgent(ctx, slug)
+	return agent, nil
 }
 
 // DeleteAgent 删除一个 Agent;返回是否确实删掉了一行。
 func (s *AgentStore) DeleteAgent(ctx context.Context, slug string) (bool, error) {
-	tag, err := s.pool.Exec(ctx, "DELETE FROM agents WHERE slug = $1", slug)
+	return s.deleteAgent(ctx, slug, nil)
+}
+
+// DeleteAgentAudited atomically deletes an Agent and appends its audit event.
+func (s *AgentStore) DeleteAgentAudited(
+	ctx context.Context, slug string, audit AuditEvent,
+) (bool, error) {
+	if err := validateMutationAudit(audit, "agent.delete", slug); err != nil {
+		return false, err
+	}
+	return s.deleteAgent(ctx, slug, &audit)
+}
+
+func (s *AgentStore) deleteAgent(
+	ctx context.Context, slug string, audit *AuditEvent,
+) (bool, error) {
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return false, err
 	}
-	return tag.RowsAffected() > 0, nil
+	defer func() { _ = tx.Rollback(ctx) }()
+	tag, err := tx.Exec(ctx, "DELETE FROM agents WHERE slug = $1", slug)
+	if err != nil {
+		return false, err
+	}
+	if tag.RowsAffected() == 0 {
+		return false, nil
+	}
+	if err := bumpAgentRegistryRevision(ctx, tx); err != nil {
+		return false, err
+	}
+	if err := insertAuditTx(ctx, tx, audit); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func bumpAgentRegistryRevision(ctx context.Context, tx pgx.Tx) error {
+	_, err := tx.Exec(ctx,
+		`INSERT INTO platform_settings (key, value) VALUES ('agent_registry_revision', '1') `+
+			`ON CONFLICT (key) DO UPDATE SET value = `+
+			`(platform_settings.value::bigint + 1)::text`)
+	return err
+}
+
+func (s *AgentStore) AgentRegistryRevision(ctx context.Context) (int64, error) {
+	var text string
+	err := s.pool.QueryRow(ctx,
+		`SELECT value FROM platform_settings WHERE key = 'agent_registry_revision'`).Scan(&text)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	revision, err := strconv.ParseInt(text, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse Agent registry revision: %w", err)
+	}
+	return revision, nil
 }
 
 // ListAgentSecrets 列出所有启用 Agent 的 (slug, 明文通道密钥),供 Push 心跳按
@@ -549,19 +785,111 @@ func (s *AgentStore) ListUsers(ctx context.Context) ([]UserView, error) {
 }
 
 func (s *AgentStore) CreateUser(ctx context.Context, username, passwordHash string, role UserRole) (bool, error) {
+	return s.createUser(ctx, username, passwordHash, role, nil)
+}
+
+// CreateUserAudited atomically creates an account and appends its audit event.
+func (s *AgentStore) CreateUserAudited(
+	ctx context.Context,
+	username, passwordHash string,
+	role UserRole,
+	audit AuditEvent,
+) (bool, error) {
+	if err := validateMutationAudit(audit, "user.create", username); err != nil {
+		return false, err
+	}
+	return s.createUser(ctx, username, passwordHash, role, &audit)
+}
+
+func (s *AgentStore) createUser(
+	ctx context.Context,
+	username, passwordHash string,
+	role UserRole,
+	audit *AuditEvent,
+) (bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
 	now := nowTimestamp()
-	tag, err := s.pool.Exec(ctx,
+	tag, err := tx.Exec(ctx,
 		`INSERT INTO admin_users (username, password_hash, role, enabled, created_at, updated_at) `+
 			`VALUES ($1, $2, $3, true, $4, $4) ON CONFLICT (username) DO NOTHING`,
 		username, passwordHash, string(role), now)
 	if err != nil {
 		return false, err
 	}
-	return tag.RowsAffected() == 1, nil
+	if tag.RowsAffected() == 0 {
+		return false, nil
+	}
+	if err := insertAuditTx(ctx, tx, audit); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *AgentStore) UpdateUser(ctx context.Context, username string, passwordHash *string, role UserRole, enabled bool) (*UserView, error) {
-	tag, err := s.pool.Exec(ctx,
+	return s.updateUser(ctx, username, passwordHash, role, enabled, nil)
+}
+
+// UpdateUserAudited atomically updates an account, revokes affected sessions,
+// and appends its audit event.
+func (s *AgentStore) UpdateUserAudited(
+	ctx context.Context,
+	username string,
+	passwordHash *string,
+	role UserRole,
+	enabled bool,
+	audit AuditEvent,
+) (*UserView, error) {
+	if err := validateMutationAudit(audit, "user.update", username); err != nil {
+		return nil, err
+	}
+	return s.updateUser(ctx, username, passwordHash, role, enabled, &audit)
+}
+
+func (s *AgentStore) updateUser(
+	ctx context.Context,
+	username string,
+	passwordHash *string,
+	role UserRole,
+	enabled bool,
+	audit *AuditEvent,
+) (*UserView, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", accountMutationAdvisoryLockID); err != nil {
+		return nil, err
+	}
+	var currentRole string
+	var currentEnabled bool
+	if err := tx.QueryRow(ctx,
+		"SELECT role, enabled FROM admin_users WHERE username = $1 FOR UPDATE", username).
+		Scan(&currentRole, &currentEnabled); errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	if currentRole == string(UserRoleAdmin) && currentEnabled &&
+		(role != UserRoleAdmin || !enabled) {
+		var count int64
+		if err := tx.QueryRow(ctx,
+			"SELECT COUNT(*) FROM admin_users WHERE role = 'admin' AND enabled = true").
+			Scan(&count); err != nil {
+			return nil, err
+		}
+		if count <= 1 {
+			return nil, ErrLastEnabledAdmin
+		}
+	}
+	tag, err := tx.Exec(ctx,
 		`UPDATE admin_users SET password_hash = COALESCE($2, password_hash), `+
 			`role = $3, enabled = $4, updated_at = $5 WHERE username = $1`,
 		username, passwordHash, string(role), enabled, nowTimestamp())
@@ -572,24 +900,78 @@ func (s *AgentStore) UpdateUser(ctx context.Context, username string, passwordHa
 		return nil, nil
 	}
 	if passwordHash != nil || !enabled {
-		if _, err := s.pool.Exec(ctx, "DELETE FROM admin_sessions WHERE username = $1", username); err != nil {
+		if _, err := tx.Exec(ctx, "DELETE FROM admin_sessions WHERE username = $1", username); err != nil {
 			return nil, err
 		}
 	}
-	return s.GetUser(ctx, username)
+	view, err := scanUserView(tx.QueryRow(ctx,
+		"SELECT username, role, enabled, created_at, updated_at FROM admin_users WHERE username = $1",
+		username))
+	if err != nil {
+		return nil, err
+	}
+	if err := insertAuditTx(ctx, tx, audit); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return view, nil
 }
 
 func (s *AgentStore) DeleteUser(ctx context.Context, username string) (bool, error) {
+	return s.deleteUser(ctx, username, nil)
+}
+
+// DeleteUserAudited atomically deletes an account and appends its audit event.
+func (s *AgentStore) DeleteUserAudited(
+	ctx context.Context, username string, audit AuditEvent,
+) (bool, error) {
+	if err := validateMutationAudit(audit, "user.delete", username); err != nil {
+		return false, err
+	}
+	return s.deleteUser(ctx, username, &audit)
+}
+
+func (s *AgentStore) deleteUser(
+	ctx context.Context, username string, audit *AuditEvent,
+) (bool, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return false, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", accountMutationAdvisoryLockID); err != nil {
+		return false, err
+	}
+	var currentRole string
+	var currentEnabled bool
+	if err := tx.QueryRow(ctx,
+		"SELECT role, enabled FROM admin_users WHERE username = $1 FOR UPDATE", username).
+		Scan(&currentRole, &currentEnabled); errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	if currentRole == string(UserRoleAdmin) && currentEnabled {
+		var count int64
+		if err := tx.QueryRow(ctx,
+			"SELECT COUNT(*) FROM admin_users WHERE role = 'admin' AND enabled = true").
+			Scan(&count); err != nil {
+			return false, err
+		}
+		if count <= 1 {
+			return false, ErrLastEnabledAdmin
+		}
+	}
 	if _, err := tx.Exec(ctx, "DELETE FROM admin_sessions WHERE username = $1", username); err != nil {
 		return false, err
 	}
 	tag, err := tx.Exec(ctx, "DELETE FROM admin_users WHERE username = $1", username)
 	if err != nil {
+		return false, err
+	}
+	if err := insertAuditTx(ctx, tx, audit); err != nil {
 		return false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -734,19 +1116,189 @@ func (s *AgentStore) GetExecutorProvider(ctx context.Context, providerID string)
 
 // PutExecutorProvider 加密并保存一份 Provider 配置。
 func (s *AgentStore) PutExecutorProvider(ctx context.Context, providerID string, value map[string]any) error {
-	key := "executor_provider:" + providerID
-	plaintext, err := json.Marshal(value)
-	if err != nil {
-		return err
-	}
-	encrypted, err := s.cipher.Encrypt(string(plaintext), key)
-	if err != nil {
-		return err
-	}
-	_, err = s.pool.Exec(ctx,
-		`INSERT INTO platform_settings (key, value) VALUES ($1, $2) `+
-			`ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, key, encrypted)
+	_, err := s.PutExecutorProviderGroupIfRevision(ctx, providerID,
+		map[string]map[string]any{providerID: value}, nil)
 	return err
+}
+
+// PutExecutorProviderGroupIfRevision 在一个事务里保存共享字段的 Provider 别名组。
+// primaryID 的 revision 用于乐观并发控制；同组每个别名的 revision 都会递增，
+// 因而更新任一入口都会让其他入口已经打开的编辑表单失效。
+func (s *AgentStore) PutExecutorProviderGroupIfRevision(
+	ctx context.Context,
+	primaryID string,
+	values map[string]map[string]any,
+	expectedRevision *int64,
+) (int64, error) {
+	return s.putExecutorProviderGroupIfRevision(ctx, primaryID, values, expectedRevision, nil)
+}
+
+// PutExecutorProviderGroupIfRevisionAudited atomically saves a Provider alias
+// group and appends its redacted audit event. CAS or audit failures leave the
+// encrypted Provider values and every revision unchanged.
+func (s *AgentStore) PutExecutorProviderGroupIfRevisionAudited(
+	ctx context.Context,
+	primaryID string,
+	values map[string]map[string]any,
+	expectedRevision *int64,
+	audit AuditEvent,
+) (int64, error) {
+	if err := validateMutationAudit(audit, "provider.update", primaryID); err != nil {
+		return 0, err
+	}
+	return s.putExecutorProviderGroupIfRevision(
+		ctx, primaryID, values, expectedRevision, &audit)
+}
+
+func (s *AgentStore) putExecutorProviderGroupIfRevision(
+	ctx context.Context,
+	primaryID string,
+	values map[string]map[string]any,
+	expectedRevision *int64,
+	audit *AuditEvent,
+) (int64, error) {
+	if _, ok := values[primaryID]; !ok || len(values) == 0 {
+		return 0, errors.New("grouped Provider save must include its primary Provider")
+	}
+	type encryptedProvider struct {
+		id, key, value string
+	}
+	encryptedValues := make([]encryptedProvider, 0, len(values))
+	for id, value := range values {
+		key := "executor_provider:" + id
+		plaintext, err := json.Marshal(value)
+		if err != nil {
+			return 0, err
+		}
+		encrypted, err := s.cipher.Encrypt(string(plaintext), key)
+		if err != nil {
+			return 0, err
+		}
+		encryptedValues = append(encryptedValues, encryptedProvider{id: id, key: key, value: encrypted})
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO platform_settings (key, value) VALUES ('executor_provider_revision', '0') `+
+			`ON CONFLICT DO NOTHING`); err != nil {
+		return 0, err
+	}
+	var globalText string
+	if err := tx.QueryRow(ctx,
+		`SELECT value FROM platform_settings WHERE key = 'executor_provider_revision' FOR UPDATE`).Scan(&globalText); err != nil {
+		return 0, err
+	}
+	globalRevision, err := strconv.ParseInt(globalText, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse global executor provider revision: %w", err)
+	}
+	primaryRevision, err := executorProviderItemRevision(ctx, tx, primaryID)
+	if err != nil {
+		return 0, err
+	}
+	if expectedRevision != nil && *expectedRevision != primaryRevision {
+		return 0, ErrStaleProviderRevision
+	}
+
+	for _, item := range encryptedValues {
+		revision := primaryRevision
+		if item.id != primaryID {
+			revision, err = executorProviderItemRevision(ctx, tx, item.id)
+			if err != nil {
+				return 0, err
+			}
+		}
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO platform_settings (key, value) VALUES ($1, $2) `+
+				`ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, item.key, item.value); err != nil {
+			return 0, err
+		}
+		revisionKey := "executor_provider_item_revision:" + item.id
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO platform_settings (key, value) VALUES ($1, $2) `+
+				`ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+			revisionKey, strconv.FormatInt(revision+1, 10)); err != nil {
+			return 0, err
+		}
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE platform_settings SET value = $1 WHERE key = 'executor_provider_revision'`,
+		strconv.FormatInt(globalRevision+1, 10)); err != nil {
+		return 0, err
+	}
+	if err := insertAuditTx(ctx, tx, audit); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return primaryRevision + 1, nil
+}
+
+func executorProviderItemRevision(ctx context.Context, tx pgx.Tx, providerID string) (int64, error) {
+	key := "executor_provider_item_revision:" + providerID
+	var text string
+	err := tx.QueryRow(ctx, `SELECT value FROM platform_settings WHERE key = $1`, key).Scan(&text)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	revision, err := strconv.ParseInt(text, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse executor provider revision: %w", err)
+	}
+	return revision, nil
+}
+
+// ListExecutorProviderRevisions 返回每个 Provider 当前的乐观锁版本。
+func (s *AgentStore) ListExecutorProviderRevisions(ctx context.Context) (map[string]int64, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT key, value FROM platform_settings WHERE key LIKE 'executor_provider_item_revision:%'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	revisions := map[string]int64{}
+	const prefix = "executor_provider_item_revision:"
+	for rows.Next() {
+		var key, text string
+		if err := rows.Scan(&key, &text); err != nil {
+			return nil, err
+		}
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		revision, err := strconv.ParseInt(text, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("parse executor provider revision: %w", err)
+		}
+		revisions[strings.TrimPrefix(key, prefix)] = revision
+	}
+	return revisions, rows.Err()
+}
+
+// ExecutorProviderRevision 返回任一 Provider 变更都会递增的全局版本。
+func (s *AgentStore) ExecutorProviderRevision(ctx context.Context) (int64, error) {
+	var text string
+	err := s.pool.QueryRow(ctx,
+		`SELECT value FROM platform_settings WHERE key = 'executor_provider_revision'`).Scan(&text)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	revision, err := strconv.ParseInt(text, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse global executor provider revision: %w", err)
+	}
+	return revision, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -788,11 +1340,33 @@ func (s *AgentStore) StartRun(
 // FinalizeRun 在一个事务里写入运行终态与对应的幂等状态迁移。lease 检查保证已被
 // 更新请求接管的记录不会被过期请求改写。
 func (s *AgentStore) FinalizeRun(ctx context.Context, finalization RunFinalization) error {
+	ctx, cancel := stateFinalizationContext(ctx)
+	defer cancel()
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Keep the lock order consistent with BeginIdempotency: idempotency row
+	// first, run row second. Besides avoiding a stale-takeover race, this makes
+	// an obsolete worker fail before it can mutate the run terminal state.
+	if transition := finalization.Idempotency; transition != nil {
+		var leaseID, status string
+		err := tx.QueryRow(ctx,
+			`SELECT lease_id, status FROM idempotency_records `+
+				`WHERE agent_slug = $1 AND key = $2 FOR UPDATE`,
+			finalization.AgentSlug, transition.Key).Scan(&leaseID, &status)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errors.New("idempotency lease is no longer owned by this request")
+		}
+		if err != nil {
+			return err
+		}
+		if leaseID != transition.LeaseID || status != "processing" {
+			return errors.New("idempotency lease is no longer owned by this request")
+		}
+	}
 
 	tag, err := tx.Exec(ctx,
 		`UPDATE agent_runs SET status = $3, duration_ms = $4, error_code = $5, `+
@@ -864,12 +1438,14 @@ func (s *AgentStore) GetRun(ctx context.Context, agentSlug, runID string) (*RunV
 	return &view, nil
 }
 
-// ListRuns 按时间倒序列出运行记录。slug 非空时只列该 Agent。limit 收敛到 1..200。
+// ListRuns 按时间倒序列出运行预览。slug 非空时只列该 Agent；大字段在 SQL 中
+// 截断，limit 收敛到 1..50。
 func (s *AgentStore) ListRuns(ctx context.Context, limit int, slug string) ([]RunView, error) {
-	limit = clampInt(limit, 1, 200)
+	limit = clampInt(limit, 1, 50)
 	const selectRuns = `SELECT run_id, agent_slug, agent_revision, executor_kind, execution_mode, ` +
-		`status, duration_ms, error_code, response_code, request_json, result_json, ` +
-		`executor_result_json, created_at, completed_at FROM agent_runs`
+		`status, duration_ms, error_code, response_code, LEFT(request_json, 4096), ` +
+		`LEFT(result_json, 4096), LEFT(executor_result_json, 4096), created_at, completed_at ` +
+		`FROM agent_runs`
 
 	var rows pgx.Rows
 	var err error
@@ -933,11 +1509,12 @@ func (s *AgentStore) RecordChannelEvent(ctx context.Context, event ChannelEventR
 	return err
 }
 
-// ListChannelEvents 查询通道事件,按 eventType / slug 过滤,时间倒序。
+// ListChannelEvents 查询通道事件预览，按 eventType / slug 过滤，时间倒序。
 func (s *AgentStore) ListChannelEvents(ctx context.Context, eventType, slug string, limit int) ([]ChannelEventView, error) {
-	limit = clampInt(limit, 1, 200)
+	limit = clampInt(limit, 1, 50)
 	const selectEvents = `SELECT event_type, agent_slug, run_id, url, status_code, accepted, ` +
-		`run_status, pass, latency_ms, detail, request_json, result_json, created_at FROM channel_events`
+		`run_status, pass, latency_ms, LEFT(detail, 2048), LEFT(request_json, 4096), ` +
+		`LEFT(result_json, 4096), created_at FROM channel_events`
 
 	var rows pgx.Rows
 	var err error
@@ -1082,7 +1659,7 @@ func (s *AgentStore) BeginIdempotency(
 	var response, storedRunID *string
 	err = tx.QueryRow(ctx,
 		`SELECT request_hash, status, response_body, updated_at, run_id `+
-			`FROM idempotency_records WHERE agent_slug = $1 AND key = $2`, agentSlug, key).
+			`FROM idempotency_records WHERE agent_slug = $1 AND key = $2 FOR UPDATE`, agentSlug, key).
 		Scan(&storedHash, &status, &response, &updatedAt, &storedRunID)
 	if err != nil {
 		return IdempotencyDecision{}, err
@@ -1194,7 +1771,7 @@ func (s *AgentStore) resolveIdempotency(ctx context.Context, tx pgx.Tx, in idemp
 	var runStatus *string
 	var scanned string
 	err := tx.QueryRow(ctx,
-		`SELECT status FROM agent_runs WHERE agent_slug = $1 AND run_id = $2`,
+		`SELECT status FROM agent_runs WHERE agent_slug = $1 AND run_id = $2 FOR UPDATE`,
 		in.agentSlug, effectiveRunID).Scan(&scanned)
 	switch {
 	case err == nil:
@@ -1251,6 +1828,8 @@ func (s *AgentStore) resolveIdempotency(ctx context.Context, tx pgx.Tx, in idemp
 
 // ReleaseIdempotency 释放本请求持有的租约,使同键请求可以重试。
 func (s *AgentStore) ReleaseIdempotency(ctx context.Context, agentSlug, key, leaseID string) error {
+	ctx, cancel := stateFinalizationContext(ctx)
+	defer cancel()
 	_, err := s.pool.Exec(ctx,
 		`DELETE FROM idempotency_records WHERE agent_slug = $1 AND key = $2 `+
 			`AND lease_id = $3 AND status = 'processing'`,

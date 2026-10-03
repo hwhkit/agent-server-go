@@ -89,6 +89,20 @@ type AgentExecutor struct {
 	workspaceRoot string
 }
 
+// snapshot 为一次任务固定当前不可变配置。锁只保护指针的读取，不跨越模型调用；
+// 因此 Provider 热更新不会等待长任务结束，而已经开始的任务仍会完整使用旧配置。
+func (e *AgentExecutor) snapshot() *AgentExecutor {
+	e.configMu.RLock()
+	config := e.config
+	e.configMu.RUnlock()
+	return &AgentExecutor{
+		processor:     e.processor,
+		http:          e.http,
+		config:        config,
+		workspaceRoot: e.workspaceRoot,
+	}
+}
+
 // SetConfig 让 Provider 热更新从下一次执行开始生效；正在运行的任务继续使用
 // 更新前快照，避免一次任务内模型、Host 或密钥发生变化。
 func (e *AgentExecutor) SetConfig(config *PlatformConfig) {
@@ -123,9 +137,8 @@ func (e *AgentExecutor) Execute(
 	rawInput any,
 	timeout time.Duration,
 ) (*ProcessedOutput, error) {
-	e.configMu.RLock()
-	defer e.configMu.RUnlock()
-	output, execErr := e.execute(ctx, runtime, context_, rawInput, timeout)
+	executor := e.snapshot()
+	output, execErr := executor.execute(ctx, runtime, context_, rawInput, timeout)
 	if execErr != nil {
 		return nil, execErr
 	}
@@ -210,6 +223,16 @@ func (p *outputPolicy) fallbackSymbol() (string, bool) {
 // 分发矩阵
 // ---------------------------------------------------------------------------
 
+// executorLogRole returns a low-sensitivity role identifier for structured
+// logs. SystemPrompt may contain a complete custom prompt, including business
+// data or credentials, and must never be emitted as a log attribute.
+func executorLogRole(systemPrompt string) string {
+	if descriptor, ok := ResolveRoleDescriptor(systemPrompt); ok {
+		return descriptor.ID
+	}
+	return "custom"
+}
+
 // gatewayAgentLabels 是网关直调时写进系统提示词的 agent 名称。
 var gatewayAgentLabels = map[ExecutorKind]string{
 	ExecutorKindClaudeCode:      "Claude",
@@ -256,7 +279,9 @@ func (e *AgentExecutor) execute(
 			reason = "任务简报明确要求使用保守缺省结果"
 		}
 		slog.Info("failure-path detected: emitting conservative default payload (skip LLM)",
-			"role", runtime.Config.SystemPrompt, "is_final", policy.isFinal)
+			"agent_slug", runtime.Config.Slug,
+			"role", executorLogRole(runtime.Config.SystemPrompt),
+			"is_final", policy.isFinal)
 		symbol, hasSymbol := policy.fallbackSymbol()
 		return failureDefaultOutput(runtime.Config.SystemPrompt, policy.isFinal, reason, symbol, hasSymbol), nil
 	}
@@ -312,8 +337,15 @@ func (e *AgentExecutor) executeProcessor(
 	}
 	done := make(chan result, 1)
 	go func() {
-		output, err := e.processor.Process(ctx, task)
-		done <- result{output: output, err: err}
+		processed := result{}
+		defer func() {
+			if recover() != nil {
+				processed.output = nil
+				processed.err = errors.New("in-process processor panicked")
+			}
+			done <- processed
+		}()
+		processed.output, processed.err = e.processor.Process(ctx, task)
 	}()
 
 	select {
@@ -321,9 +353,13 @@ func (e *AgentExecutor) executeProcessor(
 		if got.err != nil {
 			return nil, newExecutionError("processor_failed", got.err.Error())
 		}
+		if got.output == nil {
+			return nil, newExecutionError("invalid_executor_output",
+				"in-process processor returned no output")
+		}
 		return got.output, nil
 	case <-ctx.Done():
-		return nil, newExecutionError("execution_timeout", "Rust processor exceeded its deadline")
+		return nil, newExecutionError("execution_timeout", "in-process processor exceeded its deadline")
 	}
 }
 
@@ -383,13 +419,11 @@ func (e *AgentExecutor) executeClaude(
 		}
 		return nil, newExecutionError("executor_unavailable", err.Error())
 	}
-	stdout, err := runCommand(local.Cmd, local.StdinPayload, timeout,
+	stdout, err := runCommand(ctx, local.Cmd, local.StdinPayload, timeout,
 		e.config.MaxClaudeOutputBytes, CaptureComplete, local.Label)
 	if err != nil {
 		return nil, toExecutionError(err, "executor_failed")
 	}
-	_ = ctx
-
 	envelope, decodeErr := decodeJSONNumbers(stdout)
 	if decodeErr != nil {
 		return nil, newExecutionError("invalid_executor_output",
@@ -467,7 +501,9 @@ func (e *AgentExecutor) executeLocalCLI(
 				WithExecutorOutput(candidate)
 		}
 		slog.Warn("local Agent output missed role fields; retrying once",
-			"executor", cliKind.Label(), "role", runtime.Config.SystemPrompt,
+			"agent_slug", runtime.Config.Slug,
+			"executor", cliKind.Label(),
+			"role", executorLogRole(runtime.Config.SystemPrompt),
 			"missing", strings.Join(missing, ","))
 
 		correction := fmt.Sprintf(
@@ -524,7 +560,6 @@ func (e *AgentExecutor) runLocalAgentOnce(
 	cliKind LocalCliKind,
 	timeout time.Duration,
 ) (any, *BoundRunUsage, *ExecutionError) {
-	_ = ctx
 	local := agentCommand(e.config, runtime, workspace, prompt, systemContract, cliKind)
 	defer func() {
 		for _, path := range local.CleanupPaths {
@@ -536,7 +571,7 @@ func (e *AgentExecutor) runLocalAgentOnce(
 		// JSONL 事件流只保留尾部:超限时降级而不是报错,收尾事件必须留住。
 		capture = CaptureEventStreamTail
 	}
-	stdout, err := runCommand(local.Cmd, local.StdinPayload, timeout,
+	stdout, err := runCommand(ctx, local.Cmd, local.StdinPayload, timeout,
 		e.config.LocalAgents.MaxOutputBytes, capture, local.Label)
 	if err != nil {
 		// 失败也要清掉 metrics 侧信道临时文件,避免 /tmp 堆积。
@@ -697,7 +732,9 @@ func (e *AgentExecutor) executeLiteLLMAgent(
 			lastError = fmt.Sprintf("gateway output missed required role fields: %s",
 				strings.Join(missing, ", "))
 			slog.Warn("gateway output missed role fields", "attempt", attempt+1,
-				"role", runtime.Config.SystemPrompt, "missing", strings.Join(missing, ","))
+				"agent_slug", runtime.Config.Slug,
+				"role", executorLogRole(runtime.Config.SystemPrompt),
+				"missing", strings.Join(missing, ","))
 			if retryGateway(ctx, attempt, gateway, deadline) {
 				continue
 			}
@@ -1141,7 +1178,9 @@ func outputFromClaude(envelope any, runtime *AgentRuntime, policy *outputPolicy)
 		}
 
 		slog.Info("payload_result normalized to role schema",
-			"role", role, "before_keys", before, "after_keys", jsonObjectKeys(object),
+			"agent_slug", runtime.Config.Slug,
+			"role", executorLogRole(role),
+			"before_keys", before, "after_keys", jsonObjectKeys(object),
 			"item_count", jsonArrayLen(object, spec.itemField))
 	}
 

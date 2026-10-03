@@ -1,6 +1,7 @@
 package mota
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -163,12 +164,50 @@ func TestLossyUTF8(t *testing.T) {
 	}
 }
 
+// stdout 与 stderr 同时被逃逸进程持有时，两条读流必须共用一次排水截止时间。
+// 旧实现依次消费同一个 timer.C：stdout 消费唯一的超时事件后，stderr 会永久等待。
+func TestStdioPipesAwaitDrainUnblocksBothHeldOutputStreams(t *testing.T) {
+	pipes, err := newStdioPipes()
+	if err != nil {
+		t.Fatalf("newStdioPipes: %v", err)
+	}
+	defer pipes.CloseAll()
+
+	stdoutDone := drainInto(newPrefixSink(16), pipes.stdoutRead)
+	stderrDone := drainInto(newPrefixSink(16), pipes.stderrRead)
+	awaitDone := make(chan struct{})
+	go func() {
+		pipes.AwaitDrain(stdoutDone, stderrDone)
+		close(awaitDone)
+	}()
+
+	select {
+	case <-awaitDone:
+	case <-time.After(drainDeadline + 2*time.Second):
+		// 先释放仍被测试持有的写端，避免失败路径遗留读协程。
+		pipes.CloseAll()
+		<-awaitDone
+		t.Fatal("AwaitDrain blocked after both held output streams reached the shared deadline")
+	}
+
+	for name, done := range map[string]<-chan struct{}{
+		"stdout": stdoutDone,
+		"stderr": stderrDone,
+	} {
+		select {
+		case <-done:
+		default:
+			t.Errorf("%s drain was not released", name)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // runCommand:真实子进程
 // ---------------------------------------------------------------------------
 
 func TestRunCommandCapturesStdout(t *testing.T) {
-	stdout, err := runCommand(shellCommand(`printf 'hello world'`),
+	stdout, err := runCommand(context.Background(), shellCommand(`printf 'hello world'`),
 		nil, 5*time.Second, 1024, CaptureComplete, "test")
 	if err != nil {
 		t.Fatalf("runCommand: %v", err)
@@ -180,7 +219,7 @@ func TestRunCommandCapturesStdout(t *testing.T) {
 
 // stdin payload 写完后必须被关闭,否则读 stdin 的子进程永不退出。
 func TestRunCommandWritesAndClosesStdin(t *testing.T) {
-	stdout, err := runCommand(shellCommand(`cat`),
+	stdout, err := runCommand(context.Background(), shellCommand(`cat`),
 		[]byte("piped payload"), 5*time.Second, 1024, CaptureComplete, "test")
 	if err != nil {
 		t.Fatalf("runCommand: %v", err)
@@ -192,7 +231,7 @@ func TestRunCommandWritesAndClosesStdin(t *testing.T) {
 
 // 无 payload 时 stdin 依然要立即 EOF。
 func TestRunCommandClosesStdinWithoutPayload(t *testing.T) {
-	stdout, err := runCommand(shellCommand(`cat; printf 'done'`),
+	stdout, err := runCommand(context.Background(), shellCommand(`cat; printf 'done'`),
 		nil, 5*time.Second, 1024, CaptureComplete, "test")
 	if err != nil {
 		t.Fatalf("runCommand: %v", err)
@@ -205,7 +244,7 @@ func TestRunCommandClosesStdinWithoutPayload(t *testing.T) {
 // 子进程不读 stdin 也不能让父进程报错(EPIPE 必须被忽略)。
 func TestRunCommandToleratesUnreadStdin(t *testing.T) {
 	payload := []byte(strings.Repeat("x", 512*1024))
-	stdout, err := runCommand(shellCommand(`printf 'ignored stdin'`),
+	stdout, err := runCommand(context.Background(), shellCommand(`printf 'ignored stdin'`),
 		payload, 5*time.Second, 1024, CaptureComplete, "test")
 	if err != nil {
 		t.Fatalf("a child that ignores stdin must not fail the run: %v", err)
@@ -217,7 +256,7 @@ func TestRunCommandToleratesUnreadStdin(t *testing.T) {
 
 // 非零退出码 → executor_failed,并附上审计快照。
 func TestRunCommandNonZeroExitIsExecutorFailed(t *testing.T) {
-	_, err := runCommand(shellCommand(`printf 'partial'; printf 'oops' >&2; exit 3`),
+	_, err := runCommand(context.Background(), shellCommand(`printf 'partial'; printf 'oops' >&2; exit 3`),
 		nil, 5*time.Second, 1024, CaptureComplete, "test")
 	execErr := asExecutionError(t, err)
 	if execErr.Code != "executor_failed" {
@@ -249,7 +288,7 @@ func TestRunCommandNonZeroExitIsExecutorFailed(t *testing.T) {
 
 // 启动不存在的二进制 → executor_unavailable。
 func TestRunCommandMissingBinaryIsExecutorUnavailable(t *testing.T) {
-	_, err := runCommand(exec.Command("/nonexistent/mota-agent-binary"),
+	_, err := runCommand(context.Background(), exec.Command("/nonexistent/mota-agent-binary"),
 		nil, 5*time.Second, 1024, CaptureComplete, "missing")
 	execErr := asExecutionError(t, err)
 	if execErr.Code != "executor_unavailable" {
@@ -265,7 +304,7 @@ func TestRunCommandMissingBinaryIsExecutorUnavailable(t *testing.T) {
 
 // Complete 模式下 stdout 超限 → output_too_large。
 func TestRunCommandCompleteCaptureRejectsOversizedStdout(t *testing.T) {
-	_, err := runCommand(shellCommand(`printf 'aaaaaaaaaaaaaaaaaaaa'`),
+	_, err := runCommand(context.Background(), shellCommand(`printf 'aaaaaaaaaaaaaaaaaaaa'`),
 		nil, 5*time.Second, 4, CaptureComplete, "test")
 	execErr := asExecutionError(t, err)
 	if execErr.Code != "output_too_large" {
@@ -283,7 +322,7 @@ func TestRunCommandCompleteCaptureRejectsOversizedStdout(t *testing.T) {
 func TestRunCommandTailCaptureToleratesOversizedStream(t *testing.T) {
 	script := `for i in $(seq 1 200); do printf '{"type":"noise","i":%d}\n' "$i"; done
 printf '{"type":"message_end"}\n'`
-	stdout, err := runCommand(shellCommand(script), nil, 10*time.Second, 128, CaptureEventStreamTail, "test")
+	stdout, err := runCommand(context.Background(), shellCommand(script), nil, 10*time.Second, 128, CaptureEventStreamTail, "test")
 	if err != nil {
 		t.Fatalf("tail capture must tolerate oversized streams: %v", err)
 	}
@@ -299,7 +338,7 @@ printf '{"type":"message_end"}\n'`
 func TestRunCommandDrainsStderrWithoutFailing(t *testing.T) {
 	script := `for i in $(seq 1 500); do printf 'warning line %d\n' "$i" >&2; done
 printf 'clean result'`
-	stdout, err := runCommand(shellCommand(script), nil, 10*time.Second, 64, CaptureComplete, "test")
+	stdout, err := runCommand(context.Background(), shellCommand(script), nil, 10*time.Second, 64, CaptureComplete, "test")
 	if err != nil {
 		t.Fatalf("verbose stderr must not fail the run: %v", err)
 	}
@@ -315,7 +354,7 @@ printf 'clean result'`
 // 超时 → execution_timeout,且不会久等。
 func TestRunCommandTimeoutIsExecutionTimeout(t *testing.T) {
 	started := time.Now()
-	_, err := runCommand(shellCommand(`sleep 30`),
+	_, err := runCommand(context.Background(), shellCommand(`sleep 30`),
 		nil, 200*time.Millisecond, 1024, CaptureComplete, "slow")
 	elapsed := time.Since(started)
 
@@ -338,7 +377,7 @@ func TestRunCommandTimeoutIsExecutionTimeout(t *testing.T) {
 // 忽略 SIGTERM 的子进程会在宽限期后被 SIGKILL。
 func TestRunCommandTimeoutEscalatesToSIGKILL(t *testing.T) {
 	// trap '' TERM 让 shell 忽略 SIGTERM。
-	_, err := runCommand(shellCommand(`trap '' TERM; sleep 30`),
+	_, err := runCommand(context.Background(), shellCommand(`trap '' TERM; sleep 30`),
 		nil, 200*time.Millisecond, 1024, CaptureComplete, "stubborn")
 	execErr := asExecutionError(t, err)
 	if execErr.Code != "execution_timeout" {
@@ -352,7 +391,7 @@ func TestRunCommandTimeoutKillsGrandchildren(t *testing.T) {
 	// 孙进程在父进程被杀后仍会持续写文件,除非整个进程组被清掉。
 	script := `( while true; do printf 'x' >> ` + marker + `; sleep 0.05; done ) &
 sleep 30`
-	_, err := runCommand(shellCommand(script), nil, 300*time.Millisecond, 1024, CaptureComplete, "tree")
+	_, err := runCommand(context.Background(), shellCommand(script), nil, 300*time.Millisecond, 1024, CaptureComplete, "tree")
 	if execErr := asExecutionError(t, err); execErr.Code != "execution_timeout" {
 		t.Fatalf("code = %q, want execution_timeout", execErr.Code)
 	}
@@ -367,12 +406,64 @@ sleep 30`
 	}
 }
 
+// 父请求取消必须像本地 timeout 一样终止整个进程组，而不只是让调用方返回。
+func TestRunCommandParentCancellationKillsGrandchildren(t *testing.T) {
+	directory := t.TempDir()
+	started := directory + "/started"
+	marker := directory + "/grandchild-alive"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	script := `( while true; do printf 'x' >> ` + marker + `; sleep 0.05; done ) &
+printf 'ready' > ` + started + `
+sleep 30`
+	result := make(chan error, 1)
+	go func() {
+		_, err := runCommand(ctx, shellCommand(script), nil, 30*time.Second, 1024, CaptureComplete, "tree")
+		result <- err
+	}()
+
+	startedDeadline := time.Now().Add(3 * time.Second)
+	for fileSizeOrZero(started) == 0 && time.Now().Before(startedDeadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if fileSizeOrZero(started) == 0 {
+		cancel()
+		<-result
+		t.Fatal("child process did not start")
+	}
+
+	cancel()
+	var runErr error
+	select {
+	case runErr = <-result:
+	case <-time.After(processTerminationGrace + 2*time.Second):
+		t.Fatal("runCommand did not reap the child process after parent cancellation")
+	}
+	execErr := asExecutionError(t, runErr)
+	if execErr.Code != "execution_timeout" {
+		t.Fatalf("code = %q, want execution_timeout", execErr.Code)
+	}
+	if !strings.Contains(execErr.Detail, "parent context") {
+		t.Errorf("detail = %q, want parent cancellation context", execErr.Detail)
+	}
+
+	// 返回后孙进程必须已停止，不能继续写入活动标记。
+	time.Sleep(300 * time.Millisecond)
+	first := fileSizeOrZero(marker)
+	time.Sleep(400 * time.Millisecond)
+	second := fileSizeOrZero(marker)
+	if second != first {
+		t.Errorf("grandchild still running after parent cancellation: size grew %d -> %d", first, second)
+	}
+}
+
 // 正常退出后同样要回收仍在后台运行的孙进程。
 func TestRunCommandNormalExitKillsGrandchildren(t *testing.T) {
 	marker := t.TempDir() + "/lingering"
 	script := `( while true; do printf 'x' >> ` + marker + `; sleep 0.05; done ) &
 printf 'parent done'`
-	stdout, err := runCommand(shellCommand(script), nil, 5*time.Second, 1024, CaptureComplete, "tree")
+	stdout, err := runCommand(context.Background(), shellCommand(script), nil, 5*time.Second, 1024, CaptureComplete, "tree")
 	if err != nil {
 		t.Fatalf("runCommand: %v", err)
 	}

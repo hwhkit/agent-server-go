@@ -12,12 +12,16 @@ package mota
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // requireTestDatabase 在未配置 TEST_DATABASE_URL 时跳过测试,并把 DATABASE_URL
@@ -45,6 +49,50 @@ func newTestStore(t *testing.T) *AgentStore {
 		t.Fatalf("connect store: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
+	return store
+}
+
+func newIsolatedTestStore(t *testing.T) *AgentStore {
+	t.Helper()
+	databaseURL := requireTestDatabase(t)
+	ctx := context.Background()
+	adminConfig, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminPool, err := pgxpool.NewWithConfig(ctx, adminConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := fmt.Sprintf("mota_isolated_%d_%d", os.Getpid(), uniqueSeq.Add(1))
+	if _, err := adminPool.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
+		adminPool.Close()
+		t.Fatal(err)
+	}
+	storeConfig, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storeConfig.ConnConfig.RuntimeParams["search_path"] = schema
+	pool, err := pgxpool.NewWithConfig(ctx, storeConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cipher, err := NewSecretCipher(strings.Repeat("i", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &AgentStore{pool: pool, cipher: cipher}
+	if err := store.initialize(ctx); err != nil {
+		pool.Close()
+		adminPool.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		pool.Close()
+		_, _ = adminPool.Exec(context.Background(), "DROP SCHEMA "+schema+" CASCADE")
+		adminPool.Close()
+	})
 	return store
 }
 
@@ -159,6 +207,17 @@ func TestStoreAgentCRUDNonceAndRunTransaction(t *testing.T) {
 	}
 	if afterRotation.Revision != 3 {
 		t.Errorf("revision = %d, want 3", afterRotation.Revision)
+	}
+	staleRevision := int64(2)
+	update.SigningSecret = nil
+	update.Name = "stale editor"
+	if _, err := store.UpdateAgentIfRevision(ctx, slug, update, &staleRevision); !errors.Is(err, ErrStaleAgentRevision) {
+		t.Fatalf("stale Agent update error = %v, want ErrStaleAgentRevision", err)
+	}
+	afterStale, err := store.GetAgent(ctx, slug)
+	if err != nil || afterStale == nil || afterStale.SigningSecret != rotated ||
+		afterStale.Revision != afterRotation.Revision {
+		t.Fatalf("stale update changed Agent: %+v, %v", afterStale, err)
 	}
 
 	// 启用中的 Agent 会出现在心跳密钥列表里。
@@ -381,6 +440,65 @@ func TestStoreIdempotencyNewThenCachedReplay(t *testing.T) {
 	}
 }
 
+func TestStoreFinalizeRunSurvivesCanceledRequestContext(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	agent := seedAgent(t, store, "pg-finalize-cancelled")
+	key := IdempotencyRecordKey(agent.ID, agent.Revision, unique("idem"))
+	hash := bodyHash([]byte(`{"cancelled":true}`))
+	runID := unique("run")
+	lease, err := store.BeginIdempotency(ctx, agent.Slug, key, hash, runID, true)
+	if err != nil || lease.Kind != IdempotencyNew {
+		t.Fatalf("begin: decision=%+v err=%v", lease, err)
+	}
+	requestJSON := `{"cancelled":true}`
+	started, err := store.StartRun(ctx, agent.Slug, runID, agent.Revision,
+		"pi", "gateway", &requestJSON)
+	if err != nil || !started {
+		t.Fatalf("start: started=%t err=%v", started, err)
+	}
+
+	cancelled, cancel := context.WithCancel(context.WithValue(ctx, struct{}{}, "kept"))
+	cancel()
+	responseBody := `{"payload_info":"committed"}`
+	if err := store.FinalizeRun(cancelled, RunFinalization{
+		AgentSlug: agent.Slug, RunID: runID, Status: "completed", DurationMs: 9,
+		ResultJSON:  &responseBody,
+		Idempotency: CompleteIdempotency(key, lease.LeaseID, responseBody),
+	}); err != nil {
+		t.Fatalf("FinalizeRun with canceled request context: %v", err)
+	}
+	run, err := store.GetRun(ctx, agent.Slug, runID)
+	if err != nil || run == nil || run.Status != "completed" {
+		t.Fatalf("run after finalization = %+v err=%v", run, err)
+	}
+	replay, err := store.BeginIdempotency(ctx, agent.Slug, key, hash, runID, true)
+	if err != nil || replay.Kind != IdempotencyCached || replay.ResponseBody != responseBody {
+		t.Fatalf("replay after canceled finalization = %+v err=%v", replay, err)
+	}
+}
+
+func TestStoreReleaseIdempotencySurvivesCanceledRequestContext(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	agent := seedAgent(t, store, "pg-release-cancelled")
+	key := IdempotencyRecordKey(agent.ID, agent.Revision, unique("idem"))
+	hash := bodyHash([]byte(`{"cancelled":true}`))
+	first, err := store.BeginIdempotency(ctx, agent.Slug, key, hash, unique("run"), false)
+	if err != nil || first.Kind != IdempotencyNew {
+		t.Fatalf("begin: decision=%+v err=%v", first, err)
+	}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := store.ReleaseIdempotency(cancelled, agent.Slug, key, first.LeaseID); err != nil {
+		t.Fatalf("ReleaseIdempotency with canceled request context: %v", err)
+	}
+	second, err := store.BeginIdempotency(ctx, agent.Slug, key, hash, unique("run"), false)
+	if err != nil || second.Kind != IdempotencyNew {
+		t.Fatalf("begin after release: decision=%+v err=%v", second, err)
+	}
+}
+
 // 同键但请求体不同 → Conflict。
 func TestStoreIdempotencyBodyHashMismatchConflicts(t *testing.T) {
 	store := newTestStore(t)
@@ -479,6 +597,65 @@ func TestStoreIdempotencyStaleLeaseTakeover(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("stale lease must not be able to finalize")
+	}
+}
+
+func TestStoreIdempotencyConcurrentStaleTakeoverHasSingleWinner(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	agent := seedAgent(t, store, "pg-idem-stale-race")
+	key := IdempotencyRecordKey(agent.ID, agent.Revision, unique("idem"))
+	hash := bodyHash([]byte(`{"race":true}`))
+	if _, err := store.BeginIdempotency(
+		ctx, agent.Slug, key, hash, unique("run-original"), false); err != nil {
+		t.Fatal(err)
+	}
+	staleAt := time.Now().UTC().Add(-3 * time.Hour).
+		Format("2006-01-02T15:04:05.000000000Z07:00")
+	if _, err := store.pool.Exec(ctx,
+		"UPDATE idempotency_records SET updated_at = $3 WHERE agent_slug = $1 AND key = $2",
+		agent.Slug, key, staleAt); err != nil {
+		t.Fatal(err)
+	}
+
+	const contenders = 8
+	type result struct {
+		decision IdempotencyDecision
+		err      error
+	}
+	start := make(chan struct{})
+	results := make(chan result, contenders)
+	var ready sync.WaitGroup
+	ready.Add(contenders)
+	for i := 0; i < contenders; i++ {
+		go func(index int) {
+			ready.Done()
+			<-start
+			decision, err := store.BeginIdempotency(
+				ctx, agent.Slug, key, hash, unique(fmt.Sprintf("takeover-%d", index)), false)
+			results <- result{decision: decision, err: err}
+		}(i)
+	}
+	ready.Wait()
+	close(start)
+
+	winners, inProgress := 0, 0
+	for i := 0; i < contenders; i++ {
+		got := <-results
+		if got.err != nil {
+			t.Fatalf("contender failed: %v", got.err)
+		}
+		switch got.decision.Kind {
+		case IdempotencyNew:
+			winners++
+		case IdempotencyInProgress:
+			inProgress++
+		default:
+			t.Fatalf("unexpected decision: %+v", got.decision)
+		}
+	}
+	if winners != 1 || inProgress != contenders-1 {
+		t.Fatalf("winners=%d in_progress=%d, want 1/%d", winners, inProgress, contenders-1)
 	}
 }
 
@@ -1007,6 +1184,47 @@ func TestStoreUserRolesSessionsAndActorScopedAudits(t *testing.T) {
 	}
 }
 
+func TestStoreConcurrentAccountMutationsPreserveOneEnabledAdmin(t *testing.T) {
+	store := newIsolatedTestStore(t)
+	ctx := context.Background()
+	if err := store.EnsureBootstrapAdmin(ctx, "admin-a", "hash-a"); err != nil {
+		t.Fatal(err)
+	}
+	if created, err := store.CreateUser(ctx, "admin-b", "hash-b", UserRoleAdmin); err != nil || !created {
+		t.Fatalf("create second admin = %t, %v", created, err)
+	}
+
+	start := make(chan struct{})
+	errorsCh := make(chan error, 2)
+	go func() {
+		<-start
+		_, err := store.UpdateUser(ctx, "admin-a", nil, UserRoleUser, true)
+		errorsCh <- err
+	}()
+	go func() {
+		<-start
+		_, err := store.DeleteUser(ctx, "admin-b")
+		errorsCh <- err
+	}()
+	close(start)
+	first, second := <-errorsCh, <-errorsCh
+	lastAdminErrors := 0
+	for _, err := range []error{first, second} {
+		if errors.Is(err, ErrLastEnabledAdmin) {
+			lastAdminErrors++
+		} else if err != nil {
+			t.Fatalf("unexpected account mutation error: %v", err)
+		}
+	}
+	if lastAdminErrors != 1 {
+		t.Fatalf("last-admin errors = %d, want exactly one", lastAdminErrors)
+	}
+	count, err := store.EnabledAdminCount(ctx)
+	if err != nil || count != 1 {
+		t.Fatalf("enabled admin count = %d, %v; want 1", count, err)
+	}
+}
+
 func TestStoreRecordAudit(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
@@ -1027,6 +1245,269 @@ func TestStoreRecordAudit(t *testing.T) {
 	}
 	if !strings.Contains(details, `"revision":1`) || !strings.Contains(details, `"enabled":true`) {
 		t.Errorf("details = %s", details)
+	}
+}
+
+func TestAuditedMutationsRollbackWhenAuditEncodingFails(t *testing.T) {
+	store := newIsolatedTestStore(t)
+	ctx := context.Background()
+	actor := unique("atomic-audit-failure")
+	badAudit := func(action, target string) AuditEvent {
+		return AuditEvent{
+			Actor: actor, Action: action, Target: target,
+			Details: map[string]any{"unsupported": func() {}},
+		}
+	}
+
+	providerID := unique("atomic-provider")
+	providerValues := map[string]map[string]any{
+		providerID: {"api_key": "provider-secret", "model": "model-a"},
+	}
+	if _, err := store.PutExecutorProviderGroupIfRevisionAudited(
+		ctx, providerID, providerValues, nil,
+		badAudit("provider.update", providerID)); err == nil {
+		t.Fatal("Provider mutation with an unencodable audit event must fail")
+	}
+	if value, err := store.GetExecutorProvider(ctx, providerID); err != nil || value != nil {
+		t.Fatalf("Provider mutation survived audit failure: value=%v err=%v", value, err)
+	}
+	if revision, err := store.ExecutorProviderRevision(ctx); err != nil || revision != 0 {
+		t.Fatalf("Provider revision after rollback = %d, %v; want 0", revision, err)
+	}
+	if revisions, err := store.ListExecutorProviderRevisions(ctx); err != nil || revisions[providerID] != 0 {
+		t.Fatalf("Provider item revisions after rollback = %v, %v", revisions, err)
+	}
+
+	slug := uniqueSlug("atomic-agent")
+	secret := "atomic-agent-signing-secret"
+	createAgent := &AgentInput{Slug: slug, Name: "before", SigningSecret: &secret}
+	if err := createAgent.Validate(true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateAgentAudited(
+		ctx, createAgent, badAudit("agent.create", slug)); err == nil {
+		t.Fatal("Agent create with an unencodable audit event must fail")
+	}
+	if agent, err := store.GetAgent(ctx, slug); err != nil || agent != nil {
+		t.Fatalf("Agent create survived audit failure: agent=%v err=%v", agent, err)
+	}
+	if revision, err := store.AgentRegistryRevision(ctx); err != nil || revision != 0 {
+		t.Fatalf("Agent registry revision after create rollback = %d, %v; want 0", revision, err)
+	}
+
+	createdAgent, err := store.CreateAgent(ctx, createAgent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updateAgent := &AgentInput{Slug: slug, Name: "after"}
+	if err := updateAgent.Validate(false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateAgentIfRevisionAudited(
+		ctx, slug, updateAgent, &createdAgent.Revision,
+		badAudit("agent.update", slug)); err == nil {
+		t.Fatal("Agent update with an unencodable audit event must fail")
+	}
+	afterFailedUpdate, err := store.GetAgent(ctx, slug)
+	if err != nil || afterFailedUpdate == nil {
+		t.Fatalf("get Agent after update rollback: %v", err)
+	}
+	if afterFailedUpdate.Name != createdAgent.Name ||
+		afterFailedUpdate.Revision != createdAgent.Revision ||
+		afterFailedUpdate.SigningSecret != secret {
+		t.Fatalf("Agent changed despite audit rollback: %+v", afterFailedUpdate)
+	}
+	if deleted, err := store.DeleteAgentAudited(
+		ctx, slug, badAudit("agent.delete", slug)); err == nil || deleted {
+		t.Fatalf("Agent delete with failed audit = %t, %v; want false,error", deleted, err)
+	}
+	if agent, err := store.GetAgent(ctx, slug); err != nil || agent == nil {
+		t.Fatalf("Agent was removed despite audit rollback: agent=%v err=%v", agent, err)
+	}
+	if revision, err := store.AgentRegistryRevision(ctx); err != nil || revision != 1 {
+		t.Fatalf("Agent registry revision after update/delete rollback = %d, %v; want 1", revision, err)
+	}
+
+	username := unique("atomic-user")
+	if created, err := store.CreateUserAudited(
+		ctx, username, "password-hash-before", UserRoleUser,
+		badAudit("user.create", username)); err == nil || created {
+		t.Fatalf("User create with failed audit = %t, %v; want false,error", created, err)
+	}
+	if user, err := store.GetUser(ctx, username); err != nil || user != nil {
+		t.Fatalf("User create survived audit failure: user=%v err=%v", user, err)
+	}
+	if created, err := store.CreateUser(
+		ctx, username, "password-hash-before", UserRoleUser); err != nil || !created {
+		t.Fatalf("create baseline user = %t, %v", created, err)
+	}
+	sessionHash := unique("atomic-session")
+	if err := store.CreateSession(ctx, sessionHash, username, "csrf", time.Now().Add(time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	passwordAfter := "password-hash-after"
+	if _, err := store.UpdateUserAudited(
+		ctx, username, &passwordAfter, UserRoleUser, false,
+		badAudit("user.update", username)); err == nil {
+		t.Fatal("User update with an unencodable audit event must fail")
+	}
+	auth, err := store.GetUserAuth(ctx, username)
+	if err != nil || auth == nil {
+		t.Fatalf("get User after update rollback: %v", err)
+	}
+	if auth.PasswordHash != "password-hash-before" || !auth.Enabled {
+		t.Fatalf("User changed despite audit rollback: %+v", auth)
+	}
+	var sessions int
+	if err := store.pool.QueryRow(ctx,
+		"SELECT count(*) FROM admin_sessions WHERE username = $1", username).Scan(&sessions); err != nil {
+		t.Fatal(err)
+	}
+	if sessions != 1 {
+		t.Fatalf("sessions after update rollback = %d, want 1", sessions)
+	}
+	if deleted, err := store.DeleteUserAudited(
+		ctx, username, badAudit("user.delete", username)); err == nil || deleted {
+		t.Fatalf("User delete with failed audit = %t, %v; want false,error", deleted, err)
+	}
+	if user, err := store.GetUser(ctx, username); err != nil || user == nil {
+		t.Fatalf("User was removed despite audit rollback: user=%v err=%v", user, err)
+	}
+
+	var auditRows int
+	if err := store.pool.QueryRow(ctx,
+		"SELECT count(*) FROM audit_log WHERE actor = $1", actor).Scan(&auditRows); err != nil {
+		t.Fatal(err)
+	}
+	if auditRows != 0 {
+		t.Fatalf("failed audited mutations wrote %d audit rows", auditRows)
+	}
+}
+
+func TestAuditedMutationsStoreOnlyRedactedMetadata(t *testing.T) {
+	store := newIsolatedTestStore(t)
+	ctx := context.Background()
+	actor := unique("atomic-audit-success")
+
+	providerID := unique("redacted-provider")
+	providerSecret := "provider-api-key-must-not-enter-audit"
+	if _, err := store.PutExecutorProviderGroupIfRevisionAudited(
+		ctx, providerID,
+		map[string]map[string]any{providerID: {"api_key": providerSecret, "model": "m"}},
+		nil, AuditEvent{
+			Actor: actor, Action: "provider.update", Target: providerID,
+			Details: map[string]any{"providerId": providerID},
+		}); err != nil {
+		t.Fatal(err)
+	}
+
+	slug := uniqueSlug("redacted-agent")
+	agentSecret := "agent-signing-secret-must-not-enter-audit"
+	input := &AgentInput{Slug: slug, Name: "redacted", SigningSecret: &agentSecret}
+	if err := input.Validate(true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateAgentAudited(ctx, input, AuditEvent{
+		Actor: actor, Action: "agent.create", Target: slug,
+		Details: map[string]any{"secretRotated": true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	username := unique("redacted-user")
+	passwordHash := "password-hash-must-not-enter-audit"
+	if created, err := store.CreateUserAudited(
+		ctx, username, passwordHash, UserRoleUser, AuditEvent{
+			Actor: actor, Action: "user.create", Target: username,
+			Details: map[string]any{"role": "user", "enabled": true},
+		}); err != nil || !created {
+		t.Fatalf("create audited user = %t, %v", created, err)
+	}
+
+	rows, err := store.pool.Query(ctx,
+		"SELECT action, target, details FROM audit_log WHERE actor = $1 ORDER BY id", actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	seen := map[string]bool{}
+	for rows.Next() {
+		var action, target, details string
+		if err := rows.Scan(&action, &target, &details); err != nil {
+			t.Fatal(err)
+		}
+		seen[action] = true
+		for _, secret := range []string{providerSecret, agentSecret, passwordHash} {
+			if strings.Contains(details, secret) {
+				t.Fatalf("audit %s/%s leaked secret in %s", action, target, details)
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"provider.update", "agent.create", "user.create"} {
+		if !seen[action] {
+			t.Errorf("missing audited action %s", action)
+		}
+	}
+}
+
+func TestConcurrentAuditedAgentCreateMapsUniqueSlugConflict(t *testing.T) {
+	store := newIsolatedTestStore(t)
+	ctx := context.Background()
+	slug := uniqueSlug("concurrent-create")
+	secret := "concurrent-agent-signing-secret"
+	input := &AgentInput{Slug: slug, Name: "concurrent", SigningSecret: &secret}
+	if err := input.Validate(true); err != nil {
+		t.Fatal(err)
+	}
+
+	type result struct {
+		agent *AgentConfig
+		err   error
+	}
+	start := make(chan struct{})
+	results := make(chan result, 2)
+	for _, actor := range []string{"creator-a", "creator-b"} {
+		actor := actor
+		go func() {
+			<-start
+			agent, err := store.CreateAgentAudited(ctx, input, AuditEvent{
+				Actor: actor, Action: "agent.create", Target: slug,
+				Details: map[string]any{"secretRotated": true},
+			})
+			results <- result{agent: agent, err: err}
+		}()
+	}
+	close(start)
+
+	created, conflicts := 0, 0
+	for range 2 {
+		result := <-results
+		switch {
+		case result.err == nil && result.agent != nil:
+			created++
+		case errors.Is(result.err, ErrAgentSlugExists):
+			conflicts++
+		default:
+			t.Fatalf("unexpected concurrent create result: agent=%v err=%v", result.agent, result.err)
+		}
+	}
+	if created != 1 || conflicts != 1 {
+		t.Fatalf("created=%d conflicts=%d, want 1/1", created, conflicts)
+	}
+	var agents, audits int
+	if err := store.pool.QueryRow(ctx, "SELECT count(*) FROM agents WHERE slug = $1", slug).Scan(&agents); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.pool.QueryRow(ctx,
+		"SELECT count(*) FROM audit_log WHERE action = 'agent.create' AND target = $1", slug).
+		Scan(&audits); err != nil {
+		t.Fatal(err)
+	}
+	if agents != 1 || audits != 1 {
+		t.Fatalf("agents=%d audits=%d, want 1/1", agents, audits)
 	}
 }
 
@@ -1054,6 +1535,159 @@ func TestStoreExecutorProviderIsEncryptedAtRest(t *testing.T) {
 	}
 	if got["api_key"] != want["api_key"] || got["model"] != want["model"] {
 		t.Fatalf("provider roundtrip = %#v", got)
+	}
+}
+
+func TestStoreExecutorProviderGroupIsAtomicAndRejectsStaleRevision(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	primary := unique("provider-group-primary")
+	alias := unique("provider-group-alias")
+	keys := []string{
+		"executor_provider:" + primary,
+		"executor_provider:" + alias,
+		"executor_provider_item_revision:" + primary,
+		"executor_provider_item_revision:" + alias,
+	}
+	t.Cleanup(func() {
+		_, _ = store.pool.Exec(context.Background(),
+			`DELETE FROM platform_settings WHERE key = ANY($1)`, keys)
+	})
+
+	start := make(chan struct{})
+	type result struct {
+		revision int64
+		err      error
+	}
+	results := make(chan result, 2)
+	for _, marker := range []string{"first", "second"} {
+		marker := marker
+		go func() {
+			<-start
+			expected := int64(0)
+			revision, err := store.PutExecutorProviderGroupIfRevision(ctx, primary,
+				map[string]map[string]any{
+					primary: {"marker": marker, "private": "primary-" + marker},
+					alias:   {"marker": marker, "private": "alias-" + marker},
+				}, &expected)
+			results <- result{revision: revision, err: err}
+		}()
+	}
+	close(start)
+	applied, stale := 0, 0
+	for range 2 {
+		result := <-results
+		switch {
+		case result.err == nil && result.revision == 1:
+			applied++
+		case errors.Is(result.err, ErrStaleProviderRevision):
+			stale++
+		default:
+			t.Fatalf("unexpected grouped save result: revision=%d err=%v", result.revision, result.err)
+		}
+	}
+	if applied != 1 || stale != 1 {
+		t.Fatalf("applied=%d stale=%d, want 1/1", applied, stale)
+	}
+	primaryValue, err := store.GetExecutorProvider(ctx, primary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliasValue, err := store.GetExecutorProvider(ctx, alias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if primaryValue["marker"] != aliasValue["marker"] {
+		t.Fatalf("group committed a torn snapshot: primary=%v alias=%v", primaryValue, aliasValue)
+	}
+	revisions, err := store.ListExecutorProviderRevisions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revisions[primary] != 1 || revisions[alias] != 1 {
+		t.Fatalf("group revisions = %v", revisions)
+	}
+}
+
+func TestLoadConsistentProviderSnapshotFencesConcurrentWrites(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	keys := []string{
+		"executor_provider:gateway",
+		"executor_provider:deepseek_harness",
+		"executor_provider_item_revision:gateway",
+		"executor_provider_item_revision:deepseek_harness",
+	}
+	if _, err := store.pool.Exec(ctx, `DELETE FROM platform_settings WHERE key = ANY($1)`, keys); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = store.pool.Exec(context.Background(),
+			`DELETE FROM platform_settings WHERE key = ANY($1)`, keys)
+	})
+
+	base := testPlatformConfig(t)
+	writerDone := make(chan error, 1)
+	go func() {
+		current := base
+		for revision := int64(1); revision <= 20; revision++ {
+			next, _, err := UpdateProvider(current, "gateway", map[string]any{
+				"base_url": "https://gateway.example.test",
+				"api_key":  "integration-secret",
+				"model":    fmt.Sprintf("model-%d", revision),
+			})
+			if err != nil {
+				writerDone <- err
+				return
+			}
+			values, err := StoredProviderUpdateGroup(next, "gateway")
+			if err != nil {
+				writerDone <- err
+				return
+			}
+			expected := revision - 1
+			if _, err := store.PutExecutorProviderGroupIfRevision(
+				ctx, "gateway", values, &expected); err != nil {
+				writerDone <- err
+				return
+			}
+			current = next
+			time.Sleep(time.Millisecond)
+		}
+		writerDone <- nil
+	}()
+
+	for {
+		snapshot, revisions, _, err := LoadConsistentProviderSnapshot(ctx, store, base)
+		if err != nil {
+			if err.Error() == "Provider configuration changed during snapshot read" {
+				continue
+			}
+			t.Fatal(err)
+		}
+		if revision := revisions["gateway"]; revision > 0 {
+			want := fmt.Sprintf("model-%d", revision)
+			if snapshot.Gateway.Model != want {
+				t.Fatalf("mixed Provider snapshot: revision=%d model=%q want=%q",
+					revision, snapshot.Gateway.Model, want)
+			}
+		}
+		select {
+		case err := <-writerDone:
+			if err != nil {
+				t.Fatal(err)
+			}
+			final, revisions, _, err := LoadConsistentProviderSnapshot(ctx, store, base)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if revisions["gateway"] != 20 || final.Gateway.Model != "model-20" {
+				t.Fatalf("final Provider snapshot revision=%d model=%q",
+					revisions["gateway"], final.Gateway.Model)
+			}
+			return
+		default:
+		}
 	}
 }
 

@@ -1,0 +1,70 @@
+name: Bug report
+description: Report a reproducible defect without secrets or customer data
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not report security vulnerabilities here. Use the private process in SECURITY.md.
+        Remove credentials, callback tokens, request bodies, customer data, and production URLs.
+  - type: input
+    id: revision
+    attributes:
+      label: Version or commit
+      description: Tag or full commit SHA; include whether the tree was dirty.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Push / Pull protocol
+        - Callback delivery
+        - Provider hot update
+        - Dynamic Agent gateway
+        - Admin / RBAC / audit
+        - A2A
+        - Local or managed executor
+        - Deployment / CI
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS/architecture, Go and PostgreSQL versions, and deployment shape. Do not include secrets.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Minimal sanitized steps, including run/idempotency behavior when relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include stable error codes/statuses and sanitized log excerpts only.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed credentials, tokens, customer data, private URLs, and production request/response bodies.
+          required: true
+        - label: This is not an undisclosed security vulnerability.
+          required: true

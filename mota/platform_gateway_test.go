@@ -331,6 +331,20 @@ func TestGatewayUnknownAndDisabledAgentBothLookAbsent(t *testing.T) {
 	wantGatewayError(t, recorder, http.StatusNotFound, "agent_not_found")
 }
 
+func TestGatewayLegacyBodySignatureIsDisabledByDefault(t *testing.T) {
+	fixture := newGatewayFixture(t, PlaceholderProcessor{})
+	next := clonePlatformConfig(fixture.state.ConfigSnapshot())
+	next.AllowLegacyBodySignature = false
+	fixture.state.ApplyConfig(next)
+
+	runID := unique("legacy-disabled")
+	recorder := fixture.do(t, gatewayCall{
+		body: minimalTaskBody(runID), mode: "mota", runID: runID,
+		idempotencyKey: unique("idem"),
+	})
+	wantGatewayError(t, recorder, http.StatusUnauthorized, "legacy_signature_disabled")
+}
+
 func TestGatewayExternalAliasUsesAgentCanonicalSignature(t *testing.T) {
 	fixture := newGatewayFixture(t, PlaceholderProcessor{})
 	runID := unique("alias-run")
@@ -1096,11 +1110,13 @@ func TestGatewayAsyncAcksAndDeliversCallback(t *testing.T) {
 		status: 200, body: `{"code":"OK","accepted":true,"runStatus":"SUCCESS"}`,
 	})
 	fixture.state.CallbackToken = "mpk_gateway_token"
+	fixture.state.CallbackTokenOrigin = stub.server.URL
 	runID := unique("run")
+	callbackURL := stub.server.URL + "/private/callback?client_secret=hidden#fragment"
 
 	started := time.Now()
 	recorder := fixture.do(t, gatewayCall{
-		body: asyncTaskBody(runID, stub.server.URL), runID: runID})
+		body: asyncTaskBody(runID, callbackURL), runID: runID})
 	if recorder.Code != http.StatusAccepted {
 		t.Fatalf("status = %d body = %s", recorder.Code, recorder.Body.String())
 	}
@@ -1168,6 +1184,9 @@ func TestGatewayAsyncAcksAndDeliversCallback(t *testing.T) {
 		if event.StatusCode == nil || *event.StatusCode != http.StatusOK {
 			t.Errorf("status_code = %v, want 200", event.StatusCode)
 		}
+		if event.URL != stub.server.URL {
+			t.Errorf("audit URL = %q, want redacted origin %q", event.URL, stub.server.URL)
+		}
 		if event.RunStatus == nil || *event.RunStatus != "SUCCESS" {
 			t.Errorf("run_status = %v", event.RunStatus)
 		}
@@ -1194,14 +1213,29 @@ func TestGatewayBlankCallbackURLStaysSynchronous(t *testing.T) {
 	}
 }
 
-// callback 投递失败时运行仍记为 completed(结果确实产出了),失败单独记进 channel_events。
+func TestGatewayRejectsUnsafeCallbackURLBeforeExecution(t *testing.T) {
+	fixture := newGatewayFixture(t, PlaceholderProcessor{})
+	for _, callbackURL := range []string{
+		"http://api.example.test/callback",
+		"https://user:password@api.example.test/callback",
+	} {
+		runID := unique("run")
+		recorder := fixture.do(t, gatewayCall{
+			body: asyncTaskBody(runID, callbackURL), runID: runID})
+		wantGatewayError(t, recorder, http.StatusUnprocessableEntity, "invalid_callback_url")
+	}
+}
+
+// callback 投递失败时运行必须记为 failed，不能把「本地产出结果」冒充成「平台已收到」。
 func TestGatewayAsyncRecordsCallbackFailure(t *testing.T) {
 	fixture := newGatewayFixture(t, PlaceholderProcessor{})
 	stub := newCallbackStub(t, callbackStubResponse{status: 400, body: `{"code":"BAD_SIGNATURE"}`})
 	runID := unique("run")
+	idempotencyKey := unique("idem")
 
 	recorder := fixture.do(t, gatewayCall{
-		body: asyncTaskBody(runID, stub.server.URL), runID: runID})
+		body: asyncTaskBody(runID, stub.server.URL), runID: runID,
+		idempotencyKey: idempotencyKey})
 	if recorder.Code != http.StatusAccepted {
 		t.Fatalf("status = %d", recorder.Code)
 	}
@@ -1212,23 +1246,42 @@ func TestGatewayAsyncRecordsCallbackFailure(t *testing.T) {
 			return false
 		}
 		for _, run := range runs {
-			if run.RunID == runID && run.Status == "completed" {
+			if run.RunID == runID && run.Status == "failed" {
 				return true
 			}
 		}
 		return false
 	})
+	runs, err := fixture.state.Store.ListRuns(context.Background(), 20, fixture.slug)
+	if err != nil {
+		t.Fatalf("list runs: %v", err)
+	}
+	for _, run := range runs {
+		if run.RunID != runID {
+			continue
+		}
+		if run.ErrorCode == nil || *run.ErrorCode != "callback_delivery_failed" {
+			t.Errorf("error_code = %v", run.ErrorCode)
+		}
+		if run.ResponseCode == nil || *run.ResponseCode != http.StatusBadGateway {
+			t.Errorf("response_code = %v, want 502", run.ResponseCode)
+		}
+	}
 
 	events, err := fixture.state.Store.ListChannelEvents(context.Background(), "callback", fixture.slug, 50)
 	if err != nil {
 		t.Fatalf("list channel events: %v", err)
 	}
+	foundEvent := false
 	for _, event := range events {
 		if event.RunID == nil || *event.RunID != runID {
 			continue
 		}
-		if event.Detail == nil || !strings.Contains(*event.Detail, "callback rejected with 400") {
+		if event.Detail == nil || !strings.Contains(*event.Detail, "status=400") {
 			t.Errorf("detail = %v, want the rejection reason", event.Detail)
+		}
+		if event.StatusCode == nil || *event.StatusCode != http.StatusBadRequest {
+			t.Errorf("status_code = %v, want 400", event.StatusCode)
 		}
 		if event.Output == nil || !strings.Contains(*event.Output, "callback_delivery_failed") {
 			t.Errorf("output = %v", event.Output)
@@ -1236,9 +1289,138 @@ func TestGatewayAsyncRecordsCallbackFailure(t *testing.T) {
 		if event.Accepted != nil {
 			t.Errorf("accepted = %v, want nil on a delivery failure", event.Accepted)
 		}
-		return
+		foundEvent = true
+		break
 	}
-	t.Fatalf("no callback failure event recorded for %s", runID)
+	if !foundEvent {
+		t.Fatalf("no callback failure event recorded for %s", runID)
+	}
+
+	// 失败结果的幂等回放仍是 502，不能经 writeAgentSuccess 伪装成 200；
+	// 也不得重新执行/投递。
+	replay := fixture.do(t, gatewayCall{
+		body: asyncTaskBody(runID, stub.server.URL), runID: runID,
+		idempotencyKey: idempotencyKey})
+	wantGatewayError(t, replay, http.StatusBadGateway, "callback_delivery_failed")
+	if replay.Header().Get("X-Idempotent-Replay") != "true" {
+		t.Error("failed callback replay must be marked as idempotent")
+	}
+	time.Sleep(100 * time.Millisecond)
+	if stub.callCount() != 1 {
+		t.Fatalf("callback count = %d, want 1 after cached failure replay", stub.callCount())
+	}
+}
+
+// HTTP 200 但回执不可解析时，平台可能已经接收了结果。该状态必须单独标记为
+// outcome_uncertain，且幂等回放不能把它降格为普通 502 或重新投递。
+func TestGatewayAsyncRecordsUncertainCallbackOutcome(t *testing.T) {
+	fixture := newGatewayFixture(t, PlaceholderProcessor{})
+	stub := newCallbackStub(t, callbackStubResponse{
+		status: http.StatusOK,
+		body:   `{"code":"OK"}`,
+	})
+	runID := unique("run")
+	idempotencyKey := unique("idem")
+	body := asyncTaskBody(runID, stub.server.URL)
+
+	recorder := fixture.do(t, gatewayCall{
+		body: body, runID: runID, idempotencyKey: idempotencyKey})
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("status = %d", recorder.Code)
+	}
+	waitForGateway(t, 5*time.Second, "uncertain callback finalization", func() bool {
+		runs, err := fixture.state.Store.ListRuns(context.Background(), 20, fixture.slug)
+		if err != nil {
+			return false
+		}
+		for _, run := range runs {
+			if run.RunID == runID && run.Status == "failed" && run.ErrorCode != nil &&
+				*run.ErrorCode == "outcome_uncertain" {
+				return true
+			}
+		}
+		return false
+	})
+
+	runs, err := fixture.state.Store.ListRuns(context.Background(), 20, fixture.slug)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, run := range runs {
+		if run.RunID == runID && (run.ResponseCode == nil ||
+			*run.ResponseCode != http.StatusServiceUnavailable) {
+			t.Errorf("response_code = %v, want 503", run.ResponseCode)
+		}
+	}
+	events, err := fixture.state.Store.ListChannelEvents(
+		context.Background(), "callback", fixture.slug, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundEvent := false
+	for _, event := range events {
+		if event.RunID != nil && *event.RunID == runID {
+			foundEvent = true
+			if event.Output == nil || !strings.Contains(*event.Output, "outcome_uncertain") {
+				t.Errorf("event output = %v, want outcome_uncertain", event.Output)
+			}
+		}
+	}
+	if !foundEvent {
+		t.Fatalf("no callback event recorded for %s", runID)
+	}
+
+	replay := fixture.do(t, gatewayCall{
+		body: body, runID: runID, idempotencyKey: idempotencyKey})
+	wantGatewayError(t, replay, http.StatusServiceUnavailable, "outcome_uncertain")
+	if replay.Header().Get("X-Idempotent-Replay") != "true" {
+		t.Error("uncertain callback replay must be marked as idempotent")
+	}
+	time.Sleep(100 * time.Millisecond)
+	if stub.callCount() != 1 {
+		t.Fatalf("callback count = %d, want 1 after uncertain replay", stub.callCount())
+	}
+}
+
+func TestGatewayAsyncRecordsRejectedReceipt(t *testing.T) {
+	fixture := newGatewayFixture(t, PlaceholderProcessor{})
+	stub := newCallbackStub(t, callbackStubResponse{
+		status: http.StatusOK,
+		body:   `{"code":"OK","accepted":false,"runStatus":"REJECTED","runMsg":"bad result"}`,
+	})
+	runID := unique("run")
+	recorder := fixture.do(t, gatewayCall{
+		body: asyncTaskBody(runID, stub.server.URL), runID: runID})
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("status = %d", recorder.Code)
+	}
+	waitForGateway(t, 5*time.Second, "rejected run finalization", func() bool {
+		runs, err := fixture.state.Store.ListRuns(context.Background(), 20, fixture.slug)
+		if err != nil {
+			return false
+		}
+		for _, run := range runs {
+			if run.RunID == runID && run.Status == "failed" && run.ErrorCode != nil &&
+				*run.ErrorCode == "callback_rejected" {
+				return true
+			}
+		}
+		return false
+	})
+	events, err := fixture.state.Store.ListChannelEvents(
+		context.Background(), "callback", fixture.slug, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.RunID != nil && *event.RunID == runID {
+			if event.Accepted == nil || *event.Accepted {
+				t.Fatalf("accepted = %v, want false", event.Accepted)
+			}
+			return
+		}
+	}
+	t.Fatalf("no callback event recorded for %s", runID)
 }
 
 // 受信通道拿不到 usage 时**连 callback 都不发**,并把运行记成 usage_unavailable。
@@ -1248,9 +1430,11 @@ func TestGatewayAsyncSuppressesCallbackWhenUsageMissing(t *testing.T) {
 	stub := newCallbackStub(t, callbackStubResponse{
 		status: 200, body: `{"code":"OK","accepted":true}`})
 	runID := unique("run")
+	idempotencyKey := unique("idem")
+	body := asyncTaskBody(runID, stub.server.URL)
 
 	recorder := fixture.do(t, gatewayCall{
-		body: asyncTaskBody(runID, stub.server.URL), runID: runID})
+		body: body, runID: runID, idempotencyKey: idempotencyKey})
 	if recorder.Code != http.StatusAccepted {
 		t.Fatalf("status = %d", recorder.Code)
 	}
@@ -1289,9 +1473,11 @@ func TestGatewayAsyncRecordsExecutionFailure(t *testing.T) {
 	stub := newCallbackStub(t, callbackStubResponse{
 		status: 200, body: `{"code":"OK","accepted":true}`})
 	runID := unique("run")
+	idempotencyKey := unique("idem")
+	body := asyncTaskBody(runID, stub.server.URL)
 
 	recorder := fixture.do(t, gatewayCall{
-		body: asyncTaskBody(runID, stub.server.URL), runID: runID})
+		body: body, runID: runID, idempotencyKey: idempotencyKey})
 	if recorder.Code != http.StatusAccepted {
 		t.Fatalf("status = %d", recorder.Code)
 	}
@@ -1321,6 +1507,12 @@ func TestGatewayAsyncRecordsExecutionFailure(t *testing.T) {
 		if run.ResponseCode == nil || *run.ResponseCode != http.StatusAccepted {
 			t.Errorf("response_code = %v, want the already-acked 202", run.ResponseCode)
 		}
+	}
+	replay := fixture.do(t, gatewayCall{
+		body: body, runID: runID, idempotencyKey: idempotencyKey})
+	wantGatewayError(t, replay, http.StatusInternalServerError, "processor_failed")
+	if replay.Header().Get("X-Idempotent-Replay") != "true" {
+		t.Error("accepted execution failure must be cached for safe replay")
 	}
 }
 

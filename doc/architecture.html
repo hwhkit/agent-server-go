@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#07110f">
-  <meta name="description" content="MOTA 多 Agent 管理与本机执行平台目标架构图">
-  <title>MOTA Agent Fabric · 目标架构</title>
+  <meta name="description" content="MOTA Go 智能体管理与执行服务系统架构图">
+  <title>MOTA Agent Server · Go 系统架构</title>
   <style>
     :root {
       color-scheme: dark;
@@ -601,7 +601,7 @@
         <a href="#flows">关键流程</a>
         <a href="#agents">Agent 路由</a>
         <a href="#principles">设计原则</a>
-        <a class="back-link" href="index.html">现有运行时</a>
+        <a class="back-link" href="index.html">Go 运行时</a>
       </div>
     </div>
   </nav>
@@ -609,9 +609,9 @@
   <header class="hero" id="top">
     <div class="wrap hero-grid">
       <div>
-        <div class="eyebrow">Target architecture · multi-agent control &amp; execution plane</div>
+        <div class="eyebrow">Go architecture · multi-agent control &amp; execution plane</div>
         <h1>一个入口，管理<br><span>所有 Agent。</span></h1>
-        <p class="hero-lede">在现有 Rust Bridge 之上增加管理控制面、动态 Agent Registry 和可插拔执行器。创建一个 slug，即刻获得一条隔离、可观测、可限流的 Agent 接口。</p>
+        <p class="hero-lede">Go 服务在同一进程内提供管理控制面、动态 Agent Registry 和可插拔执行器。创建一个 slug，即刻获得一条隔离、可观测、可限流的 Agent 接口。</p>
         <div class="hero-actions">
           <a class="button primary" href="#architecture">查看交互式架构图</a>
           <a class="button" href="#agents">查看 URL 映射</a>
@@ -635,7 +635,7 @@
     <div class="wrap fact-grid">
       <div class="fact"><b>/agent/{slug}</b><span>固定动态入口，无需重建 Router</span></div>
       <div class="fact"><b>2 planes</b><span>管理控制面与任务执行面隔离</span></div>
-      <div class="fact"><b>2 executors</b><span>Claude Code 与 Rust Agent</span></div>
+      <div class="fact"><b>3 modes</b><span>网关、本地 CLI 与托管智能体</span></div>
       <div class="fact"><b>atomic swap</b><span>配置验证通过后原子热更新</span></div>
     </div>
   </div>
@@ -643,7 +643,7 @@
   <main class="wrap" id="main">
     <section id="architecture">
       <div class="section-head">
-        <div><div class="eyebrow">01 / Interactive system map</div><h2>目标系统架构</h2></div>
+        <div><div class="eyebrow">01 / Interactive system map</div><h2>当前系统架构</h2></div>
         <p>切换数据流可以聚焦管理、Push 或 Pull 链路；点击组件可查看职责和边界。架构图横向展示，在窄屏上可左右滚动。</p>
       </div>
 
@@ -676,7 +676,7 @@
               </button>
               <span class="connector" data-label="validated DTO" data-flows="control" aria-hidden="true"></span>
               <button class="node control" type="button" data-detail="config-service" data-flows="control">
-                <span class="node-code">Domain service</span><h3>Agent Config Service</h3><p>校验 slug、Schema、密钥引用、执行策略和版本。</p><small>04</small>
+                <span class="node-code">Domain service</span><h3>Agent Config Service</h3><p>校验 slug、Schema、签名密钥、执行策略和版本。</p><small>04</small>
               </button>
               <span class="connector" data-label="atomic swap" data-flows="control" aria-hidden="true"></span>
               <button class="node control is-selected" type="button" data-detail="registry" data-flows="control request pull">
@@ -704,7 +704,7 @@
               </button>
               <span class="connector" data-label="bounded job" data-flows="request pull" aria-hidden="true"></span>
               <button class="node data" type="button" data-detail="scheduler" data-flows="request pull">
-                <span class="node-code">Capacity</span><h3>Scheduler + Router</h3><p>有界队列、全局/per-Agent Semaphore 与执行器分派。</p><small>10</small>
+                <span class="node-code">Capacity</span><h3>Scheduler + Router</h3><p>有界队列、全局/per-Agent 容量许可与执行器分派。</p><small>10</small>
               </button>
             </div>
 
@@ -712,9 +712,10 @@
               <article class="resource" data-flows="request pull">
                 <div class="resource-head"><b>Execution targets</b><span>AgentExecutor</span></div>
                 <div class="mini-stack">
-                  <div class="mini-node"><span>Claude Code Executor</span><code>process</code></div>
-                  <div class="mini-node"><span>Rust Agent Executor</span><code>in-process</code></div>
-                  <div class="mini-node"><span>结果 Schema 适配</span><code>output</code></div>
+                  <div class="mini-node"><span>本地 Agent CLI</span><code>local</code></div>
+                  <div class="mini-node"><span>模型网关</span><code>gateway</code></div>
+                  <div class="mini-node"><span>OpenAI / Claude 托管智能体</span><code>managed</code></div>
+                  <div class="mini-node"><span>内置 Processor</span><code>in-process</code></div>
                 </div>
               </article>
               <article class="resource" data-flows="control request pull">
@@ -730,14 +731,14 @@
                 <div class="mini-stack">
                   <div class="mini-node"><span>Worker Supervisor</span><code>pull</code></div>
                   <div class="mini-node"><span>Heartbeat / renew</span><code>lease</code></div>
-                  <div class="mini-node"><span>Callback Outbox</span><code>retry</code></div>
+                  <div class="mini-node"><span>Callback 投递</span><code>in-process retry</code></div>
                 </div>
               </article>
               <article class="resource" data-flows="control request pull">
                 <div class="resource-head"><b>Local boundary</b><span>least privilege</span></div>
                 <div class="mini-stack">
                   <div class="mini-node"><span>Agent workspaces</span><code>cwd</code></div>
-                  <div class="mini-node"><span>Secret references</span><code>redacted</code></div>
+                  <div class="mini-node"><span>Encrypted secrets</span><code>redacted</code></div>
                   <div class="mini-node"><span>metrics / traces</span><code>ops</code></div>
                 </div>
               </article>
@@ -756,7 +757,7 @@
             <div class="inspector-label">Component inspector</div>
             <h3 id="inspector-title">Agent Registry</h3>
             <p id="inspector-copy">按 slug 提供不可变运行时快照。配置先完整验证并构建，再一次性替换，避免请求读取到半更新状态。</p>
-            <div class="inspector-meta" id="inspector-meta"><span>ArcSwap / RwLock</span><span>revision-aware</span><span>hot reload</span></div>
+            <div class="inspector-meta" id="inspector-meta"><span>sync.RWMutex</span><span>revision-aware</span><span>hot reload</span></div>
           </aside>
         </div>
       </div>
@@ -772,7 +773,7 @@
           <div class="flow-card-head"><span>FLOW A / CONTROL</span><h3>创建或更新 Agent</h3><p>配置变更即时生效，但不影响绑定旧 revision 的在途任务。</p></div>
           <ol class="steps">
             <li>管理员通过独立认证进入 <code>/admin</code>。</li>
-            <li>提交 slug、执行器、Schema、并发和密钥引用。</li>
+            <li>提交 slug、执行器、Schema、并发和签名密钥。</li>
             <li>服务端严格校验并在事务中写入新 revision。</li>
             <li>构建不可变 AgentRuntime，原子替换 Registry。</li>
           </ol>
@@ -783,16 +784,16 @@
             <li><code>POST /agent/server1</code> 到达 Agent Gateway。</li>
             <li>按 slug 读取 runtime，并执行签名与输入 Schema 校验。</li>
             <li>幂等登记后进入有界队列，执行全局和 Agent 限流。</li>
-            <li>Claude Code 或 Rust Agent 产出结果并完成契约校验。</li>
+            <li>本地 CLI、网关或托管智能体产出结果并完成契约校验。</li>
           </ol>
         </article>
         <article class="flow-card">
-          <div class="flow-card-head"><span>FLOW C / ASYNC</span><h3>Pull 与可靠回传</h3><p>后台任务由 Supervisor 管理，结果通过持久 Outbox 交付。</p></div>
+          <div class="flow-card-head"><span>FLOW C / ASYNC</span><h3>Pull 与结果回传</h3><p>后台任务由 Go 协程监督，callback 在当前进程内按退避策略重试。</p></div>
           <ol class="steps">
-            <li>Registry 变更触发对应 Pull Worker 启停或滚动重建。</li>
+            <li>Pull Worker 长轮询 claim 队列，再按 <code>agentCode</code> 分发到对应岗位。</li>
             <li>Worker claim 任务并在执行期间 renew 租约。</li>
-            <li>执行结果与回调事件在本地事务中持久化。</li>
-            <li>Outbox 按退避策略重试 callback / complete。</li>
+            <li>执行结果与 callback 尝试写入 PostgreSQL 运行和通道记录。</li>
+            <li>callback 仅在当前进程内重试；202 后崩溃需按原 <code>runId</code> 对账。</li>
           </ol>
         </article>
       </div>
@@ -801,7 +802,7 @@
     <section id="agents">
       <div class="section-head">
         <div><div class="eyebrow">03 / Dynamic route registry</div><h2>Agent 与 URL 一一映射</h2></div>
-        <p>创建记录后不动态注册新的 Axum route，而是在固定的 <code>/agent/{slug}</code> handler 中查找对应运行时配置。</p>
+        <p>创建记录后不动态注册新的 Go HTTP route，而是在固定的 <code>/agent/{slug}</code> handler 中查找对应运行时配置。</p>
       </div>
       <div class="agent-table-wrap">
         <table class="agent-table">
@@ -816,7 +817,7 @@
             </tr>
             <tr>
               <td><span class="agent-name"><i class="status-dot"></i>server2</span></td>
-              <td><span class="executor-badge">rust_agent</span></td>
+              <td><span class="executor-badge">codex</span></td>
               <td><code>https://infoman.ai/agent/server2</code></td>
               <td>8 / queue 100</td><td>rev_006</td>
               <td><button class="copy-route" type="button" data-copy="https://infoman.ai/agent/server2">复制 URL</button></td>
@@ -830,7 +831,7 @@
             </tr>
             <tr>
               <td><span class="agent-name"><i class="status-dot paused"></i>xxxx</span></td>
-              <td><span class="executor-badge">rust_agent</span></td>
+              <td><span class="executor-badge">openai_agent</span></td>
               <td><code>https://infoman.ai/agent/xxxx</code></td>
               <td>paused</td><td>rev_001</td>
               <td><button class="copy-route" type="button" data-copy="https://infoman.ai/agent/xxxx">复制 URL</button></td>
@@ -843,25 +844,25 @@
     <section id="principles">
       <div class="section-head">
         <div><div class="eyebrow">04 / Architecture boundaries</div><h2>关键设计原则</h2></div>
-        <p>Claude Code 属于本机高权限执行边界，因此容量、安全、取消和审计必须在第一版就成为架构组成，而不是后续补丁。</p>
+        <p>本地 Agent CLI 属于主机高权限执行边界，因此容量、安全、取消和审计必须从架构层面明确限制。</p>
       </div>
       <div class="principles">
         <article class="principle"><div class="principle-index">P-01</div><div><h3>静态启动配置与动态 Agent 配置分离</h3><p>管理密码哈希、DATABASE_URL 和主密钥属于环境变量；Agent 业务配置由管理端写入 PostgreSQL 并保留 revision。</p></div></article>
-        <article class="principle"><div class="principle-index">P-02</div><div><h3>禁止 shell 字符串拼接</h3><p>Claude Code 使用 <code>tokio::process::Command</code> 参数数组，限制 executable、cwd、env、运行时长和输出大小。</p></div></article>
-        <article class="principle"><div class="principle-index">P-03</div><div><h3>双层容量保护</h3><p>全局并发限制保护主机，每 Agent Semaphore 保证租户隔离；队列必须有界，过载明确返回 429 或 503。</p></div></article>
-        <article class="principle"><div class="principle-index">P-04</div><div><h3>可靠状态而非内存承诺</h3><p>幂等键以 <code>(agent_id, key)</code> 隔离，并记录请求 hash；异步回调通过持久 Outbox 重试，进程重启不丢失。</p></div></article>
+        <article class="principle"><div class="principle-index">P-02</div><div><h3>禁止 shell 字符串拼接</h3><p>本地 CLI 使用 Go <code>exec.Command</code> 参数数组，并显式控制 cwd、env、截止时间、输出上限与进程组终止。</p></div></article>
+        <article class="principle"><div class="principle-index">P-03</div><div><h3>双层容量保护</h3><p>全局并发限制保护主机，每 Agent 容量许可保证租户隔离；队列必须有界，过载明确返回 429 或 503。</p></div></article>
+        <article class="principle"><div class="principle-index">P-04</div><div><h3>持久幂等，明确回调边界</h3><p>幂等键与已签名 <code>runId</code> 阻止重复执行；动态 Agent callback 尚无持久 Outbox，进程中断后必须依运行记录对账。</p></div></article>
       </div>
 
       <div class="decision-bar" style="margin-top: 16px">
-        <div><strong>Open design decision</strong><h3>输出契约需要在实现前确认</h3><p>所有 Agent 继续使用统一 MoTA Payload，还是允许每个 Agent 配置独立 JSON Schema？</p></div>
-        <div class="decision-options"><span>统一 MoTA Envelope</span><span>Per-Agent JSON Schema</span><span>两者均支持</span></div>
+        <div><strong>Current contract</strong><h3>统一传输信封，按岗位校验内容</h3><p>对外继续使用统一 MoTA Payload，同时允许每个 Agent 保存输入与输出 JSON Schema。</p></div>
+        <div class="decision-options"><span>MoTA Envelope</span><span>Per-Agent JSON Schema</span><span>输出契约校验</span></div>
       </div>
     </section>
   </main>
 
   <footer>
     <div class="wrap footer-inner">
-      <span>MOTA AGENT FABRIC / TARGET ARCHITECTURE</span>
+      <span>MOTA AGENT SERVER / GO ARCHITECTURE</span>
       <span>STATIC DOCUMENT · <span id="year">2026</span></span>
     </div>
   </footer>
@@ -875,7 +876,7 @@
       },
       edge: {
         title: "HTTPS 入口",
-        copy: "由 Caddy、Nginx 或云负载均衡器终止 TLS，统一转发到 Axum；承担基础速率限制和请求体上限。",
+        copy: "由 Caddy、Nginx 或云负载均衡器终止 TLS，统一转发到 Go HTTP 服务；承担基础速率限制和请求体上限。",
         meta: ["infoman.ai", "TLS", "reverse proxy"]
       },
       "admin-surface": {
@@ -885,13 +886,13 @@
       },
       "config-service": {
         title: "Agent Config Service",
-        copy: "执行 slug 规范化、密钥引用检查、Schema 编译和执行器配置验证。只有完整有效的 revision 才能发布。",
+        copy: "执行 slug 规范化、签名密钥检查、Schema 编译和执行器配置验证。只有完整有效的 revision 才能发布。",
         meta: ["transaction", "validation", "revision"]
       },
       registry: {
         title: "Agent Registry",
         copy: "按 slug 提供不可变运行时快照。配置先完整验证并构建，再一次性替换，避免请求读取到半更新状态。",
-        meta: ["ArcSwap / RwLock", "revision-aware", "hot reload"]
+        meta: ["sync.RWMutex", "revision-aware", "hot reload"]
       },
       caller: {
         title: "调用方 / MoTA 平台",
@@ -901,7 +902,7 @@
       gateway: {
         title: "Agent Gateway",
         copy: "只注册一条 /agent/{slug} 路由。handler 查找 runtime 后按 Agent 配置执行签名、限流和协议选择。",
-        meta: ["Axum", "dynamic slug", "request guard"]
+        meta: ["Go HTTP", "dynamic slug", "request guard"]
       },
       adapter: {
         title: "协议适配器",
@@ -915,8 +916,8 @@
       },
       scheduler: {
         title: "Scheduler + Executor Router",
-        copy: "先获得全局和 Agent 两层容量配额，再依据 executor kind 分派到 Claude Code 或 Rust Agent。队列不会无限增长。",
-        meta: ["bounded queue", "Semaphore", "backpressure"]
+        copy: "先获得全局和 Agent 两层容量配额，再依执行类型分派到本地 CLI、网关、托管智能体或内置 Processor。队列不会无限增长。",
+        meta: ["bounded queue", "capacity permits", "backpressure"]
       }
     };
 

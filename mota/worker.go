@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -28,6 +29,20 @@ import (
 
 // claimRetryDelay 是 claim 请求失败/异常状态码后的重试等待。
 const claimRetryDelay = 1 * time.Second
+
+const (
+	// claimResponseBodyLimit follows the service's public 4 MiB request bound.
+	// A claimed task may contain the complete input envelope, so it needs more
+	// room than the small complete/heartbeat receipts.
+	claimResponseBodyLimit = 4 * 1024 * 1024
+	// queueReceiptResponseBodyLimit bounds complete receipts.
+	queueReceiptResponseBodyLimit = 64 * 1024
+	// heartbeatResponseBodyLimit also bounds audit output for Push heartbeats.
+	heartbeatResponseBodyLimit = 64 * 1024
+	// Server-controlled seconds are capped before time.Duration conversion to
+	// prevent uint64 overflow into a negative hot-loop interval.
+	maxHeartbeatIntervalSeconds uint64 = 60 * 60
+)
 
 type PullWorker struct {
 	cfg       *Config
@@ -54,7 +69,8 @@ func NewWorkerWithBackend(cfg *Config, execution *TaskExecutionBackend, token *s
 		execution: execution,
 		token:     token,
 		client: &http.Client{
-			Timeout: cfg.ClaimTimeout,
+			Timeout:       cfg.ClaimTimeout,
+			CheckRedirect: CredentialedRedirectPolicy,
 		},
 	}
 }
@@ -65,7 +81,7 @@ func (w *PullWorker) Start() {
 	w.wg.Add(2)
 	go w.claimLoop(ctx)
 	go w.heartbeatLoop(ctx)
-	slog.Info("pull worker started", "queue", w.cfg.QueueURL, "worker_id", w.cfg.WorkerID)
+	slog.Info("pull worker started", "queue_origin", callbackOrigin(w.cfg.QueueURL), "worker_id", w.cfg.WorkerID)
 }
 
 func (w *PullWorker) Stop() {
@@ -97,7 +113,7 @@ func (w *PullWorker) claimLoop(ctx context.Context) {
 		switch resp.StatusCode {
 		case http.StatusOK:
 			var claim ClaimResponse
-			if err := decodeJSON(resp, &claim); err != nil {
+			if err := decodeJSON(resp, &claim, claimResponseBodyLimit); err != nil {
 				slog.Warn("claim: failed to parse 200 body", "err", err)
 				if !w.retryAfterDelay(ctx) {
 					return
@@ -184,8 +200,19 @@ func (w *PullWorker) handleTask(ctx context.Context, claim ClaimResponse) {
 
 	resultCh := make(chan *processResult, 1)
 	go func() {
-		out, err := w.execution.Execute(taskCtx, agentCode, task, rawInput, w.cfg.TaskTimeout)
-		resultCh <- &processResult{out: out, err: err}
+		result := &processResult{}
+		defer func() {
+			if recover() != nil {
+				result.out = nil
+				result.err = errors.New("pull task execution panicked")
+			}
+			resultCh <- result
+		}()
+		result.out, result.err = w.execution.Execute(
+			taskCtx, agentCode, task, rawInput, w.cfg.TaskTimeout)
+		if result.err == nil && result.out == nil {
+			result.err = errors.New("pull task execution returned no output")
+		}
 	}()
 
 	select {
@@ -301,6 +328,10 @@ func (w *PullWorker) renewLoop(ctx context.Context, runID string) {
 // checks、交易 orders 等岗位专属 payload_result;信封必须携带 usage
 // (RULE-BND-001,缺计量时兜底最小合规值)。
 func (w *PullWorker) completeTask(ctx context.Context, runID string, out *ProcessedOutput, errorInfo *string) {
+	if out == nil {
+		slog.Error("complete suppressed because task output is nil", "run_id", runID)
+		return
+	}
 	trusted := w.cfg.TrustedUsageReportingEnabled
 	if trusted && out.Usage == nil {
 		slog.Warn("trusted Pull result has no FINAL provider usage; complete suppressed", "run_id", runID)
@@ -327,7 +358,7 @@ func (w *PullWorker) completeTask(ctx context.Context, runID string, out *Proces
 		return
 	}
 	var receipt CompleteResponse
-	if err := decodeJSON(resp, &receipt); err != nil {
+	if err := decodeJSON(resp, &receipt, queueReceiptResponseBodyLimit); err != nil {
 		slog.Warn("complete: failed to parse receipt", "run_id", runID, "err", err)
 		return
 	}
@@ -353,19 +384,26 @@ func (w *PullWorker) heartbeatLoop(ctx context.Context) {
 		case <-time.After(interval):
 			resp, err := w.doPost(ctx, "/heartbeat", map[string]string{"workerId": w.cfg.WorkerID}, nil, nil)
 			if err != nil {
-				slog.Warn("heartbeat: request failed", "err", err)
+				slog.Warn("heartbeat: request failed",
+					"queue_origin", callbackOrigin(w.cfg.QueueURL),
+					"error_kind", callbackRequestErrorKind(err))
 				continue
 			}
 			if resp.StatusCode == http.StatusOK {
 				var hb HeartbeatResponse
-				if err := decodeJSON(resp, &hb); err == nil && hb.HeartbeatIntervalSeconds != nil && *hb.HeartbeatIntervalSeconds > 0 {
-					interval = time.Duration(*hb.HeartbeatIntervalSeconds) * time.Second
+				if err := decodeJSON(resp, &hb, heartbeatResponseBodyLimit); err != nil {
+					slog.Warn("heartbeat: invalid response body", "err", err)
+					continue
+				}
+				if hb.HeartbeatIntervalSeconds != nil && *hb.HeartbeatIntervalSeconds > 0 {
+					seconds := min(*hb.HeartbeatIntervalSeconds, maxHeartbeatIntervalSeconds)
+					interval = time.Duration(seconds) * time.Second
 				}
 				slog.Debug("heartbeat ok", "interval", interval.String())
 			} else {
 				slog.Warn("heartbeat: unexpected status", "status", resp.StatusCode)
+				closeBody(resp)
 			}
-			closeBody(resp)
 		}
 	}
 }
@@ -400,7 +438,7 @@ func RunPushHeartbeat(cfg *Config, execution *TaskExecutionBackend, token *shutd
 		return
 	}
 	ctx := token.Context()
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := newPushHeartbeatHTTPClient()
 	defaultInterval := cfg.HeartbeatInterval
 	if defaultInterval < 5*time.Second {
 		defaultInterval = 5 * time.Second
@@ -410,7 +448,8 @@ func RunPushHeartbeat(cfg *Config, execution *TaskExecutionBackend, token *shutd
 	// 每个 Agent(通道)各自维护:是否需自检、心跳周期、上次发送时间。
 	states := map[string]*agentHeartbeatState{}
 
-	slog.Info("push heartbeat started (per-agent Bearer keys)", "url", heartbeatURL)
+	heartbeatOrigin := callbackOrigin(heartbeatURL)
+	slog.Info("push heartbeat started (per-agent Bearer keys)", "heartbeat_origin", heartbeatOrigin)
 	for {
 		select {
 		case <-ctx.Done():
@@ -454,10 +493,11 @@ func sendAgentHeartbeat(
 	taskTimeout time.Duration,
 ) {
 	body := map[string]any{}
+	heartbeatOrigin := callbackOrigin(heartbeatURL)
 	var selfCheckPass bool
 	var selfCheckLatencyMs int64
 	var selfCheckErr string
-	ranSelfCheck := state.selfCheckDue
+	ranSelfCheck := consumeSelfCheckRequest(state)
 	if ranSelfCheck {
 		// 真自检:真跑一次最短任务,证明「收任务 → 出结果」整条链路是活的。
 		// 端口通不算;跑挂了就如实报 pass:false,让平台标记 degraded 而不是继续派活。
@@ -484,48 +524,60 @@ func sendAgentHeartbeat(
 	var statusCode *int64
 	var detail *string
 	responseText := ""
+	responseAccepted := false
 	if err != nil {
-		text := err.Error()
+		text := "invalid heartbeat request"
 		detail = &text
 	} else {
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+agentSecret)
 		resp, sendErr := client.Do(req)
 		if sendErr != nil {
-			slog.Warn("push heartbeat failed", "agent", agentSlug, "err", sendErr)
-			text := "heartbeat request failed: " + sendErr.Error()
+			slog.Warn("push heartbeat failed", "agent", agentSlug,
+				"heartbeat_origin", heartbeatOrigin,
+				"error_kind", callbackRequestErrorKind(sendErr))
+			text := "heartbeat request failed"
 			detail = &text
 			encoded, _ := json.Marshal(map[string]string{"error": text})
 			responseText = string(encoded)
 		} else {
-			raw, readErr := io.ReadAll(resp.Body)
-			_ = resp.Body.Close()
+			raw, readErr := readHeartbeatResponse(resp.Body)
+			closeBody(resp)
 			if readErr != nil {
-				raw = []byte(`{"error":"read heartbeat response failed"}`)
+				text := readErr.Error()
+				detail = &text
+				raw = []byte(`{"error":"invalid heartbeat response body"}`)
 			}
 			responseText = string(raw)
 			status := int64(resp.StatusCode)
 			statusCode = &status
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				var hb HeartbeatResponse
-				if err := json.Unmarshal(raw, &hb); err == nil {
-					if hb.HeartbeatIntervalSeconds != nil && *hb.HeartbeatIntervalSeconds >= 5 {
-						state.intervalSecs = *hb.HeartbeatIntervalSeconds
-					} else if hb.HeartbeatIntervalSeconds != nil && *hb.HeartbeatIntervalSeconds > 0 {
-						state.intervalSecs = 5
+				if readErr == nil {
+					if err := applyHeartbeatResponse(state, raw); err == nil {
+						responseAccepted = true
+					} else {
+						text := "invalid heartbeat response"
+						detail = &text
 					}
-					state.selfCheckDue = hb.SelfCheckRequired
 				}
-				slog.Debug("push heartbeat ok", "agent", agentSlug)
+				if responseAccepted {
+					slog.Debug("push heartbeat ok", "agent", agentSlug,
+						"heartbeat_origin", heartbeatOrigin)
+				} else {
+					slog.Warn("push heartbeat returned an invalid response", "agent", agentSlug,
+						"heartbeat_origin", heartbeatOrigin, "response_bytes", len(raw))
+				}
 			} else {
 				slog.Warn("push heartbeat rejected", "agent", agentSlug, "status", resp.StatusCode)
-				text := fmt.Sprintf("heartbeat rejected with %d", resp.StatusCode)
-				detail = &text
+				if detail == nil {
+					text := fmt.Sprintf("heartbeat rejected with %d", resp.StatusCode)
+					detail = &text
+				}
 			}
 		}
 	}
 
-	transportOK := statusCode != nil && *statusCode >= 200 && *statusCode < 300
+	transportOK := statusCode != nil && *statusCode >= 200 && *statusCode < 300 && responseAccepted
 	if !transportOK {
 		// 失败时退避 5s,避免对平台造成压力。
 		select {
@@ -551,7 +603,7 @@ func sendAgentHeartbeat(
 	inputJSON := string(requestJSON)
 	if err := store.RecordChannelEvent(ctx, ChannelEventRecord{
 		EventType: "heartbeat", AgentSlug: &agentSlug,
-		URL: heartbeatURL, StatusCode: statusCode,
+		URL: heartbeatOrigin, StatusCode: statusCode,
 		Pass: &pass, LatencyMs: &heartbeatMs,
 		Detail: detail, Input: &inputJSON, Output: &responseText,
 	}); err != nil {
@@ -561,20 +613,85 @@ func sendAgentHeartbeat(
 
 // runAgentSelfCheck 真跑一次最短任务,返回 (是否通过, 耗时毫秒, 错误信息)。
 // 链路包括解析任务信封 → 执行 → 产出结果信封的完整通路。
-func runAgentSelfCheck(execution *TaskExecutionBackend, agentSlug string, timeout time.Duration) (bool, int64, string) {
+func runAgentSelfCheck(
+	execution *TaskExecutionBackend,
+	agentSlug string,
+	timeout time.Duration,
+) (pass bool, latencyMs int64, errorMessage string) {
 	selfCheckRunID := "self-check"
 	task := &TaskContext{RunID: &selfCheckRunID, Params: map[string]any{}}
 	started := time.Now()
+	defer func() {
+		latencyMs = time.Since(started).Milliseconds()
+		if recover() != nil {
+			pass = false
+			errorMessage = "self-check execution panicked"
+		}
+	}()
 	out, err := execution.Execute(context.Background(), agentSlug, task, map[string]any{}, timeout)
-	latencyMs := time.Since(started).Milliseconds()
 	if err != nil {
-		return false, latencyMs, err.Error()
+		slog.Warn("push heartbeat self-check execution failed", "agent", agentSlug, "err", err)
+		return false, latencyMs, "self-check execution failed"
+	}
+	if out == nil {
+		return false, latencyMs, "self-check returned no output"
 	}
 	payload := out.ToPayload()
 	if _, err := json.Marshal(payload); err != nil {
 		return false, latencyMs, "envelope serialize failed: " + err.Error()
 	}
 	return true, latencyMs, ""
+}
+
+func newPushHeartbeatHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout:       30 * time.Second,
+		CheckRedirect: CredentialedRedirectPolicy,
+	}
+}
+
+// consumeSelfCheckRequest consumes one platform request before doing the paid
+// check. A failed heartbeat therefore does not repeat the check every cycle;
+// only a later valid receipt can explicitly arm another check.
+func consumeSelfCheckRequest(state *agentHeartbeatState) bool {
+	if state == nil || !state.selfCheckDue {
+		return false
+	}
+	state.selfCheckDue = false
+	return true
+}
+
+// applyHeartbeatResponse updates scheduling state only after a complete valid
+// JSON receipt was received over a successful 2xx response.
+func applyHeartbeatResponse(state *agentHeartbeatState, raw []byte) error {
+	if state == nil {
+		return errors.New("heartbeat state is missing")
+	}
+	var heartbeat *HeartbeatResponse
+	if err := json.Unmarshal(raw, &heartbeat); err != nil || heartbeat == nil {
+		return errors.New("invalid heartbeat response")
+	}
+	if heartbeat.HeartbeatIntervalSeconds != nil && *heartbeat.HeartbeatIntervalSeconds >= 5 {
+		state.intervalSecs = min(*heartbeat.HeartbeatIntervalSeconds, maxHeartbeatIntervalSeconds)
+	} else if heartbeat.HeartbeatIntervalSeconds != nil && *heartbeat.HeartbeatIntervalSeconds > 0 {
+		state.intervalSecs = 5
+	}
+	state.selfCheckDue = heartbeat.SelfCheckRequired
+	return nil
+}
+
+func readHeartbeatResponse(body io.Reader) ([]byte, error) {
+	if body == nil {
+		return nil, errors.New("heartbeat response body is missing")
+	}
+	raw, err := io.ReadAll(io.LimitReader(body, heartbeatResponseBodyLimit+1))
+	if err != nil {
+		return nil, errors.New("read heartbeat response failed")
+	}
+	if len(raw) > heartbeatResponseBodyLimit {
+		return nil, fmt.Errorf("heartbeat response exceeded %d bytes", heartbeatResponseBodyLimit)
+	}
+	return raw, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -609,9 +726,22 @@ func (w *PullWorker) doPost(
 	return w.client.Do(req)
 }
 
-func decodeJSON(resp *http.Response, v any) error {
+func decodeJSON(resp *http.Response, v any, limit int64) error {
 	defer closeBody(resp)
-	return json.NewDecoder(resp.Body).Decode(v)
+	if resp == nil || resp.Body == nil {
+		return errors.New("response body is missing")
+	}
+	if limit <= 0 {
+		return errors.New("response body limit must be positive")
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return errors.New("read response body failed")
+	}
+	if int64(len(raw)) > limit {
+		return fmt.Errorf("response body exceeded %d bytes", limit)
+	}
+	return json.Unmarshal(raw, v)
 }
 
 func closeBody(resp *http.Response) {

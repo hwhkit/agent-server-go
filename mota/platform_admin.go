@@ -4,16 +4,20 @@ package mota
 // 对应 Rust 侧 src/platform/admin.rs。
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/netip"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 //go:embed web/admin.html
@@ -59,6 +63,30 @@ func writeAdminError(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Cache-Control", adminNoStore)
 	w.WriteHeader(status)
 	_, _ = io.WriteString(w, serializedError(code, message))
+}
+
+// decodeAdminJSON enforces the configured byte limit, exactly one JSON value,
+// and rejects unknown fields for typed request structures.
+func decodeAdminJSON(r *http.Request, maxBytes int, target any) error {
+	raw, err := io.ReadAll(io.LimitReader(r.Body, int64(maxBytes)+1))
+	if err != nil {
+		return err
+	}
+	if len(raw) > maxBytes {
+		return errors.New("request body exceeded configured limit")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("request body contains multiple JSON values")
+		}
+		return err
+	}
+	return nil
 }
 
 // writeStorageError 记录并返回统一的存储故障响应。
@@ -188,21 +216,46 @@ func (a *AdminHandler) adminPage(w http.ResponseWriter) {
 // ---------------------------------------------------------------------------
 
 func (a *AdminHandler) listProviders(w http.ResponseWriter, r *http.Request) {
-	if _, ok := a.requireSession(w, r, false); !ok {
+	session, ok := a.requireSession(w, r, false)
+	if !ok {
 		return
 	}
-	writeAdminData(w, http.StatusOK, ListProviders(a.State.ConfigSnapshot()))
+	a.State.Mutation.Lock()
+	defer a.State.Mutation.Unlock()
+	current, revisions, _, err := LoadConsistentProviderSnapshot(
+		r.Context(), a.State.Store, a.State.ConfigSnapshot())
+	if err != nil {
+		writeStorageError(w, err, "list Provider snapshot")
+		return
+	}
+	a.State.ApplyConfig(current)
+	views := ListProviders(current)
+	for index := range views {
+		views[index].Revision = revisions[views[index].ID]
+		if session.Role != UserRoleAdmin {
+			// Standard users may observe availability/assignments, but do not need
+			// infrastructure URLs, local binary paths or editable settings.
+			views[index].Config = map[string]any{}
+			views[index].Editable = false
+		}
+	}
+	writeAdminData(w, http.StatusOK, views)
 }
 
 func (a *AdminHandler) updateProvider(w http.ResponseWriter, r *http.Request, providerID string) {
-	session, ok := a.requireSession(w, r, true)
+	session, ok := a.requireAdminSession(w, r, true)
 	if !ok {
+		return
+	}
+	expectedRevision, err := parseProviderIfMatch(r)
+	if err != nil {
+		writeAdminError(w, http.StatusBadRequest, "invalid_if_match",
+			"If-Match 必须是一个带引号的非负整数配置 revision")
 		return
 	}
 	config := a.State.ConfigSnapshot()
 	var payload map[string]any
-	if err := json.NewDecoder(io.LimitReader(r.Body,
-		int64(config.MaxRequestBodyBytes)+1)).Decode(&payload); err != nil {
+	if err := decodeAdminJSON(r, config.MaxRequestBodyBytes, &payload); err != nil {
 		writeAdminError(w, http.StatusBadRequest, "invalid_provider_config",
 			"智能体 Provider 配置格式不正确："+err.Error())
 		return
@@ -210,28 +263,85 @@ func (a *AdminHandler) updateProvider(w http.ResponseWriter, r *http.Request, pr
 
 	a.State.Mutation.Lock()
 	defer a.State.Mutation.Unlock()
-	next, stored, err := UpdateProvider(a.State.ConfigSnapshot(), providerID, payload)
-	if err != nil {
-		writeAdminError(w, http.StatusUnprocessableEntity, "invalid_provider_config", err.Error())
-		return
-	}
-	ctx := mutationContext(r)
-	if err := a.State.Store.PutExecutorProvider(ctx, providerID, stored); err != nil {
+	ctx, cancel := mutationContext(r)
+	defer cancel()
+	var next *PlatformConfig
+	var revision int64
+	for attempt := 0; ; attempt++ {
+		current, revisions, _, loadErr := LoadConsistentProviderSnapshot(
+			ctx, a.State.Store, a.State.ConfigSnapshot())
+		if loadErr != nil {
+			writeStorageError(w, loadErr, "load Provider snapshot")
+			return
+		}
+		next, _, err = UpdateProvider(current, providerID, payload)
+		if err != nil {
+			writeAdminError(w, http.StatusUnprocessableEntity, "invalid_provider_config", err.Error())
+			return
+		}
+		stored, groupErr := StoredProviderUpdateGroup(next, providerID)
+		if groupErr != nil {
+			writeAdminError(w, http.StatusUnprocessableEntity, "invalid_provider_config", groupErr.Error())
+			return
+		}
+		writeRevision := expectedRevision
+		if writeRevision == nil {
+			snapshotRevision := revisions[providerID]
+			writeRevision = &snapshotRevision
+		}
+		revision, err = a.State.Store.PutExecutorProviderGroupIfRevisionAudited(
+			ctx, providerID, stored, writeRevision, AuditEvent{
+				Actor: session.Username, Action: "provider.update", Target: providerID,
+				Details: map[string]any{"providerId": providerID},
+			})
+		if err == nil {
+			break
+		}
+		if expectedRevision == nil && errors.Is(err, ErrStaleProviderRevision) && attempt < 2 {
+			continue
+		}
+		if errors.Is(err, ErrStaleProviderRevision) {
+			writeAdminError(w, http.StatusPreconditionFailed, "stale_provider_revision",
+				"执行职能体配置已变化，请刷新后重试")
+			return
+		}
 		writeStorageError(w, err, "update provider")
 		return
 	}
-	a.State.ApplyConfig(next)
-	if err := a.State.Store.RecordAudit(ctx, session.Username, "provider.update", providerID,
-		map[string]any{"providerId": providerID}); err != nil {
-		slog.Warn("record provider audit failed", "provider", providerID, "error", err)
+	// 提交后重新读取一个带 revision 栅栏的快照，避免发布覆盖其他副本在本次
+	// 写入期间提交的不同 Provider 变更。失败时保留旧快照，后台刷新会重试。
+	if latest, _, _, loadErr := LoadConsistentProviderSnapshot(ctx, a.State.Store, next); loadErr == nil {
+		a.State.ApplyConfig(latest)
+	} else {
+		slog.Warn("reload Provider state after save failed", "provider", providerID, "error", loadErr)
 	}
 	for _, view := range ListProviders(next) {
 		if view.ID == providerID {
+			view.Revision = revision
 			writeAdminData(w, http.StatusOK, view)
 			return
 		}
 	}
 	writeAdminError(w, http.StatusNotFound, "provider_not_found", "智能体 Provider 不存在")
+}
+
+func parseProviderIfMatch(r *http.Request) (*int64, error) {
+	values := r.Header.Values("If-Match")
+	if len(values) == 0 {
+		return nil, nil
+	}
+	if len(values) != 1 || strings.Contains(values[0], ",") {
+		return nil, errors.New("If-Match must contain one revision")
+	}
+	value := strings.TrimSpace(values[0])
+	if len(value) < 2 || value[0] != '"' || value[len(value)-1] != '"' {
+		return nil, errors.New("If-Match revision must be quoted")
+	}
+	revision, err := strconv.ParseInt(value[1:len(value)-1], 10, 64)
+	if err != nil || revision < 0 {
+		return nil, errors.New("If-Match revision is invalid")
+	}
+	return &revision, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -291,8 +401,7 @@ func (a *AdminHandler) login(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
-	if err := json.NewDecoder(io.LimitReader(r.Body,
-		int64(a.State.ConfigSnapshot().MaxRequestBodyBytes)+1)).Decode(&payload); err != nil {
+	if err := decodeAdminJSON(r, a.State.ConfigSnapshot().MaxRequestBodyBytes, &payload); err != nil {
 		writeAdminError(w, http.StatusBadRequest, "invalid_request", "登录请求格式不正确")
 		return
 	}
@@ -302,7 +411,9 @@ func (a *AdminHandler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	outcome, err := a.State.Auth.Login(r.Context(), strings.TrimSpace(payload.Username), payload.Password)
+	outcome, err := a.State.Auth.LoginFromSource(
+		r.Context(), strings.TrimSpace(payload.Username), payload.Password,
+		directLoginSource(r, a.State.ConfigSnapshot().AdminTrustedProxyCIDRs))
 	if err != nil {
 		slog.Error("admin login failed", "error", err)
 		writeAdminError(w, http.StatusInternalServerError, "login_unavailable", "登录服务暂时不可用")
@@ -333,6 +444,39 @@ func (a *AdminHandler) login(w http.ResponseWriter, r *http.Request) {
 		a.recordLoginFailure(r.Context(), "invalid_credentials")
 		writeAdminError(w, http.StatusUnauthorized, "invalid_credentials", "用户名或密码不正确")
 	}
+}
+
+func directLoginSource(r *http.Request, trustedCIDRs []string) string {
+	peer := strings.TrimSpace(r.RemoteAddr)
+	if host, _, err := net.SplitHostPort(peer); err == nil {
+		peer = host
+	}
+	peerAddr, err := netip.ParseAddr(peer)
+	if err != nil || !addressInCIDRs(peerAddr, trustedCIDRs) {
+		return peer
+	}
+	forwarded := strings.Join(r.Header.Values("X-Forwarded-For"), ",")
+	parts := strings.Split(forwarded, ",")
+	for index := len(parts) - 1; index >= 0; index-- {
+		candidate, err := netip.ParseAddr(strings.TrimSpace(parts[index]))
+		if err != nil {
+			return peer
+		}
+		if !addressInCIDRs(candidate, trustedCIDRs) {
+			return candidate.String()
+		}
+	}
+	return peer
+}
+
+func addressInCIDRs(address netip.Addr, cidrs []string) bool {
+	for _, raw := range cidrs {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(raw))
+		if err == nil && prefix.Contains(address) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *AdminHandler) session(w http.ResponseWriter, r *http.Request) {
@@ -396,7 +540,7 @@ func (a *AdminHandler) createUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input createUserInput
-	if err := json.NewDecoder(io.LimitReader(r.Body, int64(a.State.ConfigSnapshot().MaxRequestBodyBytes)+1)).Decode(&input); err != nil {
+	if err := decodeAdminJSON(r, a.State.ConfigSnapshot().MaxRequestBodyBytes, &input); err != nil {
 		writeAdminError(w, http.StatusBadRequest, "invalid_user", "账号格式不正确："+err.Error())
 		return
 	}
@@ -421,8 +565,13 @@ func (a *AdminHandler) createUser(w http.ResponseWriter, r *http.Request) {
 
 	a.State.AccountMutation.Lock()
 	defer a.State.AccountMutation.Unlock()
-	ctx := mutationContext(r)
-	created, err := a.State.Store.CreateUser(ctx, username, passwordHash, input.Role)
+	ctx, cancel := mutationContext(r)
+	defer cancel()
+	created, err := a.State.Store.CreateUserAudited(
+		ctx, username, passwordHash, input.Role, AuditEvent{
+			Actor: session.Username, Action: "user.create", Target: username,
+			Details: map[string]any{"role": string(input.Role), "enabled": true},
+		})
 	if err != nil {
 		writeStorageError(w, err, "create user")
 		return
@@ -430,10 +579,6 @@ func (a *AdminHandler) createUser(w http.ResponseWriter, r *http.Request) {
 	if !created {
 		writeAdminError(w, http.StatusConflict, "username_exists", "用户名已存在")
 		return
-	}
-	if err := a.State.Store.RecordAudit(ctx, session.Username, "user.create", username,
-		map[string]any{"role": string(input.Role), "enabled": true}); err != nil {
-		slog.Warn("record user create audit failed", "user", username, "error", err)
 	}
 	user, err := a.State.Store.GetUser(ctx, username)
 	if err != nil || user == nil {
@@ -452,7 +597,7 @@ func (a *AdminHandler) updateUser(w http.ResponseWriter, r *http.Request, userna
 		return
 	}
 	var input updateUserInput
-	if err := json.NewDecoder(io.LimitReader(r.Body, int64(a.State.ConfigSnapshot().MaxRequestBodyBytes)+1)).Decode(&input); err != nil {
+	if err := decodeAdminJSON(r, a.State.ConfigSnapshot().MaxRequestBodyBytes, &input); err != nil {
 		writeAdminError(w, http.StatusBadRequest, "invalid_user", "账号格式不正确："+err.Error())
 		return
 	}
@@ -479,7 +624,8 @@ func (a *AdminHandler) updateUser(w http.ResponseWriter, r *http.Request, userna
 
 	a.State.AccountMutation.Lock()
 	defer a.State.AccountMutation.Unlock()
-	ctx := mutationContext(r)
+	ctx, cancel := mutationContext(r)
+	defer cancel()
 	current, err := a.State.Store.GetUser(ctx, username)
 	if err != nil {
 		writeStorageError(w, err, "get user")
@@ -493,29 +639,25 @@ func (a *AdminHandler) updateUser(w http.ResponseWriter, r *http.Request, userna
 		writeAdminError(w, http.StatusUnprocessableEntity, "cannot_demote_self", "不能降级或停用当前登录账号")
 		return
 	}
-	if current.Role == UserRoleAdmin && current.Enabled && (input.Role != UserRoleAdmin || !input.Enabled) {
-		count, err := a.State.Store.EnabledAdminCount(ctx)
-		if err != nil {
-			writeStorageError(w, err, "count enabled admins")
-			return
-		}
-		if count <= 1 {
+	updated, err := a.State.Store.UpdateUserAudited(
+		ctx, username, passwordHash, input.Role, input.Enabled, AuditEvent{
+			Actor: session.Username, Action: "user.update", Target: username,
+			Details: map[string]any{
+				"role": string(input.Role), "enabled": input.Enabled,
+				"passwordChanged": passwordHash != nil,
+			},
+		})
+	if err != nil {
+		if errors.Is(err, ErrLastEnabledAdmin) {
 			writeAdminError(w, http.StatusUnprocessableEntity, "last_admin_required", "系统必须保留至少一个已启用的管理员")
 			return
 		}
-	}
-	updated, err := a.State.Store.UpdateUser(ctx, username, passwordHash, input.Role, input.Enabled)
-	if err != nil {
 		writeStorageError(w, err, "update user")
 		return
 	}
 	if updated == nil {
 		writeAdminError(w, http.StatusNotFound, "user_not_found", "账号不存在")
 		return
-	}
-	if err := a.State.Store.RecordAudit(ctx, session.Username, "user.update", username,
-		map[string]any{"role": string(input.Role), "enabled": input.Enabled, "passwordChanged": passwordHash != nil}); err != nil {
-		slog.Warn("record user update audit failed", "user", username, "error", err)
 	}
 	writeAdminData(w, http.StatusOK, updated)
 }
@@ -531,7 +673,8 @@ func (a *AdminHandler) deleteUser(w http.ResponseWriter, r *http.Request, userna
 	}
 	a.State.AccountMutation.Lock()
 	defer a.State.AccountMutation.Unlock()
-	ctx := mutationContext(r)
+	ctx, cancel := mutationContext(r)
+	defer cancel()
 	current, err := a.State.Store.GetUser(ctx, username)
 	if err != nil {
 		writeStorageError(w, err, "get user")
@@ -541,28 +684,21 @@ func (a *AdminHandler) deleteUser(w http.ResponseWriter, r *http.Request, userna
 		writeAdminError(w, http.StatusNotFound, "user_not_found", "账号不存在")
 		return
 	}
-	if current.Role == UserRoleAdmin && current.Enabled {
-		count, err := a.State.Store.EnabledAdminCount(ctx)
-		if err != nil {
-			writeStorageError(w, err, "count enabled admins")
-			return
-		}
-		if count <= 1 {
+	deleted, err := a.State.Store.DeleteUserAudited(ctx, username, AuditEvent{
+		Actor: session.Username, Action: "user.delete", Target: username,
+		Details: map[string]any{},
+	})
+	if err != nil {
+		if errors.Is(err, ErrLastEnabledAdmin) {
 			writeAdminError(w, http.StatusUnprocessableEntity, "last_admin_required", "系统必须保留至少一个已启用的管理员")
 			return
 		}
-	}
-	deleted, err := a.State.Store.DeleteUser(ctx, username)
-	if err != nil {
 		writeStorageError(w, err, "delete user")
 		return
 	}
 	if !deleted {
 		writeAdminError(w, http.StatusNotFound, "user_not_found", "账号不存在")
 		return
-	}
-	if err := a.State.Store.RecordAudit(ctx, session.Username, "user.delete", username, map[string]any{}); err != nil {
-		slog.Warn("record user delete audit failed", "user", username, "error", err)
 	}
 	writeAdminData(w, http.StatusOK, map[string]any{"deleted": true})
 }
@@ -645,8 +781,7 @@ func (a *AdminHandler) decodeAgentInput(
 	requireSecret bool,
 ) (*AgentInput, bool) {
 	var input AgentInput
-	if err := json.NewDecoder(io.LimitReader(r.Body,
-		int64(a.State.ConfigSnapshot().MaxRequestBodyBytes)+1)).Decode(&input); err != nil {
+	if err := decodeAdminJSON(r, a.State.ConfigSnapshot().MaxRequestBodyBytes, &input); err != nil {
 		writeAdminError(w, http.StatusBadRequest, "invalid_agent_config",
 			"Agent 配置格式不正确："+err.Error())
 		return nil, false
@@ -719,7 +854,7 @@ func (a *AdminHandler) validateWorkspace(input *AgentInput) (int, string, string
 }
 
 func (a *AdminHandler) createAgent(w http.ResponseWriter, r *http.Request) {
-	session, ok := a.requireSession(w, r, true)
+	session, ok := a.requireAdminSession(w, r, true)
 	if !ok {
 		return
 	}
@@ -732,7 +867,8 @@ func (a *AdminHandler) createAgent(w http.ResponseWriter, r *http.Request) {
 	a.State.Mutation.Lock()
 	defer a.State.Mutation.Unlock()
 
-	ctx := mutationContext(r)
+	ctx, cancel := mutationContext(r)
+	defer cancel()
 	existing, err := a.State.Store.GetAgent(ctx, input.Slug)
 	if err != nil {
 		writeStorageError(w, err, "create agent")
@@ -742,19 +878,31 @@ func (a *AdminHandler) createAgent(w http.ResponseWriter, r *http.Request) {
 		writeAdminError(w, http.StatusConflict, "slug_exists", "该 slug 已被其他 Agent 使用")
 		return
 	}
-	agent, err := a.State.Store.CreateAgent(ctx, input)
+	agent, err := a.State.Store.CreateAgentAudited(ctx, input, AuditEvent{
+		Actor: session.Username, Action: "agent.create", Target: input.Slug,
+		Details: map[string]any{"secretRotated": true},
+	})
 	if err != nil {
+		if errors.Is(err, ErrAgentSlugExists) {
+			writeAdminError(w, http.StatusConflict, "slug_exists", "该 slug 已被其他 Agent 使用")
+			return
+		}
 		writeStorageError(w, err, "create agent")
 		return
 	}
 	a.State.Registry.Replace(agent)
-	a.recordAgentAudit(ctx, session.Username, "agent.create", agent, true)
 	writeAdminData(w, http.StatusCreated, agent.ToView(a.State.ConfigSnapshot().PublicBaseURL))
 }
 
 func (a *AdminHandler) updateAgent(w http.ResponseWriter, r *http.Request, slug string) {
-	session, ok := a.requireSession(w, r, true)
+	session, ok := a.requireAdminSession(w, r, true)
 	if !ok {
+		return
+	}
+	expectedRevision, err := parseProviderIfMatch(r)
+	if err != nil {
+		writeAdminError(w, http.StatusBadRequest, "invalid_if_match",
+			"If-Match 必须是一个带引号的非负整数 revision")
 		return
 	}
 	input, ok := a.decodeAgentInput(w, r, slug, false)
@@ -767,9 +915,19 @@ func (a *AdminHandler) updateAgent(w http.ResponseWriter, r *http.Request, slug 
 	a.State.Mutation.Lock()
 	defer a.State.Mutation.Unlock()
 
-	ctx := mutationContext(r)
-	agent, err := a.State.Store.UpdateAgent(ctx, slug, input)
+	ctx, cancel := mutationContext(r)
+	defer cancel()
+	agent, err := a.State.Store.UpdateAgentIfRevisionAudited(
+		ctx, slug, input, expectedRevision, AuditEvent{
+			Actor: session.Username, Action: "agent.update", Target: slug,
+			Details: map[string]any{"secretRotated": secretRotated},
+		})
 	if err != nil {
+		if errors.Is(err, ErrStaleAgentRevision) {
+			writeAdminError(w, http.StatusPreconditionFailed, "stale_agent_revision",
+				"岗位职能体配置已变化，请刷新后重试")
+			return
+		}
 		writeStorageError(w, err, "update agent")
 		return
 	}
@@ -778,20 +936,23 @@ func (a *AdminHandler) updateAgent(w http.ResponseWriter, r *http.Request, slug 
 		return
 	}
 	a.State.Registry.Replace(agent)
-	a.recordAgentAudit(ctx, session.Username, "agent.update", agent, secretRotated)
 	writeAdminData(w, http.StatusOK, agent.ToView(a.State.ConfigSnapshot().PublicBaseURL))
 }
 
 func (a *AdminHandler) deleteAgent(w http.ResponseWriter, r *http.Request, slug string) {
-	session, ok := a.requireSession(w, r, true)
+	session, ok := a.requireAdminSession(w, r, true)
 	if !ok {
 		return
 	}
 	a.State.Mutation.Lock()
 	defer a.State.Mutation.Unlock()
 
-	ctx := mutationContext(r)
-	deleted, err := a.State.Store.DeleteAgent(ctx, slug)
+	ctx, cancel := mutationContext(r)
+	defer cancel()
+	deleted, err := a.State.Store.DeleteAgentAudited(ctx, slug, AuditEvent{
+		Actor: session.Username, Action: "agent.delete", Target: slug,
+		Details: map[string]any{},
+	})
 	if err != nil {
 		writeStorageError(w, err, "delete agent")
 		return
@@ -801,45 +962,27 @@ func (a *AdminHandler) deleteAgent(w http.ResponseWriter, r *http.Request, slug 
 		return
 	}
 	a.State.Registry.Remove(slug)
-	if err := a.State.Store.RecordAudit(ctx, session.Username,
-		"agent.delete", slug, map[string]any{}); err != nil {
-		slog.Warn("record agent delete audit failed", "agent", slug, "error", err)
-	}
 	writeAdminData(w, http.StatusOK, map[string]any{"deleted": true})
 }
 
-// mutationContext 返回一个**不随请求取消**的上下文。
+const mutationContextTimeout = 10 * time.Second
+
+// mutationContext 返回一个**不随请求取消**、但有明确上限的上下文。
 //
 // rs 侧把 Agent 变更放进 detached task,正是为了让 HTTP 取消无法在
 // 「已写库、未应用到 Registry」之间把状态劈成两半。Go 的 handler 不会被中止,
 // 但 r.Context() 会在客户端断开时取消并让写库中途失败 —— 所以这里剥掉取消信号,
-// 只保留请求携带的值。
-func mutationContext(r *http.Request) context.Context {
-	return context.WithoutCancel(r.Context())
-}
-
-// recordAgentAudit 记录 Agent 创建/更新的审计明细。
-func (a *AdminHandler) recordAgentAudit(
-	ctx context.Context,
-	actor, action string,
-	agent *AgentConfig,
-	secretRotated bool,
-) {
-	if err := a.State.Store.RecordAudit(ctx, actor, action, agent.Slug, map[string]any{
-		"revision":      agent.Revision,
-		"enabled":       agent.Enabled,
-		"executorKind":  agent.ExecutorKind,
-		"secretRotated": secretRotated,
-	}); err != nil {
-		slog.Warn("record agent audit failed", "agent", agent.Slug, "error", err)
-	}
+// 只保留请求携带的值。新的 10 秒 deadline 防止 PostgreSQL 异常时持有
+// Mutation / AccountMutation 全局锁无限等待。
+func mutationContext(r *http.Request) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(r.Context()), mutationContextTimeout)
 }
 
 // ---------------------------------------------------------------------------
 // 运行记录与通道事件
 // ---------------------------------------------------------------------------
 
-// adminQueryLimit 读取 ?limit=,缺省或不合法时用 50(存储层还会再钳到 1..200)。
+// adminQueryLimit 读取 ?limit=，缺省或不合法时用 50；各存储查询再按自身安全上限钳制。
 func adminQueryLimit(r *http.Request) int {
 	raw := strings.TrimSpace(r.URL.Query().Get("limit"))
 	if raw == "" {

@@ -1,0 +1,6 @@
+# Keep exceptions advisory-specific. Never suppress the whole x/crypto module.
+# See doc/DEPENDENCY-SECURITY.md for reachability evidence and review triggers.
+[[IgnoredVulns]]
+id = "GO-2026-5932"
+ignoreUntil = 2026-12-31
+reason = "Only x/crypto/openpgp is affected; neither this service nor its pinned hwhkit dependency graph imports it, and upstream publishes no fixed version. Recheck reachability and upstream status by 2026-12-31."

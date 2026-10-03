@@ -4,14 +4,82 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
 const managedFundamentalOutput = `{"payload_result":{"assessments":[{"symbol":"AAPL","rating":"HOLD","fair_value":200,"reasoning":"managed test"}],"summary":"managed"}}`
+
+type countingReader struct {
+	reader io.Reader
+	read   int
+}
+
+type managedRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f managedRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+func (r *countingReader) Read(buffer []byte) (int, error) {
+	n, err := r.reader.Read(buffer)
+	r.read += n
+	return n, err
+}
+
+func TestManagedRequestDoesNotExposeProviderErrorBody(t *testing.T) {
+	const secret = "provider-secret-that-must-not-leak"
+	client := &http.Client{Transport: managedRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode:    http.StatusBadGateway,
+			ContentLength: int64(len(secret)),
+			Header:        make(http.Header),
+			Body:          io.NopCloser(strings.NewReader(secret)),
+		}, nil
+	})}
+
+	response, execErr := managedRequest(context.Background(), client, http.MethodGet, "https://provider.test/v1/session", nil, nil)
+	if response != nil {
+		response.Body.Close()
+		t.Fatal("expected a failed managed request")
+	}
+	if execErr == nil {
+		t.Fatal("expected an execution error")
+	}
+	if execErr.Code != "executor_unavailable" {
+		t.Fatalf("code = %q, want executor_unavailable", execErr.Code)
+	}
+	if strings.Contains(execErr.Detail, secret) || strings.Contains(execErr.Error(), secret) {
+		t.Fatalf("provider response body leaked into execution error: %q", execErr.Detail)
+	}
+	if !strings.Contains(execErr.Detail, "HTTP 502") || !strings.Contains(execErr.Detail, fmt.Sprintf("response_body_bytes=%d", len(secret))) {
+		t.Fatalf("error is missing low-sensitivity response metadata: %q", execErr.Detail)
+	}
+}
+
+func TestReadSSEOversizedUnterminatedLineStopsAtBound(t *testing.T) {
+	const maxBytes = 1024
+	source := &countingReader{reader: strings.NewReader(strings.Repeat("x", 1<<20))}
+	response := &http.Response{Body: io.NopCloser(source)}
+
+	execErr := readSSE(context.Background(), response, maxBytes, func(map[string]any) (bool, *ExecutionError) {
+		t.Fatal("consumer must not be called for an oversized unterminated line")
+		return false, nil
+	})
+	if execErr == nil || execErr.Code != "output_too_large" {
+		t.Fatalf("error = %#v, want output_too_large", execErr)
+	}
+	if source.read > 2*bufioReaderSizeForTest {
+		t.Fatalf("read %d bytes from an oversized unterminated line; want a bounded read", source.read)
+	}
+}
+
+const bufioReaderSizeForTest = 4096
 
 func TestOpenAIManagedAgentSessionLifecycle(t *testing.T) {
 	inputSent := make(chan struct{})

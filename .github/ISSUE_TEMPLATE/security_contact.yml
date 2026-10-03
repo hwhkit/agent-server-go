@@ -1,0 +1,17 @@
+name: Security contact request
+description: Ask maintainers for a private reporting channel; do not include vulnerability details
+title: "[Security contact]: private reporting channel requested"
+labels: [security]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not describe the vulnerability, affected endpoint, exploit, credentials, or customer data here.
+        First check the repository Security tab for a private vulnerability-reporting form.
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Confirmation
+      options:
+        - label: I am only requesting a private contact channel and have not included vulnerability details.
+          required: true

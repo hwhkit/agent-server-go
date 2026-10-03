@@ -74,6 +74,32 @@ func TestProviderUpdatePreservesEmptySecretAndValidatesAssignments(t *testing.T)
 	}
 }
 
+func TestProviderUpdateRejectsUnknownFields(t *testing.T) {
+	if _, _, err := UpdateProvider(testPlatformConfig(t), "gateway",
+		map[string]any{"base_url": "https://gateway.example.test", "typo_key": true}); err == nil {
+		t.Fatal("unknown Provider field must be rejected")
+	}
+}
+
+func TestProviderSecretEnvironmentOverridesDatabaseSnapshot(t *testing.T) {
+	t.Setenv("AGENT_GATEWAY__API_KEY", "gateway-env-secret")
+	t.Setenv("OPENAI_AGENTS__API_KEY", "openai-env-secret")
+	t.Setenv("OPENAI_AGENTS__MCP_AUTHORIZATION", "mcp-env-secret")
+	t.Setenv("CLAUDE_MANAGED__API_KEY", "claude-env-secret")
+	cfg := testPlatformConfig(t)
+	cfg.Gateway.APIKey = "gateway-db-secret"
+	cfg.OpenAIAgents.APIKey = "openai-db-secret"
+	cfg.OpenAIAgents.MCPAuthorization = "mcp-db-secret"
+	cfg.ClaudeManaged.APIKey = "claude-db-secret"
+	applyProviderSecretEnvOverrides(cfg)
+	if cfg.Gateway.APIKey != "gateway-env-secret" ||
+		cfg.OpenAIAgents.APIKey != "openai-env-secret" ||
+		cfg.OpenAIAgents.MCPAuthorization != "mcp-env-secret" ||
+		cfg.ClaudeManaged.APIKey != "claude-env-secret" {
+		t.Fatalf("environment secrets did not remain authoritative")
+	}
+}
+
 func TestNewLocalAgentCommandsUseRealHarnessProtocols(t *testing.T) {
 	cfg := executorTestConfig(t)
 	cfg.LocalAgents.OpenCodeBinary = "opencode"

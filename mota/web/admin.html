@@ -1077,7 +1077,7 @@
             </div>
             <div class="section-actions">
               <button id="refresh-button" class="button ghost" type="button" data-i18n="topbar.refresh">刷新数据</button>
-              <button id="create-agent-button" class="button primary" type="button" data-i18n="topbar.create">创建智能体</button>
+              <button id="create-agent-button" class="button primary" type="button" data-admin-only hidden data-i18n="topbar.create">创建智能体</button>
             </div>
           </div>
           <div id="agents-panel" class="panel" aria-live="polite" aria-busy="true"></div>
@@ -1909,7 +1909,7 @@
         providers: "/api/admin/providers",
         agents: "/api/admin/agents",
         runs: "/api/admin/runs?limit=50",
-        channelEvents: "/api/admin/channel-events?limit=200",
+        channelEvents: "/api/admin/channel-events?limit=50",
         auditLogs: "/api/admin/audit-logs?limit=100",
         users: "/api/admin/users"
       });
@@ -2126,6 +2126,7 @@
       function normalizeProvider(raw) {
         return Object.freeze({
           id: safeString(raw && raw.id),
+          revision: safeNumber(raw && raw.revision, 0),
           name: safeString(raw && raw.name),
           description: safeString(raw && raw.description),
           category: safeString(raw && raw.category, "remote"),
@@ -2190,6 +2191,9 @@
         if (options.body !== undefined) headers.set("Content-Type", "application/json");
         if (["POST", "PUT", "DELETE"].includes(method) && path !== API.login) {
           headers.set("X-CSRF-Token", state.session ? state.session.csrfToken : "");
+        }
+        if (options.ifMatch !== undefined && options.ifMatch !== null) {
+          headers.set("If-Match", `"${safeNumber(options.ifMatch, 0)}"`);
         }
 
         let response;
@@ -2417,7 +2421,7 @@
           copy.append(makeElement("p", "", providerDisplayDescription(provider)));
           const foot = makeElement("div", "provider-card-foot");
           foot.append(makeElement("span", "provider-detail", providerDisplayStatus(provider)));
-          if (provider.editable) {
+          if (provider.editable && state.session && state.session.role === "admin") {
             const button = makeElement("button", "button " + (provider.configured ? "ghost" : "primary") + " compact", t(provider.configured ? "providers.edit" : "providers.setup"));
             button.type = "button";
             button.dataset.providerConfigure = provider.id;
@@ -2617,7 +2621,8 @@
         try {
           await apiRequest(API.providers + "/" + encodeURIComponent(state.editingProvider.id), {
             method: "PUT",
-            body: providerPayload()
+            body: providerPayload(),
+            ifMatch: state.editingProvider.revision
           });
           closeProviderDrawer();
           await loadProviders();
@@ -3073,7 +3078,8 @@
         agentsPanel.setAttribute("aria-busy", "false");
         populateAgentFilters();
         if (!state.agents.length) {
-          renderPanelState(agentsPanel, "empty", t("agents.empty.title"), t("agents.empty.desc"), t("agents.empty.action"), openCreateDrawer);
+          const canManageAgents = state.session && state.session.role === "admin";
+          renderPanelState(agentsPanel, "empty", t("agents.empty.title"), t("agents.empty.desc"), canManageAgents ? t("agents.empty.action") : "", canManageAgents ? openCreateDrawer : null);
           return;
         }
         const visibleAgents = filteredAgents();
@@ -3137,7 +3143,9 @@
           const updatedCell = makeElement("td", "date-cell", formatDate(agent.updated_at));
           const actionsCell = document.createElement("td");
           const actions = makeElement("div", "row-actions");
-          actions.append(actionButton(t("action.edit"), "edit", agent.slug), actionButton(t("action.delete"), "delete", agent.slug, "danger"));
+          if (state.session && state.session.role === "admin") {
+            actions.append(actionButton(t("action.edit"), "edit", agent.slug), actionButton(t("action.delete"), "delete", agent.slug, "danger"));
+          }
           actionsCell.append(actions);
           row.append(primaryCell, endpointCell, statusCell, kindCell, capacityCell, updatedCell, actionsCell);
           body.append(row);
@@ -3171,7 +3179,10 @@
             grid.append(meta);
           });
           const actions = makeElement("div", "agent-card-actions");
-          actions.append(actionButton(t("action.copyUrl"), "copy", agent.slug), actionButton(t("action.edit"), "edit", agent.slug), actionButton(t("action.delete"), "delete", agent.slug, "danger"));
+          actions.append(actionButton(t("action.copyUrl"), "copy", agent.slug));
+          if (state.session && state.session.role === "admin") {
+            actions.append(actionButton(t("action.edit"), "edit", agent.slug), actionButton(t("action.delete"), "delete", agent.slug, "danger"));
+          }
           card.append(cardHead, route, grid, actions);
           cards.append(card);
         });
@@ -4158,7 +4169,12 @@
         setBusy(saveAgentButton, true);
         agentFormError.hidden = true;
         try {
-          await apiRequest(path, { method: editing ? "PUT" : "POST", body: payload });
+          const current = editing ? findAgent(state.editingSlug) : null;
+          await apiRequest(path, {
+            method: editing ? "PUT" : "POST",
+            body: payload,
+            ifMatch: current ? current.revision : null
+          });
           secretInput.value = "";
           closeAgentDrawer();
           showToast(editing ? t("save.updated") : t("save.created"), "success");

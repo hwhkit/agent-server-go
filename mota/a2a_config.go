@@ -29,7 +29,8 @@ type A2AConfig struct {
 	Enabled bool
 	// BasePath 是 JSON-RPC 端点前缀,实际路由为 {base_path}/{slug}。
 	BasePath string
-	// StreamEnabled 表示是否声明并提供 SendStreamingMessage / SubscribeToTask。
+	// StreamEnabled 是保留的兼容配置。当前实现不提供流式 RPC，启用时校验失败，
+	// 防止 Agent Card 宣称并不存在的能力。
 	StreamEnabled bool
 	// RequireBearerAuth 表示是否强制 Authorization: Bearer。
 	// 仅在受信内网且有其他鉴权时才可关闭。
@@ -51,7 +52,7 @@ func DefaultA2AConfig() *A2AConfig {
 	return &A2AConfig{
 		Enabled:             false,
 		BasePath:            "/a2a",
-		StreamEnabled:       true,
+		StreamEnabled:       false,
 		RequireBearerAuth:   true,
 		AgentVersion:        a2aAppVersion,
 		MaxRequestBodyBytes: 1024 * 1024,
@@ -175,6 +176,9 @@ func (c *A2AConfig) validate() error {
 	if !c.Enabled {
 		return nil
 	}
+	if c.StreamEnabled {
+		return errors.New("[a2a].stream_enabled=true is unsupported until streaming RPC methods are implemented")
+	}
 	if !strings.HasPrefix(c.BasePath, "/") || len(c.BasePath) < 2 {
 		return fmt.Errorf(
 			"[a2a].base_path must start with '/' and not be the root path, got %q", c.BasePath)
@@ -184,6 +188,9 @@ func (c *A2AConfig) validate() error {
 	}
 	if c.MaxRequestBodyBytes < 1024 || c.MaxRequestBodyBytes > 16*1024*1024 {
 		return errors.New("[a2a].max_request_body_bytes must be between 1024 and 16777216")
+	}
+	if c.DefaultCardSlug != "" && !validDefaultAgentSlug(c.DefaultCardSlug) {
+		return errors.New("[a2a].default_card_slug must be a valid lowercase Agent slug")
 	}
 	if c.ProviderURL != "" {
 		if err := validateAbsoluteHTTPURL(c.ProviderURL); err != nil {

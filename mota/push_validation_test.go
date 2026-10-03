@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -820,20 +821,38 @@ func TestPushSyncTimeoutReleasesLeaseForRetry(t *testing.T) {
 // 502:受信通道拿不到 FINAL usage 就必须失败,不能静默降级
 // ---------------------------------------------------------------------------
 
+type countingMissingUsageProcessor struct{ calls atomic.Int64 }
+
+func (p *countingMissingUsageProcessor) Process(
+	context.Context, *TaskContext,
+) (*ProcessedOutput, error) {
+	p.calls.Add(1)
+	return PlaceholderOutput("missing usage"), nil
+}
+
 func TestPushTrustedUsageUnavailableReturns502(t *testing.T) {
 	cfg := testConfig()
 	cfg.TrustedUsageReportingEnabled = true
-	// PlaceholderProcessor 从不产出 Usage,天然命中 usage-unavailable 路径。
-	srv := newPushServer(t, cfg, PlaceholderProcessor{})
+	processor := &countingMissingUsageProcessor{}
+	srv := newPushServer(t, cfg, processor)
 	runID := unique("run")
+	key := unique("idem")
 	body := []byte(pushTaskBody(runID))
 	sig := ComputeSignature(testSecret, body, "hex")
-	resp, raw := postPush(t, srv.URL, body, sig, runID, "")
+	resp, raw := postPush(t, srv.URL, body, sig, runID, key)
 	if resp.StatusCode != http.StatusBadGateway {
 		t.Fatalf("expected 502, got %d: %s", resp.StatusCode, raw)
 	}
 	if !strings.Contains(string(raw), "urn:mota:usage-unavailable") {
 		t.Fatalf("expected urn:mota:usage-unavailable, got %s", raw)
+	}
+	replay, replayRaw := postPush(t, srv.URL, body, sig, runID, key)
+	if replay.StatusCode != http.StatusBadGateway ||
+		!strings.Contains(string(replayRaw), "urn:mota:usage-unavailable") {
+		t.Fatalf("expected cached 502 usage failure, got %d: %s", replay.StatusCode, replayRaw)
+	}
+	if processor.calls.Load() != 1 {
+		t.Fatalf("processor calls = %d, want 1", processor.calls.Load())
 	}
 }
 

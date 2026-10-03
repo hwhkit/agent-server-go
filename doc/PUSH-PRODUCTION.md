@@ -1,42 +1,38 @@
-# MoTA Push / Production Protocol Core
+# MOTA Push production protocol
 
-> Rust service contract · `mota-agent-bound-task v1` · callback signature v2 · result contract V2
+本文描述 `mota-agent-server-go` 当前实现的 bound-task v1、结果信封 V2 与 callback v2
+行为。岗位输出字段仍以 MOTA 创作者中心展示的 schema 为准。
+
+## 1. 请求不变量
+
+| 约束 | 服务行为 |
+|---|---|
+| 原始字节验签 | 在 JSON 解析前校验 `HMAC-SHA256(signing_secret, raw_body)` |
+| 请求头唯一 | run ID、幂等键和签名头必须各出现一次；缺签名返回 401，其余结构错误返回 422 |
+| 头体一致 | `X-MoTA-Run-ID` 必须与 `body.runId` 完全一致 |
+| 信封版本 | `schemaVersion` 必须为 `1.0` |
+| callback 地址 | 必须是绝对 HTTPS URL；HTTP 仅放行 loopback 开发地址 |
+| 幂等绑定 | 幂等键同时绑定 run ID 与请求体 SHA-256 |
+| 结果信封 | `payload_result`、`payload_info`、`contract_version=V2` 和 `usage` |
+
+服务支持的正式 `positionType`：
 
 ```text
-┌──────────────┐   signed raw bytes   ┌────────────────────┐
-│ MoTA Control │ ───────────────────▶ │ Rust Protocol Core │
-└──────────────┘                      └─────────┬──────────┘
-       ▲                                       │
-       │       200 + result                    ├── SYNC ≤ 285s
-       │       ───────────                     │
-       │                                       └── ASYNC 202 ─▶ callback v2
-       └─────────────────────────────────────────────────────────────┘
+FUNDAMENTAL_ANALYST   TECHNICAL_ANALYST   PORTFOLIO_MANAGER   RISK_MANAGER
+EXECUTION_TRADER      STRATEGIST          QUANT_TRADING_AGENT SENTINEL
 ```
 
-本页描述仓库内 Rust 实现的生产行为。它是实现/运维手册，不替代平台岗位契约页；
-岗位输出字段发生变化时，以创作者中心展示的 schema 为最终准绳。
+探测任务可省略 `positionType`。`globalParameters` 只允许 `language`、`targetMarkets`、
+`symbolPool`、`universeMode`、`riskLevel`、`maxPositionSizeUsd`、
+`maxDrawdownThreshold`、`stopLossThresholdPct`、`maxInvestmentTargetsUsd`；
+`runtimeContext` 只允许 `isFinal`。
 
-## 1. Protocol invariants
-
-| invariant | Rust enforcement |
-|---|---|
-| 原始字节验签 | 在 JSON 解析前验证 `HMAC-SHA256(mbt_*, raw_body)` |
-| 三个请求头唯一且必填 | 重复、缺失或非法 header 返回 422；签名不匹配返回 401 |
-| 头体运行标识一致 | `X-MoTA-Run-ID === body.runId`，逐字比较 |
-| 信封版本固定 | `schemaVersion` 必须为 `1.0` |
-| 岗位显式 | 正式岗位任务的 `positionType` 使用平台定义的 8 个大写枚举；探测任务可省略 |
-| 边界字段收口 | `globalParameters` 只允许 `language/targetMarkets/symbolPool/universeMode`；`runtimeContext` 只允许 `isFinal` |
-| 结果信封固定 | 顶层为 `payload_result/payload_info/contract_version` 加必填 `usage`（RULE-BND-001，2026-09-16 起后端拒收缺 usage 的回传；无计量兜底零值），版本固定 `V2` |
-| 去重可恢复 | `runId + request SHA-256` 绑定幂等键并写入 PostgreSQL |
-| 异步只走 v2 | callback 无 token；每次尝试使用新的 Unix 秒签名 |
-| 回执读两层 | 先看 HTTP/code，再读 `accepted/runStatus/runMsg` |
-
-## 2. Request envelope
+## 2. 请求示例
 
 ```http
 POST /mota/push HTTP/1.1
 Content-Type: application/json
-X-MoTA-Run-ID: RUN-20260819-001
+X-MoTA-Run-ID: RUN-20261002-001
 X-MoTA-Idempotency-Key: delivery-7f9a
 X-MoTA-Signature: <lowercase hex HMAC>
 ```
@@ -44,16 +40,14 @@ X-MoTA-Signature: <lowercase hex HMAC>
 ```json
 {
   "schemaVersion": "1.0",
-  "runId": "RUN-20260819-001",
+  "runId": "RUN-20261002-001",
   "agentCode": "fundamental-demo",
-  "templateId": "single_security_fundamental_diagnosis",
   "positionType": "FUNDAMENTAL_ANALYST",
   "templateInputData": [
     { "name": "securities", "value": ["AAPL"] }
   ],
   "taskBrief": {
-    "userCustomInstructions": "Use a conservative valuation range",
-    "expectedOutputFormat": { "type": "object" }
+    "userCustomInstructions": "Use a conservative valuation range"
   },
   "globalParameters": {
     "language": "zh-CN",
@@ -61,182 +55,148 @@ X-MoTA-Signature: <lowercase hex HMAC>
     "symbolPool": ["AAPL.US"],
     "universeMode": "RESTRICTED"
   },
-  "upstream": {
-    "self": { "positionKey": "fundamental-analyst" },
-    "nodes": [],
-    "edges": []
-  },
   "runtimeContext": { "isFinal": false },
-  "callbackUrl": "https://api-ctr.mota.ai/mota/creator/publics/bound/callback"
+  "callbackUrl": "https://api.example.com/callback"
 }
 ```
 
-合法 `positionType`：
+`Content-Type` 可带 `charset` 等参数。非法 JSON 返回 400；字段和头约束失败返回
+422；不支持的媒体类型返回 415。
+
+## 3. 同步与异步
+
+`MOTA__PUSH_MODE=sync` 返回 `200 + JSON`，同步执行预算最多 285 秒。
+`MOTA__PUSH_MODE=async` 先返回 `202 + 空 body`，再在当前进程后台执行并投递 callback，
+异步执行预算最多 780 秒。
+
+202 表示服务已在**当前进程**接收任务，不代表结果已持久化投递。当前 Go 实现没有
+callback outbox；进程在结果投递前退出时，相同 run ID、幂等键与请求体通常只会重放
+202，并不会重新启动后台任务。运维人员必须先核对平台与执行器副作用，再决定是否人工
+修复状态或使用新的、明确授权的请求。
+
+同步幂等记录的主要状态：
 
 ```text
-FUNDAMENTAL_ANALYST   TECHNICAL_ANALYST   PORTFOLIO_MANAGER   RISK_MANAGER
-EXECUTION_TRADER      STRATEGIST          QUANT_TRADING_AGENT SENTINEL
+processing → sync_done
 ```
 
-## 3. Response state machine
+异步请求被接收后进入 `async_accepted`。后台执行一旦开始，无论 callback 成功、明确
+失败、无可信回执、后台 panic、受信执行失败或 usage 抑制，都保留 202 重放；这些情况
+都可能已经产生执行器副作用，不能因为投递失败就自动重执行。需要按原 run ID 对账后
+由运维人员决定新的授权请求。
 
-```mermaid
-stateDiagram-v2
-    [*] --> VerifyRawHmac
-    VerifyRawHmac --> Reject401: mismatch
-    VerifyRawHmac --> ValidateEnvelope: valid
-    ValidateEnvelope --> Reject422: invalid
-    ValidateEnvelope --> IdempotencyLease: valid
-    IdempotencyLease --> Replay200: sync cache
-    IdempotencyLease --> Replay202: async accepted
-    IdempotencyLease --> Reject409: conflict / processing
-    IdempotencyLease --> Execute: new
-    Execute --> Return200: sync
-    Execute --> Return202: async
-    Return202 --> CallbackV2
-    CallbackV2 --> Accepted: accepted=true
-    CallbackV2 --> TerminalReject: accepted=false / terminal 4xx
-    CallbackV2 --> Retry: network / 429 / 5xx
-    Retry --> CallbackV2
-```
+## 4. Callback v2
 
-`MOTA__PUSH_MODE=sync` 返回 `200 + JSON`；`async` 返回 `202 + 空 body`。
-平台按响应状态现场识别形态。同步执行预算最多 285 秒，为平台 300 秒连接上限保留
-15 秒；异步处理预算最多 780 秒，为 callback 和退避重试保留时间。
-
-## 4. Callback signature v2
-
-不拼 query token，不发送 `Authorization`。密钥使用完整 `mbt_...` UTF-8 字节。
+签名覆盖真正发送的同一份 JSON 字节：
 
 ```text
 timestamp = unix seconds
 canonical = b"v2\n" + ascii(timestamp)
           + b"\n" + utf8(runId)
           + b"\n" + exact_body_bytes
-digest    = hex_lower(HMAC-SHA256(utf8(mbt_secret), canonical))
+digest    = hex_lower(HMAC-SHA256(utf8(signing_secret), canonical))
 header    = "t=" + timestamp + ",v2=" + digest
 ```
 
 ```http
 POST {callbackUrl}
 Content-Type: application/json
-X-MoTA-Run-ID: RUN-20260819-001
-X-Creator-Signature: t=1787101200,v2=<hex>
+X-MoTA-Run-ID: RUN-20261002-001
+X-Creator-Signature: t=1790917200,v2=<hex>
 ```
 
-签名必须针对真正发送出去的同一份序列化字节计算。每次重试重新获取 Unix 秒并重新签名，
-避免旧签名超过平台允许的 ±300 秒窗口。
+`MOTA__CALLBACK_TOKEN` 仅用于兼容旧平台；非空时作为 `token` 查询参数发送。配置它时
+必须同时设置 `MOTA__CALLBACK_TOKEN_ORIGIN=https://受信主机`，服务只会把 token 发往
+完全匹配的 scheme + host。新平台应优先使用空 token 与 v2 签名。
 
-## 5. Retry matrix
+每次尝试重新生成时间戳和签名。单次请求及回执读取合计最多 30 秒，回执正文上限
+64 KiB，防止无界等待或内存占用。
 
-| callback outcome | action |
+### 重试与终态
+
+| callback 结果 | 行为 |
 |---|---|
-| 网络错误 | 退避重试 |
-| HTTP 429 | 退避重试 |
-| HTTP 5xx | 退避重试 |
-| HTTP 401 / 403 | 终止；检查密钥、签名或通道状态 |
-| HTTP 404 | 终止；runId 不存在或不属当前通道 |
-| HTTP 200 + `accepted:true` | 成功 |
-| HTTP 200 + `accepted:false` | 终止；记录 `runStatus/runMsg`，不得用同 runId 洗白 |
+| 网络错误 | 有界退避重试；耗尽后结果不确定 |
+| HTTP 408 / 429 / 5xx | 有界退避重试；耗尽后结果不确定 |
+| 其他 4xx | 不重试，记录投递失败 |
+| 200 + 非法/缺字段回执 | 记录结果不确定 |
+| 200 + `code != OK` | 不重试，记录结果不确定 |
+| 200 + `code=OK, accepted=false` | 不重试，记录 `callback_rejected` |
+| 200 + `code=OK, accepted=true` | 投递成功 |
 
-当前退避序列为 `1s → 3s → 10s → 30s → 60s`，最多 6 次发送。
+退避序列为 `1s → 3s → 10s → 30s → 60s`，最多六次发送。动态 Agent 仅在
+`accepted=true` 时把运行标为 completed；明确拒绝为 `callback_rejected / 502`，确定
+投递失败为 `callback_delivery_failed / 502`，已发送但无法获得可信回执则为
+`outcome_uncertain / 503`。通道事件保存状态、尝试次数和安全摘要，不应依赖原始远端
+错误正文诊断。
 
-## 6. Result envelope
+Push 与动态 Agent 的失败重放不同：动态 Agent 会缓存对应 502/503 终态；Push 在后台
+执行开始后保留异步 202，要求按原 run ID 人工核对，不自动重执行。
+
+## 5. 结果信封
 
 ```json
 {
   "payload_result": {
-    "assessments": [
-      {
-        "symbol": "AAPL",
-        "rating": "HOLD",
-        "fair_value": 0,
-        "reasoning": "Conservative placeholder; replace with real analysis."
-      }
-    ]
+    "assessments": []
   },
-  "payload_info": "AAPL: HOLD.",
-  "contract_version": "V2"
+  "payload_info": "No reliable assessment was produced.",
+  "contract_version": "V2",
+  "usage": {
+    "schemaVersion": "1.0",
+    "inputTokens": 0,
+    "outputTokens": 0,
+    "totalTokens": 1
+  }
 }
 ```
 
-`payload_info` 返回岗位专属的人类可读摘要：基本面/技术使用 `summary`，策略/过程组合使用
-`rationale`，风控使用 `interpretation` 或门控摘要，执行使用 `execution_summary`，最终组合使用
-`report_markdown`。它不再复制整个 JSON，也不会自动追加固定免责声明。
+`MOTA__TRUSTED_USAGE_REPORTING_ENABLED=true` 仅适用于已登记的受信 Host。开启后若
+执行器没有供应商 FINAL usage，同步请求返回 502，异步请求抑制 callback 并记录失败；
+不能用估算值冒充供应商计量。
 
-`evidenceRefs` 可选，但不能伪造。真实证据格式：
+正常岗位输出会执行键白名单、枚举、数字和 symbol 归一化。无法可靠完成时使用岗位
+schema 允许的保守结构，不得伪造行情、财务数据、证据引用或订单。
 
-```json
-{
-  "evidenceRefs": [
-    {
-      "sourceType": "MCP_TOOL",
-      "sourceId": "quotation.get_snapshot",
-      "asOf": "2026-08-19"
-    }
-  ]
-}
-```
+## 6. PostgreSQL 与幂等
 
-`evidenceRefs` 中每一项至少包含非空 `sourceType/sourceId`；服务会移除空引用与未知字段。
-任务输入可使用 `{ "sourceType": "TASK_INPUT", "sourceId": "task" }`，工具、上游和文档证据
-应填写其真实来源，禁止把推断包装成外部证据。
+生产 Push 必须设置 `DATABASE_URL`，即使管理平台未启用。幂等状态与管理平台可共用
+连接池；单元测试才使用内存实现。
 
-### 6.1 Six role payloads
+同一幂等键若更换 run ID 或请求体会返回 409。处理中的请求并发重入也返回 409。
+PostgreSQL、加密主密钥和业务运行记录必须进入同一恢复计划。
 
-所有岗位都执行顶层键和数组项键白名单裁剪，避免 `additionalProperties:false` 违规；模型常见的
-大小写枚举、数字字符串、百分数和订单价格联动会在回传前归一化。正常输出应给出足够的决策证据，
-无法可靠完成时使用契约允许的保守结构，不能编造行情、财务值或订单。
+## 7. 生产安全基线
 
-| 岗位 | 核心输出 | 增强信息 | 合法失败形态 |
-|---|---|---|---|
-| 基本面分析师 | `assessments[]`: symbol/rating/fair_value/reasoning | score、conviction、horizon、upside_pct、valuation、drivers/risks | `assessments: []` + 具体 `summary` |
-| 技术分析师 | `signals[]`: symbol/bias/entry_zone/reasoning | trend、momentum、confidence、targets、levels、indicators、invalidation | `signals: []` + 数据缺口 `summary` |
-| 策略分析师 | `signals[]` + `rationale` | regime、views、backtest、key_risks | 空 signals + 具体 rationale |
-| 风控经理 | `gate` + 非空 `checks[]` | exposure、actions、hedging、interpretation | UNKNOWN check + WARN gate + 非空 hedge |
-| 执行交易员 | `orders[]` 十三个必填订单字段 | TIF、instruction、algo、execution_summary | `orders: []`，不伪造订单 |
-| 组合经理 | 过程：decision/orders/allocation/rationale；最终：timestamp/orders/report | constraints、risk_handoff、algo | 过程为 NO_ACTION + 维持配置；最终为空 orders + 原因报告 |
+- 通过秘密管理系统注入签名密钥、bind token、数据库凭据和 Session Secret；
+- callback 客户端不得跨 origin 跟随重定向；
+- callback 当前没有私网 IP/DNS 阻断策略，生产入口应配置平台固定 callback 地址或在
+  出口代理实施 allowlist；
+- 动态 Agent 的 legacy body-only HMAC 默认关闭；仅迁移期可显式开启，调用方应使用
+  带时间戳和 nonce 的 v1 动态 Agent 签名；
+- 本地 Agent CLI 必须运行在低权限用户、容器或 VM 中；应用内 workspace 校验不是
+  OS 沙箱；
+- 日志、运行结果、审计记录和数据库备份可能含业务数据，必须限制访问并定义留存周期。
 
-关键枚举与联动规则：
+## 8. 上线顺序
 
-- 基本面 `rating` 仅允许 `STRONG_BUY/BUY/HOLD/SELL/STRONG_SELL`。
-- 技术 `bias` 仅允许 `LONG_BIAS/SHORT_BIAS/NEUTRAL`；`entry_zone` 只能是空数组或两个数字；
-  `momentum_score` 为 `[-1,1]`，`confidence` 为 `[0,1]`。
-- 风控从最差 check 推导 gate：`CRIT → BREACH`，`WARN/UNKNOWN → WARN`，全部 OK 才 PASS。
-- 市价单 `limit_price` 必须为 null；止盈/止损 style 为 MARKET 时对应 limit price 也必须为 null；
-  quantity 必须是正整数。
-- 组合经理严格按 `runtimeContext.isFinal` 二选一，过程结构与最终结构不能混写。
+1. 运行 `make bootstrap-hwhkit` 和本地验证；
+2. 使用隔离数据库执行 `make test-pg`；
+3. 运行 `make deploy-build && make deploy-check`，确认产物、目标、服务名、架构和就绪地址；
+4. 注入 `DATABASE_URL`、MOTA 密钥、管理员凭据和生产 URL；
+5. 部署后验证 `/health/ready`、运行中二进制哈希与 PostgreSQL 可用性；
+6. 从外网验证 HTTPS、请求签名、幂等重放和第一条真实 callback 回执；
+7. 观察运行与审计日志后再扩大流量。
 
-## 7. Durable idempotency
-
-生产幂等表与控制面共用 `DATABASE_URL` 指向的 PostgreSQL 连接池；单元测试显式注入
-进程内后端，不会把测试状态写入生产数据库。
-
-```text
-idempotency key
-  ├─ processing      同一请求并发进入时返回 409
-  ├─ sync_done       保存首次响应原文，后续 200 字节级回放
-  └─ async_accepted  后续直接回放 202，不重复执行
-```
-
-同一幂等键若换了 `runId` 或请求 body，返回 409。崩溃遗留的 `processing` lease 在
-15 分钟后允许同一请求恢复；已完成状态保留 7 天后清理。
-PostgreSQL 必须纳入备份与连接池监控。
-
-## 8. Production launch sequence
-
-1. 以环境变量注入完整 `mbt_*`：`MOTA__SIGNING_SECRET`。
-2. 设置 `DATABASE_URL`、`MOTA__PUSH_MODE` 与平台回显的 `MOTA__HEARTBEAT_URL`。
-3. 启动服务，确认 `/health` 与 `/health/ready`。
-4. 从外网验证 `https://<domain>/mota/push` 通过 443 可达、证书链完整。
-5. 最后启动/放开心跳。心跳一旦成功，平台可能立即派单。
-6. 首条真实任务同时检查 callback HTTP 200、`code=OK`、`accepted=true`。
+Go 项目的本地门禁：
 
 ```bash
-cargo fmt --all -- --check
-cargo test
-cargo clippy --all-targets --all-features -- -D warnings
+make lint
+make test
+make race
+TEST_DATABASE_URL='postgres://...' make test-pg
+make test-deploy-scripts
 ```
 
-生产日志只记录 run ID、Agent/模板/岗位、body 长度与 SHA-256 前缀，不记录原始任务
-body、签名或密钥。
+部署与回滚细节见 [DEPLOYMENT.md](DEPLOYMENT.md)，发布证据见
+[RELEASE-READINESS.md](RELEASE-READINESS.md)。

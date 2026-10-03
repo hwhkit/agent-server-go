@@ -400,7 +400,7 @@ func TestDispatcherPassesThroughExecutorTimeout(t *testing.T) {
 		[]*AgentConfig{dispatcherAgent("slow", true, 2, 4)}, 4, "", processor)
 	_, err := dispatcher.Execute(context.Background(), "slow", &TaskContext{}, map[string]any{}, 120*time.Millisecond)
 	dispatchErr := wantDispatchCode(t, err, "execution_timeout")
-	if dispatchErr.Detail != "execution_timeout: Rust processor exceeded its deadline" {
+	if dispatchErr.Detail != "execution_timeout: in-process processor exceeded its deadline" {
 		t.Errorf("detail = %q", dispatchErr.Detail)
 	}
 }

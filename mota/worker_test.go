@@ -385,8 +385,11 @@ func TestRunAgentSelfCheckReportsFailureWhenProcessorErrors(t *testing.T) {
 	if pass {
 		t.Fatal("self-check must fail when processor errors")
 	}
-	if errMsg == "" {
-		t.Fatal("expected error message when processor fails")
+	if errMsg != "self-check execution failed" {
+		t.Fatalf("self-check error = %q, want stable sanitized message", errMsg)
+	}
+	if strings.Contains(errMsg, context.DeadlineExceeded.Error()) {
+		t.Fatalf("internal execution error leaked through self-check: %q", errMsg)
 	}
 }
 
@@ -470,7 +473,9 @@ func TestPushHeartbeatSendsSelfCheckOnDemandPerAgent(t *testing.T) {
 	defer srv.Close()
 
 	cfg := testConfig()
-	cfg.HeartbeatURL = srv.URL
+	cfg.HeartbeatURL = strings.Replace(
+		srv.URL, "http://", "http://user:password@", 1,
+	) + "/private/heartbeat?token=must-not-be-audited"
 	cfg.HeartbeatInterval = 5 * time.Second
 
 	execution := NewProcessorBackend(PlaceholderProcessor{})
@@ -527,6 +532,11 @@ func TestPushHeartbeatSendsSelfCheckOnDemandPerAgent(t *testing.T) {
 
 	if len(events) < 2 {
 		t.Fatalf("expected at least 2 heartbeat channel events, got %d", len(events))
+	}
+	for _, event := range events {
+		if event.URL != srv.URL {
+			t.Errorf("heartbeat audit URL = %q, want credential-free origin %q", event.URL, srv.URL)
+		}
 	}
 }
 
