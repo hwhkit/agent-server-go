@@ -165,37 +165,7 @@
       padding: 28px;
     }
     .boot-card { text-align: center; }
-    .boot-mark, .brand-mark {
-      position: relative;
-      display: inline-grid;
-      place-items: center;
-      width: 42px;
-      height: 42px;
-      border: 1px solid rgba(205, 213, 222, 0.42);
-      border-radius: 12px;
-      background:
-        linear-gradient(160deg, rgba(255, 255, 255, 0.16), rgba(205, 213, 222, 0.05) 42%, rgba(10, 13, 16, 0.28) 46%, rgba(174, 185, 195, 0.12)),
-        linear-gradient(145deg, rgba(52, 60, 69, 0.9), rgba(28, 33, 39, 0.94));
-      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), inset 0 -1px 0 rgba(0, 0, 0, 0.4), inset 0 0 24px rgba(205, 213, 222, 0.06), 0 6px 18px rgba(0, 0, 0, 0.4);
-    }
-    .boot-mark::before, .brand-mark::before {
-      content: "";
-      width: 13px;
-      height: 13px;
-      border: 2px solid var(--silver);
-      border-radius: 4px;
-      transform: rotate(45deg);
-    }
-    .boot-mark::after {
-      content: "";
-      position: absolute;
-      inset: -8px;
-      border: 1px solid rgba(205, 213, 222, 0.12);
-      border-radius: 17px;
-      animation: boot-pulse 1.8s ease-in-out infinite;
-    }
     .boot-card p { margin: 18px 0 0; color: var(--muted); font: 11px/1.5 var(--mono); letter-spacing: 0.12em; }
-    @keyframes boot-pulse { 50% { opacity: 0.25; transform: scale(1.07); } }
 
     .login-view {
       display: grid;
@@ -383,10 +353,6 @@
     }
     .sidebar-brand { display: flex; align-items: center; gap: 13px; margin-bottom: 14px; padding: 10px; border: 1px solid rgba(205,213,222,0.22); border-radius: 12px; background: linear-gradient(160deg, rgba(255,255,255,0.07), rgba(205,213,222,0.05) 44%, rgba(10,13,16,0.2) 48%, rgba(156,170,182,0.06)), repeating-linear-gradient(112deg, transparent 0 3px, rgba(205,213,222,0.03) 3px 4px), linear-gradient(135deg, rgba(38,44,51,0.92), rgba(23,27,32,0.94)); box-shadow: inset 0 1px 0 rgba(255,255,255,0.14), inset 0 -1px 0 rgba(0,0,0,0.32), 0 10px 26px rgba(0,0,0,0.28); text-decoration: none; }
     .sidebar-brand:hover { border-color: rgba(205,213,222,0.36); background: linear-gradient(160deg, rgba(255,255,255,0.1), rgba(205,213,222,0.07) 44%, rgba(10,13,16,0.2) 48%, rgba(156,170,182,0.09)), repeating-linear-gradient(112deg, transparent 0 3px, rgba(205,213,222,0.04) 3px 4px), linear-gradient(135deg, rgba(44,51,58,0.94), rgba(26,31,37,0.95)); }
-    .brand-mark { width: 34px; height: 34px; border-radius: 10px; }
-    .brand-mark::before { width: 10px; height: 10px; }
-    .sidebar-brand .brand-mark { width: 40px; height: 40px; flex: 0 0 40px; border-radius: 11px; }
-    .sidebar-brand .brand-mark::before { width: 12px; height: 12px; }
     .sidebar-brand strong { display: block; color: var(--text); font: 850 14px/1.15 var(--mono); letter-spacing: 0.055em; text-shadow: 0 0 18px rgba(205, 213, 222,0.18); }
     .sidebar-brand small { display: block; margin-top: 7px; color: var(--silver); font: 700 9px/1 var(--mono); letter-spacing: 0.1em; opacity: 0.78; }
     .nav-label { padding: 0 11px 8px; color: var(--faint); font: 700 8px/1 var(--mono); letter-spacing: 0.16em; text-transform: uppercase; }
@@ -472,12 +438,6 @@
       box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.95), inset 0 -1px 0 rgba(0, 0, 0, 0.08), 0 8px 20px rgba(26, 32, 40, 0.12);
     }
     html[data-theme="light"] .sidebar-brand:hover { border-color: rgba(44, 54, 64, 0.4); }
-    html[data-theme="light"] .boot-mark,
-    html[data-theme="light"] .brand-mark {
-      border-color: rgba(44, 54, 64, 0.34);
-      background: linear-gradient(160deg, rgba(255, 255, 255, 0.92), rgba(226, 231, 236, 0.94) 46%, rgba(140, 150, 160, 0.4) 52%, rgba(220, 225, 231, 0.96));
-      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.95), inset 0 -1px 0 rgba(0, 0, 0, 0.12), 0 5px 14px rgba(26, 32, 40, 0.16);
-    }
     html[data-theme="light"] .input,
     html[data-theme="light"] .select,
     html[data-theme="light"] .textarea,
@@ -941,7 +901,6 @@
 
   <div id="boot-view" class="view boot-view" aria-live="polite" aria-busy="true">
     <div class="boot-card">
-      <span class="boot-mark" aria-hidden="true"></span>
       <p data-i18n="boot.checking">正在确认管理会话</p>
     </div>
   </div>
@@ -950,7 +909,6 @@
     <div class="login-shell">
       <div class="login-story" aria-hidden="true">
         <div class="story-brand">
-          <span class="boot-mark"></span>
           <div><strong data-i18n="brand.product">Intelligent Router</strong></div>
         </div>
         <div class="story-copy">
@@ -984,7 +942,6 @@
   <div id="app-view" class="view app-view" hidden>
     <aside class="sidebar" aria-label="控制台导航" data-i18n-aria="sidebar.label">
       <a class="sidebar-brand" href="#providers-section" aria-label="返回执行职能体" data-i18n-aria="sidebar.brand.label">
-        <span class="brand-mark" aria-hidden="true"></span>
         <span><strong data-i18n="brand.console">Intelligent Router</strong></span>
       </a>
       <div class="sidebar-status">
@@ -1015,7 +972,7 @@
 
     <main id="main-content" class="app-main" tabindex="-1">
       <header class="topbar">
-        <a class="mobile-brand" href="#providers-section"><span class="brand-mark" aria-hidden="true"></span><span data-i18n="brand.console">Intelligent Router</span></a>
+        <a class="mobile-brand" href="#providers-section"><span data-i18n="brand.console">Intelligent Router</span></a>
         <nav class="mobile-nav" aria-label="移动端导航" data-i18n-aria="mobile.nav.label">
           <a class="active" href="#providers-section" data-nav-target="providers-section" data-i18n="mobile.nav.providers">执行器</a>
           <a href="#agents-section" data-nav-target="agents-section" data-i18n="mobile.nav.agents">岗位</a>
