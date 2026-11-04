@@ -49,6 +49,9 @@ type AgentDispatcher struct {
 	globalExecutionSlots *semaphore
 	// defaultAgentSlug 为空表示没有配置默认 Agent。
 	defaultAgentSlug string
+	// pull 为 nil 时 remote_pull 模式不可用(AGENT_API__ENABLED=false);
+	// 非 nil 时该模式的任务改走 Pull 队列而非本机执行。
+	pull *AgentPullService
 }
 
 // NewAgentDispatcher 组装分发器。
@@ -64,6 +67,11 @@ func NewAgentDispatcher(
 		globalExecutionSlots: globalExecutionSlots,
 		defaultAgentSlug:     defaultAgentSlug,
 	}
+}
+
+// SetPullService 注入 Agent Pull 服务;启用后 remote_pull 模式生效。
+func (d *AgentDispatcher) SetPullService(pull *AgentPullService) {
+	d.pull = pull
 }
 
 // Execute 分发并执行一次任务。失败时返回的 error 一定是 *DispatchError。
@@ -90,6 +98,14 @@ func (d *AgentDispatcher) Execute(
 	if !runtime.Config.Enabled {
 		return nil, newDispatchError("agent_disabled",
 			fmt.Sprintf("Agent %s is disabled", runtime.Config.Slug))
+	}
+
+	if runtime.Config.ExecutionMode == ExecutionModeRemotePull {
+		if d.pull == nil {
+			return nil, newDispatchError("executor_unavailable",
+				"Agent is configured as remote_pull but AGENT_API is disabled")
+		}
+		return d.pull.ExecuteRemote(ctx, runtime.Config, task, timeout)
 	}
 
 	if !runtime.AdmissionSlots.TryAcquire() {

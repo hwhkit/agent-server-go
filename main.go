@@ -115,6 +115,12 @@ func (a App) BuildRouter(
 		r.Handle("/admin/*", admin)
 		r.Handle("/api/admin/*", admin)
 
+		if a.platform.Pull != nil {
+			r.Mount("/agent-api/v1/", mota.AgentPullRouter(a.platform.Pull))
+			slog.Info("agent pull connector API enabled",
+				"route", "/agent-api/v1/claim|renew|complete|heartbeat")
+		}
+
 		if a.a2aConfig != nil && a.a2aConfig.Enabled {
 			a2aState, err := mota.NewA2aStateFromPlatform(a.platform, a.a2aConfig)
 			if err != nil {
@@ -202,6 +208,39 @@ func main() {
 		defer platform.Close()
 	}
 
+	// Agent Pull Connector API:平台开启且 AGENT_API__ENABLED=true 时装配。
+	var pullService *mota.AgentPullService
+	if platform != nil {
+		agentAPICfg, pullErr := mota.LoadAgentAPIConfig()
+		if pullErr != nil {
+			slog.Error("agent api config failed", "err", pullErr)
+			os.Exit(1)
+		}
+		if agentAPICfg.Enabled {
+			pullStore, pullErr := mota.NewAgentPullStore(platform.Store.Pool())
+			if pullErr != nil {
+				slog.Error("agent pull store init failed", "err", pullErr)
+				os.Exit(1)
+			}
+			pullService = mota.NewAgentPullService(agentAPICfg, pullStore, platform.Registry)
+			platform.Pull = pullService
+			// 响应路由约束(AGENT-PULL-API §5.2):可达 remote_pull Agent 的
+			// sync Push 与远端执行不兼容,启动期直接防呆。
+			if motaCfg.PushMode == mota.PushModeSync {
+				for _, runtime := range platform.Registry.List() {
+					if runtime.Config.ExecutionMode == mota.ExecutionModeRemotePull {
+						slog.Error("push_mode=sync cannot serve remote_pull agents; set MOTA__PUSH_MODE=async",
+							"agent", runtime.Config.Slug)
+						os.Exit(1)
+					}
+				}
+			}
+			slog.Info("agent pull connector service enabled",
+				"lease_seconds", agentAPICfg.LeaseSeconds,
+				"max_attempts", agentAPICfg.MaxAttempts)
+		}
+	}
+
 	// Pull worker 与 Push 心跳与 HTTP 服务共用同一执行后端、配置快照与退出
 	// 信号(与 rs main.rs 的启动顺序一致)。平台开启时三者都走同一个共享
 	// Dispatcher();关闭时回落到进程内 Processor(嵌入模式)。
@@ -213,6 +252,7 @@ func main() {
 			slog.Error("build agent dispatcher failed", "err", dispatchErr)
 			os.Exit(1)
 		}
+		dispatcher.SetPullService(pullService)
 		execution = mota.NewAgentBackend(dispatcher)
 		heartbeatStore = platform.Store
 	}
@@ -248,6 +288,10 @@ func main() {
 		if strings.TrimSpace(cfg.HeartbeatURL) != "" {
 			go mota.RunPushHeartbeat(cfg, execution, built.Shutdown(), heartbeatStore)
 		}
+	}
+
+	if pullService != nil {
+		go mota.RunPullReaper(built.Shutdown().Context(), pullService)
 	}
 
 	if err := production.Serve(context.Background(), built, logger); err != nil {

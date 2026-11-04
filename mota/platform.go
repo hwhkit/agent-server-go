@@ -35,6 +35,10 @@ type PlatformState struct {
 	// 生产装配经 PlatformDependencies.CallbackHTTPClient 注入,超时较短。
 	CallbackHTTPClient *http.Client
 
+	// Pull 是 Agent Pull Connector 服务(AGENT_API__ENABLED=true 时由 main
+	// 装配注入);nil 表示禁用,remote_pull 模式的 Agent 将拒绝执行。
+	Pull *AgentPullService
+
 	// 以下三项来自 MOTA 接入配置,经 PlatformDependencies 注入。
 	//
 	// SigningSecret 是本 Bound 的 mbt_ 密钥。注意异步 callback 用的是**每个 Agent

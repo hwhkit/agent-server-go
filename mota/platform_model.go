@@ -85,6 +85,10 @@ func (k ExecutorKind) SupportsExecutionMode(mode ExecutionMode) bool {
 		return k == ExecutorKindRust || k.SupportsLocalCLI()
 	case ExecutionModeManaged:
 		return k == ExecutorKindOpenAIAgent || k == ExecutorKindClaudeManaged
+	case ExecutionModeRemotePull:
+		// kind 仅描述远端连接器名义上运行的执行器,平台不本机执行,
+		// 因此不做 kind 组合限制。
+		return true
 	default:
 		return false
 	}
@@ -105,15 +109,18 @@ const (
 	ExecutionModeLocal ExecutionMode = "local"
 	// ExecutionModeManaged 由 OpenAI / Anthropic 托管 Agent 管理会话与上下文。
 	ExecutionModeManaged ExecutionMode = "managed"
+	// ExecutionModeRemotePull 任务进入 Pull 队列,由远端连接器认领执行;
+	// 平台不做本机执行,容量由 agent_pull_tasks 的 SQL 计数约束。
+	ExecutionModeRemotePull ExecutionMode = "remote_pull"
 )
 
 // ParseExecutionMode 严格解析,与 Rust 侧 ExecutionMode::parse 一致。
 func ParseExecutionMode(value string) (ExecutionMode, error) {
 	switch ExecutionMode(value) {
-	case ExecutionModeGateway, ExecutionModeLocal, ExecutionModeManaged:
+	case ExecutionModeGateway, ExecutionModeLocal, ExecutionModeManaged, ExecutionModeRemotePull:
 		return ExecutionMode(value), nil
 	default:
-		return "", errors.New("execution_mode must be gateway, local, or managed")
+		return "", errors.New("execution_mode must be gateway, local, managed, or remote_pull")
 	}
 }
 

@@ -121,6 +121,25 @@ func insertAuditTx(ctx context.Context, tx pgx.Tx, event *AuditEvent) error {
 	return nil
 }
 
+// agentRunsSchemaSQL 是 agent_runs 的唯一 DDL 定义;Agent Pull 存储与平台
+// 存储共用(两处都 IF NOT EXISTS,幂等)。
+const agentRunsSchemaSQL = `CREATE TABLE IF NOT EXISTS agent_runs (
+                agent_slug       TEXT NOT NULL,
+                run_id           TEXT NOT NULL,
+                agent_revision   BIGINT NOT NULL,
+                executor_kind    TEXT,
+                execution_mode   TEXT,
+                status           TEXT NOT NULL,
+                duration_ms      BIGINT,
+                error_code       TEXT,
+                response_code    BIGINT,
+                request_json     TEXT,
+                result_json      TEXT,
+                executor_result_json TEXT,
+                created_at       TEXT NOT NULL,
+                completed_at     TEXT,
+                PRIMARY KEY(agent_slug, run_id))`
+
 // ConnectAgentStore 连接 PostgreSQL,并确保表结构存在。
 func ConnectAgentStore(ctx context.Context, databaseURL string, cipher *SecretCipher) (*AgentStore, error) {
 	poolConfig, err := pgxpool.ParseConfig(databaseURL)
@@ -193,22 +212,7 @@ func (s *AgentStore) initialize(ctx context.Context) error {
                 csrf_token   TEXT NOT NULL,
                 expires_at   BIGINT NOT NULL,
                 created_at   TEXT NOT NULL)`,
-		`CREATE TABLE IF NOT EXISTS agent_runs (
-                agent_slug       TEXT NOT NULL,
-                run_id           TEXT NOT NULL,
-                agent_revision   BIGINT NOT NULL,
-                executor_kind    TEXT,
-                execution_mode   TEXT,
-                status           TEXT NOT NULL,
-                duration_ms      BIGINT,
-                error_code       TEXT,
-                response_code    BIGINT,
-                request_json     TEXT,
-                result_json      TEXT,
-                executor_result_json TEXT,
-                created_at       TEXT NOT NULL,
-                completed_at     TEXT,
-                PRIMARY KEY(agent_slug, run_id))`,
+		agentRunsSchemaSQL,
 		`CREATE INDEX IF NOT EXISTS idx_agent_runs_created ON agent_runs(created_at DESC)`,
 		`ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS response_code BIGINT`,
 		`ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS executor_kind TEXT`,

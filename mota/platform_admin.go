@@ -135,6 +135,19 @@ func (a *AdminHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/api/admin/runs":
 		a.route(w, r, http.MethodGet, a.listRuns)
 		return
+	case "/api/admin/agent-connectors":
+		switch r.Method {
+		case http.MethodGet:
+			a.listAgentConnectors(w, r)
+		case http.MethodPost:
+			a.createAgentConnector(w, r)
+		default:
+			writeAdminError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed")
+		}
+		return
+	case "/api/admin/agent-workers":
+		a.route(w, r, http.MethodGet, a.listAgentWorkers)
+		return
 	case "/api/admin/channel-events":
 		a.route(w, r, http.MethodGet, a.listChannelEvents)
 		return
@@ -158,6 +171,14 @@ func (a *AdminHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.updateProvider(w, r, providerID)
+		return
+	}
+	if name, ok := strings.CutPrefix(path, "/api/admin/agent-connectors/"); ok && name != "" {
+		if r.Method != http.MethodDelete {
+			writeAdminError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed")
+			return
+		}
+		a.revokeAgentConnector(w, r, name)
 		return
 	}
 	if username, ok := strings.CutPrefix(path, "/api/admin/users/"); ok && username != "" {

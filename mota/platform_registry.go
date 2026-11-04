@@ -111,6 +111,17 @@ func (r *AgentRegistry) Get(slug string) *AgentRuntime {
 	return r.agents[slug]
 }
 
+// List 返回全部活动运行态的快照(不含容量语义,仅供遍历)。
+func (r *AgentRegistry) List() []*AgentRuntime {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	runtimes := make([]*AgentRuntime, 0, len(r.agents))
+	for _, runtime := range r.agents {
+		runtimes = append(runtimes, runtime)
+	}
+	return runtimes
+}
+
 // Replace 热替换一个 Agent 的配置。容量参数未变时复用原有信号量,
 // 否则热更新提示词/密钥会让容量瞬时翻倍。
 func (r *AgentRegistry) Replace(agent *AgentConfig) {
