@@ -5,7 +5,7 @@ description: Rank a multi-symbol US equity universe using comparable momentum, q
 
 # Multi-Factor Rotation
 
-Use `mota_market_history` for every candidate and `mota_finance_snapshot` when fundamental facts are required. Apply this playbook only when at least three symbols have comparable observations from the same approximate date.
+Use `ir_market_history` for every candidate and `ir_finance_snapshot` when fundamental facts are required. Apply this playbook only when at least three symbols have comparable observations from the same approximate date.
 
 ## Decision method
 

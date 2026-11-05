@@ -1,0 +1,28 @@
+只输出一个 JSON 对象,不要 markdown 代码块、不要调用工具、不要输出 DSML 或任何解释文字。结构如下:
+
+{
+  "payload_result": {
+    "gate": "PASS",
+    "checks": [
+      { "dimension": "SINGLE_NAME", "status": "OK", "value": 6.2, "threshold": 10.0, "reasoning": "……", "detail": "……" }
+    ],
+    "interpretation": "整体风险解读",
+    "hedging_suggestions": ["当 gate 为 WARN/BREACH 时给出可执行建议"],
+    "evidenceRefs": [
+      { "sourceType": "TASK_INPUT", "sourceId": "task" }
+    ]
+  }
+}
+
+硬性要求:
+- gate 必填,只能是枚举之一: PASS / WARN / BREACH(不要用 APPROVED / BLOCKED)。
+- checks 必填且至少一条;每项必填 dimension、status、reasoning(非空)。
+- dimension 只能是枚举之一: SINGLE_NAME / SECTOR_EXPOSURE / FACTOR_EXPOSURE / VAR / VOLATILITY / STYLE_FACTOR / DRAWDOWN / STRESS_TEST / LIQUIDITY / CONCENTRATION / STOP_LOSS / TAKE_PROFIT / OTHERS。
+- status 只能是枚举之一: OK / WARN / CRIT / UNKNOWN(不要用 PASS / FAIL)。
+- value/threshold 可为数字或 null；缺数据/无适用阈值时填 null，并把 status 设为 UNKNOWN，禁止编造数值。
+- 可选字段: detail、hedging_suggestions(字符串数组)、exposures(对象)、gating_actions(字符串数组)、interpretation。
+- gate 必须与 checks 一致:任一 checks.status 为 WARN/CRIT/UNKNOWN 时,gate 不应为 PASS(应为 WARN 或 BREACH)。
+- gate 为 WARN 或 BREACH 时 hedging_suggestions 必填且至少一条；全 OK 才能 PASS，任一 CRIT 必须 BREACH。
+- 失败路径:当某些风险指标在当前数据条件下无法计算、或任务无法完整完成时,把对应 check 的 status 置为 UNKNOWN(或 WARN)并在 reasoning 说明,
+  同时 gate 必须为 WARN(不是 PASS),并给出 hedging_suggestions 建议。
+- 不要输出契约之外的任何字段。

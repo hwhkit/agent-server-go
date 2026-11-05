@@ -1,0 +1,39 @@
+只输出一个 JSON 对象,不要 markdown 代码块、不要调用工具、不要输出 DSML 或任何解释文字。结构如下:
+
+{
+  "payload_result": {
+    "orders": [
+      {
+        "market": "US",
+        "symbol": "AAPL.US",
+        "direction": "BUY",
+        "order_type": "LIMIT",
+        "limit_price": 245.0,
+        "quantity": 100,
+        "take_profit_trigger_price": 260.0,
+        "take_profit_order_style": "LIMIT",
+        "take_profit_limit_price": 259.5,
+        "stop_loss_trigger_price": 235.0,
+        "stop_loss_order_style": "MARKET",
+        "stop_loss_limit_price": null,
+        "time_in_force": "DAY",
+        "execution_instruction": "GFD",
+        "algo_type": "VWAP",
+        "algo_params": {"participation_rate_pct": 12},
+        "reasoning": "……"
+      }
+    ],
+    "timestamp": "2026-08-20T13:35:00Z",
+    "execution_summary": "订单数量、名义金额、滑点、成本与流动性摘要"
+  }
+}
+
+硬性要求:
+- orders 必填;正常完成时按上游订单意图输出，合法失败路径允许空数组。每项必填以下 13 个字段: market、symbol、direction、order_type、limit_price、quantity、take_profit_trigger_price、take_profit_order_style、take_profit_limit_price、stop_loss_trigger_price、stop_loss_order_style、stop_loss_limit_price、reasoning(非空)。
+- market 只能是 US / HK / CN;direction 只能是 BUY / SELL;order_type 只能是 MARKET / LIMIT;quantity 必须是正整数。
+- MARKET 单 limit_price 必须为 null；LIMIT 单 limit_price 必须为正数。take_profit/stop_loss style 为 MARKET 时对应 limit_price 必须为 null。
+- 可选字段: time_in_force(DAY / GTC)、execution_instruction(GFD / FAK / FOK / BOC)、algo_type(DIRECT / TWAP / VWAP / POV / ICEBERG)、algo_params。
+- 必须保留任务输入 upstream.nodes[].output 中上游给出的全部订单意图:对每个标的至少产出一条 orders(quantity 为正数、方向与上游一致),
+  不得漏掉任意一个上游标的;数量允许小于上游原始数量(拆单/分批),但不得放大、不得改方向。
+- 若任务简报要求「从 symbolPool 精选 N 只」,应从上游订单中选取(N 只),而不要引入上游没有的标的;确需精选时仍需覆盖尽可能多的上游标的。
+- 不要输出契约之外的任何字段;标的必须来自任务输入给出的标的,不得改写代码。

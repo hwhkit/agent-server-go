@@ -1,4 +1,4 @@
-module mota-agent-server
+module ir-agent-server
 
 go 1.26.0
 

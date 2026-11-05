@@ -5,7 +5,7 @@ description: Evaluate short-horizon mean-reversion opportunities in liquid US eq
 
 # Mean Reversion
 
-Use `mota_market_history` before applying this playbook. Require at least 30 valid daily bars and a usable ATR14 or equivalent price range.
+Use `ir_market_history` before applying this playbook. Require at least 30 valid daily bars and a usable ATR14 or equivalent price range.
 
 ## Decision method
 

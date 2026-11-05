@@ -5,7 +5,7 @@ description: Detect actionable price breakouts and breakdowns using level penetr
 
 # Breakout Volume Confirmation
 
-Use `mota_market_history` before generating signals. Require enough daily bars to establish repeated support/resistance and a meaningful volume baseline.
+Use `ir_market_history` before generating signals. Require enough daily bars to establish repeated support/resistance and a meaningful volume baseline.
 
 ## Confirmation rules
 

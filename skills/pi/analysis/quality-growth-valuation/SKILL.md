@@ -5,7 +5,7 @@ description: Assess durable business quality, profitable growth, cash conversion
 
 # Quality Growth Valuation
 
-Use `mota_finance_snapshot` before producing assessments. Base every numeric claim on returned SEC facts, filings, quote fields, and their dates.
+Use `ir_finance_snapshot` before producing assessments. Base every numeric claim on returned SEC facts, filings, quote fields, and their dates.
 
 ## Analysis method
 

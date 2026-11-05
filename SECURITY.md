@@ -28,7 +28,7 @@
 - 应用内退避按“规范化账号 + 真实来源”隔离，避免单个攻击者锁死所有账号；反向代理仍应
   配置独立的每来源总请求速率限制，阻断轮换用户名的资源消耗；
 - 明文 bootstrap 管理密码使用独立的 12–512 字节强密码，生产可直接注入 Argon2id hash；
-- `ADMIN__SESSION_SECRET` 使用至少 32 字节稳定随机值，并与管理员密码、MOTA 密钥分离；
+- `ADMIN__SESSION_SECRET` 使用至少 32 字节稳定随机值，并与管理员密码、IR 密钥分离；
 - Agent 与 Provider 密钥只通过秘密管理系统注入并加密落库；
 - PostgreSQL、指标接口、本地 CLI 工作区和凭据目录不得直接暴露公网；
 - 管理账号、Provider 与 Agent 写 API 仅允许 `admin`，`user` 保持只读且只能查看本人审计；
@@ -44,8 +44,8 @@
   网络层防火墙或透明 egress gateway 限制可达 origin；携带凭据的客户端不会自动信任
   `HTTP_PROXY` / `HTTPS_PROXY`，避免密钥被未验证代理截获；
 - 可选 legacy callback token 会进入目标 URL 查询参数；服务要求
-  `MOTA__CALLBACK_TOKEN_ORIGIN` 精确绑定受信 origin，升级已有 token 配置时必须补齐；
-- Push 协议仍按平台契约使用 body-only MOTA HMAC，并以签名 body 内的 run ID 做第二道
+  `IR__CALLBACK_TOKEN_ORIGIN` 精确绑定受信 origin，升级已有 token 配置时必须补齐；
+- Push 协议仍按平台契约使用 body-only 平台 HMAC，并以签名 body 内的 run ID 做第二道
   唯一防线；动态 Agent 的 body-only 兼容入口默认关闭，仅迁移期可显式开启，正常调用
   必须使用带 timestamp、nonce、run ID、幂等键和 body hash 的 v1 canonical；
 - 动态 Agent callback 没有持久化 outbox。进程在 202 后退出可能需要按原 run ID

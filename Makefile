@@ -1,4 +1,4 @@
-# mota-agent-server-go Makefile
+# ir-agent-server-go Makefile
 # =============================
 # Go 版常用开发、校验、交叉构建、部署与运维入口。
 
@@ -11,7 +11,7 @@
 
 # ─── 变量 ────────────────────────────────────────────────────────────
 GO              ?= go
-BINARY_NAME     ?= mota-agent-server
+BINARY_NAME     ?= ir-agent-server
 BUILD_DIR       ?= dist
 BUILD_ARTIFACT  := $(BUILD_DIR)/$(BINARY_NAME)
 DEPLOY_ARTIFACT := $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64
@@ -27,15 +27,16 @@ HWHKIT_REF        ?= 5e35b70bd062c600f265758955beff8b3d27299a
 VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || printf 'dev')
 GIT_SHA    ?= $(shell git rev-parse HEAD 2>/dev/null || printf 'unknown')
 BUILD_TIME ?= $(shell git show -s --format=%cI HEAD 2>/dev/null || printf 'unknown')
-BUILD_LDFLAGS := -X github.com/hwhkit/hwhkit-go/buildinfo.Version=$(VERSION) \
+BUILD_LDFLAGS := -X main.version=$(VERSION) \
+                 -X github.com/hwhkit/hwhkit-go/buildinfo.Version=$(VERSION) \
                  -X github.com/hwhkit/hwhkit-go/buildinfo.GitSHA=$(GIT_SHA) \
                  -X github.com/hwhkit/hwhkit-go/buildinfo.BuildTime=$(BUILD_TIME)
 RELEASE_LDFLAGS := -s -w $(BUILD_LDFLAGS)
 
 REMOTE_HOST    ?= ubuntu@mota-test
-REMOTE_ROOT    ?= /opt/mota-agent-server-go
+REMOTE_ROOT    ?= /opt/ir-agent-server-go
 REMOTE_BIN     ?= $(REMOTE_ROOT)/bin/$(BINARY_NAME)
-REMOTE_SERVICE ?= mota-agent-server-go
+REMOTE_SERVICE ?= ir-agent-server-go
 REMOTE_ENV     ?= $(REMOTE_ROOT)/env.conf
 HEALTH_URL     ?= http://127.0.0.1:8080/health/ready
 REMOTE_HEALTH_URL      ?= http://127.0.0.1:8080/health/ready
@@ -56,7 +57,7 @@ export GOCACHE := $(CURDIR)/.gocache
 
 # ─── 默认目标 ────────────────────────────────────────────────────────
 help: ## 显示帮助信息
-	@echo "mota-agent-server-go 常用命令"
+	@echo "ir-agent-server-go 常用命令"
 	@echo ""
 	@echo "  开发:"
 	@echo "    make bootstrap-hwhkit 固定版本初始化/校验 hwhkit 源码"
@@ -96,14 +97,14 @@ bootstrap-hwhkit: ## 初始化/校验固定版本 hwhkit sibling checkout
 
 build: bootstrap-hwhkit ## 编译本机二进制
 	@mkdir -p $(BUILD_DIR)
-	$(GO) build -trimpath -ldflags "$(BUILD_LDFLAGS)" -o $(BUILD_ARTIFACT) .
+	$(GO) build -trimpath -ldflags "$(BUILD_LDFLAGS)" -o $(BUILD_ARTIFACT) ./cmd/ir-agent-server
 
 release: bootstrap-hwhkit ## 编译精简的本机 release 二进制
 	@mkdir -p $(BUILD_DIR)
-	$(GO) build -trimpath -ldflags "$(RELEASE_LDFLAGS)" -o $(BUILD_ARTIFACT) .
+	$(GO) build -trimpath -ldflags "$(RELEASE_LDFLAGS)" -o $(BUILD_ARTIFACT) ./cmd/ir-agent-server
 
 dev: bootstrap-hwhkit ## 编译并运行（自动加载可选 .env.dev）
-	@[ -f $(ENV_DEV) ] && set -a && . ./$(ENV_DEV) && set +a; $(GO) run .
+	@[ -f $(ENV_DEV) ] && set -a && . ./$(ENV_DEV) && set +a; $(GO) run ./cmd/ir-agent-server
 
 run: dev ## dev 的别名
 
@@ -131,7 +132,7 @@ fmt: ## 格式化全部已跟踪 Go 文件
 	gofmt -w $$(git ls-files '*.go')
 
 bench: bootstrap-hwhkit ## 运行 Go benchmark
-	$(GO) test -run '^$$' -bench . ./mota
+	$(GO) test -run '^$$' -bench . ./internal/...
 
 verify: bootstrap-hwhkit ## 校验模块下载内容与 go.mod/go.sum 整洁性
 	$(GO) mod verify
@@ -155,7 +156,7 @@ clean: ## 清理构建产物和项目内 Go 缓存
 # ─── 部署 ────────────────────────────────────────────────────────────
 deploy-build: bootstrap-hwhkit ## 交叉编译 Linux ARM64 静态二进制
 	@mkdir -p $(BUILD_DIR)
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build -trimpath -ldflags "$(RELEASE_LDFLAGS)" -o $(DEPLOY_ARTIFACT) .
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build -trimpath -ldflags "$(RELEASE_LDFLAGS)" -o $(DEPLOY_ARTIFACT) ./cmd/ir-agent-server
 	@sha="$$(sh scripts/file-sha256.sh $(call shell_quote,$(DEPLOY_ARTIFACT)))"; \
 	  printf '%s  %s\n' "$$sha" "$(notdir $(DEPLOY_ARTIFACT))" > $(DEPLOY_CHECKSUM)
 	@echo ""

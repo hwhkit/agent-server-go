@@ -1,4 +1,5 @@
 blank_issues_enabled: false
+# TODO: 仓库更名后更新为新的 security policy 地址。
 contact_links:
   - name: Security policy
     url: https://github.com/mota-impl/agent-center-go/security/policy

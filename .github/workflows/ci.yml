@@ -37,16 +37,16 @@ jobs:
         run: make ci
       - name: Inspect deployment provenance
         run: |
-          file dist/mota-agent-server-linux-arm64
-          go version -m dist/mota-agent-server-linux-arm64
-          (cd dist && sha256sum -c mota-agent-server-linux-arm64.sha256)
+          file dist/ir-agent-server-linux-arm64
+          go version -m dist/ir-agent-server-linux-arm64
+          (cd dist && sha256sum -c ir-agent-server-linux-arm64.sha256)
       - name: Upload Linux ARM64 artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node 24)
         with:
-          name: mota-agent-server-linux-arm64-${{ github.sha }}
+          name: ir-agent-server-linux-arm64-${{ github.sha }}
           path: |
-            dist/mota-agent-server-linux-arm64
-            dist/mota-agent-server-linux-arm64.sha256
+            dist/ir-agent-server-linux-arm64
+            dist/ir-agent-server-linux-arm64.sha256
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
@@ -65,11 +65,11 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: mota_test
+          POSTGRES_DB: ir_test
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U postgres -d mota_test"
+          --health-cmd "pg_isready -U postgres -d ir_test"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -85,7 +85,7 @@ jobs:
         run: make bootstrap-hwhkit
       - name: PostgreSQL integration tests (must not skip)
         env:
-          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/mota_test?sslmode=disable
+          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/ir_test?sslmode=disable
         run: make test-pg
 
   security:

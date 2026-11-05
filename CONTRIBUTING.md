@@ -1,6 +1,6 @@
 # Contributing
 
-感谢你参与 `mota-agent-server-go`。提交代码前请阅读 [SECURITY.md](SECURITY.md)；
+感谢你参与 `ir-agent-server-go`。提交代码前请阅读 [SECURITY.md](SECURITY.md)；
 未修复漏洞不要放进公开 Issue 或 Pull Request。
 
 ## Development setup
@@ -30,7 +30,7 @@ make verify
 涉及数据库、Provider、账号、callback、幂等或迁移时必须额外运行：
 
 ```bash
-TEST_DATABASE_URL='postgres://postgres:postgres@127.0.0.1:5432/mota_test' \
+TEST_DATABASE_URL='postgres://postgres:postgres@127.0.0.1:5432/ir_test' \
   make test-pg
 ```
 

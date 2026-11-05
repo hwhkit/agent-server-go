@@ -1,5 +1,5 @@
 # 构建产物
-/mota-agent-server
+/ir-agent-server
 /target
 /dist/
 *.exe
@@ -27,3 +27,4 @@ coverage.html
 .DS_Store
 .idea/
 .vscode/
+.zcode/

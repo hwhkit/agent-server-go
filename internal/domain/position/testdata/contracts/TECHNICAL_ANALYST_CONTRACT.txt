@@ -1,0 +1,40 @@
+只输出一个 JSON 对象,不要 markdown 代码块、不要调用工具、不要输出 DSML 或任何解释文字。结构如下:
+
+{
+  "payload_result": {
+    "signals": [
+      {
+        "symbol": "AAPL.US",
+        "trend_state": "UPTREND",
+        "bias": "LONG_BIAS",
+        "entry_zone": [240.0, 242.0],
+        "reasoning": "……",
+        "interval": "1d",
+        "momentum_score": 0.62,
+        "confidence": 0.71,
+        "stop_loss": 235.0,
+        "targets": [250.0, 260.0],
+        "key_levels": {"support": [235.0], "resistance": [250.0]},
+        "pattern": "突破后回踩",
+        "indicators": {"rsi_14": 61.4, "macd": "bullish"},
+        "volatility_regime": "NORMAL",
+        "relative_strength": "vs benchmark +6.4%",
+        "invalidation": "收盘跌破 235.0 后信号失效"
+      }
+    ],
+    "summary": "……",
+    "evidenceRefs": [
+      { "sourceType": "TASK_INPUT", "sourceId": "task" }
+    ]
+  }
+}
+
+硬性要求:
+- signals 必填;正常完成时至少一条,缺少可靠行情或模型失败时允许空数组并在 summary 写明具体原因。每项必填 symbol、bias、entry_zone、reasoning(非空)。
+- trend_state 只能是枚举之一: UPTREND / DOWNTREND / SIDEWAYS / BREAKOUT / PULLBACK / MEAN_REVERSION / OTHERS(不要用中文或"上升趋势"等非枚举值)。
+- bias 只能是枚举之一: LONG_BIAS / SHORT_BIAS / NEUTRAL(不要用 BULLISH / BEARISH)。
+- entry_zone 只能是空数组或恰好两个数字 [下沿,上沿]，不能用描述文本代替。
+- momentum_score 必须在 -1 到 1；confidence 必须在 0 到 1（不要输出 72、85 这类百分数）。
+- targets/support/resistance 必须是数字数组；key_levels 只能含 support/resistance；indicators 可保存 RSI/MACD/ATR/均线/量比等结构化读数。
+- reasoning 应结合趋势、量价、动量、关键位与失效条件；没有行情数据时使用 NEUTRAL + 空 entry_zone 并明确数据缺口。
+- 不要输出契约之外的任何字段;评估的标的必须来自任务输入给出的标的,不得改写代码。

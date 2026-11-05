@@ -4,9 +4,9 @@
 **纯出站 HTTPS** 认领并执行平台任务。远端不需要固定 IP、公网入口或入站端口,
 NAT/容器/家用网络均可接入。
 
-设计原则:操作语义与已验证的 MOTA Pull 协议严格一致(长轮询 claim、租约 renew、
+设计原则:操作语义与已验证的主 Pull 协议(worker claim/renew/complete)严格一致(长轮询 claim、租约 renew、
 幂等 complete、heartbeat 存活),但载荷是平台原生形态(以 agent slug 为主键),
-鉴权用管理台签发的连接器令牌而非 MOTA bind token。
+鉴权用管理台签发的连接器令牌而非 worker bind token。
 
 ## 0. 总则
 
@@ -75,7 +75,7 @@ POST /agent-api/v1/claim
 |---|---|
 | `runId` | 全局运行 ID;renew/complete/审计共用 |
 | `agentSlug` / `agentRevision` | 认领的岗位与其配置版本 |
-| `input` | 任务载荷;字段名与 MOTA claim 保持同构,便于复用既有执行器解析 |
+| `input` | 任务载荷;字段名与 worker claim 保持同构,便于复用既有执行器解析 |
 | `attempts` | 第几次派发(1 起)。**连接器据此感知重试**,做副作用幂等 |
 | `executionDeadline` | 服务端墙钟上限(首次派发时刻 + Agent `timeout_secs`);此后续租必被拒(§6.2) |
 | `leaseExpireAt` | 租约绝对到期时刻;此后任务可被重新派发 |
@@ -219,7 +219,7 @@ exactly-once,做三件事把风险显性化:
 |---|---|
 | 动态 `/agent/{slug}`(默认) | `202 Accepted` + `{runId, resultUrl, queueTimeoutSeconds}`;调用方轮询 `GET /agent/{slug}/runs/{runId}`(200 结果 / 202 进行中 / 410 已过期) |
 | 动态 `/agent/{slug}`(带 `X-Agent-Wait: <secs>`) | 有界同步 hold:窗口(≤ `AGENT_API__SYNC_HOLD_MAX_SECONDS`,默认 300)内完成 → 就地返回结果信封;超窗 → 降级为与默认相同的 202 响应。**调用方断连不取消任务**,结果照常落库,审计标注 `caller_disconnected` |
-| MOTA push | **路由可达 remote-pull Agent 时强制 async**:启动校验要求 `MOTA__PUSH_MODE=async`(否则启动失败,防呆);运行期兜底——sync 绑定的任务误路由到 remote-pull 时,按有界 hold 等待,超窗返回同步失败信封(沿用现有 502 语义),绝不静默丢弃 |
+| 平台 push | **路由可达 remote-pull Agent 时强制 async**:启动校验要求 `IR__PUSH_MODE=async`(否则启动失败,防呆);运行期兜底——sync 绑定的任务误路由到 remote-pull 时,按有界 hold 等待,超窗返回同步失败信封(沿用现有 502 语义),绝不静默丢弃 |
 | A2A `message/send` | 立即返回 `working` 态 task + taskId,调用方 `tasks/get` 轮询(协议标准形态);若调用方在任务上配置了 push notification webhook,终态时平台照常回调(方向是平台→调用方的 webhook,调用方自己保证了可达性) |
 
 ## 6. 时间边界:三级时限与状态机

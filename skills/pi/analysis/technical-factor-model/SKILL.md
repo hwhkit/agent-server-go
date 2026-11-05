@@ -5,7 +5,7 @@ description: Produce systematic technical signals from a composite of trend, mom
 
 # Technical Factor Model
 
-Use `mota_market_history` for every symbol before generating signals. Require comparable observation dates and sufficient daily bars.
+Use `ir_market_history` for every symbol before generating signals. Require comparable observation dates and sufficient daily bars.
 
 ## Factor framework
 

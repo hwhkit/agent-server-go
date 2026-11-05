@@ -10,30 +10,30 @@ drain_timeout_ms = 30000
 handler_timeout_ms = 3610000
 
 [observability]
-service_name = "mota-agent-server"
+service_name = "ir-agent-server"
 environment = "dev"
 
 [observability.logging]
 level = "info"
 format = "pretty"
 
-# MOTA 接入配置段。
+# Intelligent Router 接入配置段。
 # 说明:
-#   - 本段由 mota-agent-server 自己的配置加载器解析([mota] 段),
+#   - 本段由 ir-agent-server 自己的配置加载器解析([ir] 段),
 #     hwhkit 的 AppConfig 解析会忽略未知段,两者互不干扰。
-#   - 环境变量优先级更高: MOTA__PUSH_ENABLED / MOTA__SIGNING_SECRET /
-#     MOTA__SIGNATURE_ENCODING / MOTA__PUSH_PATH / MOTA__PULL_ENABLED /
-#     MOTA__QUEUE_URL / MOTA__BIND_TOKEN / MOTA__WORKER_ID / ... ,
+#   - 环境变量优先级更高: IR__PUSH_ENABLED / IR__SIGNING_SECRET /
+#     IR__SIGNATURE_ENCODING / IR__PUSH_PATH / IR__PULL_ENABLED /
+#     IR__QUEUE_URL / IR__BIND_TOKEN / IR__WORKER_ID / ... ,
 #     空字符串视为"未设置",会被环境变量覆盖。
-[mota]
-# --- Push 接入:接收 MOTA 推送任务 ---
+[ir]
+# --- Push 接入:接收平台推送任务 ---
 # POST <your endpoint> -> 200 + V2 结果信封，或 202 + callback v2。
 push_enabled = true
-push_path = "/mota/push"
-# HMAC-SHA256 签名密钥(MOTA 平台签发)。此处为本地开发占位值;
-# 生产环境务必通过环境变量 MOTA__SIGNING_SECRET 注入,不要明文提交到仓库。
+push_path = "/ir/push"
+# HMAC-SHA256 签名密钥(Intelligent Router 平台签发)。此处为本地开发占位值;
+# 生产环境务必通过环境变量 IR__SIGNING_SECRET 注入,不要明文提交到仓库。
 signing_secret = "change-me"
-# X-MoTA-Signature 编码方式:hex(小写十六进制)或 base64。
+# X-IR-Signature 编码方式:hex(小写十六进制)或 base64。
 signature_encoding = "hex"
 
 # --- Pull 接入:worker 轮询队列 ---
@@ -51,7 +51,7 @@ renew_interval_secs = 30
 # 单任务最长处理时间(秒),超时后放弃(不再续租)。
 task_timeout_secs = 600
 
-# --- 新协议(mota-agent-bound-task v1) ---
+# --- 新协议(ir-agent-bound-task v1) ---
 # Push 响应形态:"sync" = 200 + 结果信封(默认);"async" = 202 + callback 回传。
 # push_mode = "sync"
 # Push 形态心跳地址(平台绑定信息下发);留空则 Push 心跳禁用。
@@ -79,7 +79,7 @@ public_base_url = "http://127.0.0.1:8080"
 max_request_body_bytes = 2097152
 global_max_concurrency = 16
 # 动态 /agent/{slug} 默认只接受带 timestamp + nonce 的 X-Agent-Signature v1。
-# 旧 X-MoTA-Signature 只签 body、无法防重放；仅迁移期临时开启。
+# 旧 X-IR-Signature 只签 body、无法防重放；仅迁移期临时开启。
 allow_legacy_body_signature = false
 
 [admin]
@@ -124,7 +124,7 @@ base_url = "https://api.openai.com/v1"
 default_model = "gpt-6-astra"
 reasoning_effort = "medium"
 environment = "none"
-mcp_server_label = "mota_tools"
+mcp_server_label = "ir_tools"
 mcp_required = true
 delete_session = true
 max_response_bytes = 2097152
@@ -154,7 +154,7 @@ openhands_binary = "openhands"
 openhands_default_model = ""
 # 可选：Pi 基本面/技术分析岗位的只读金融与行情数据扩展。生产环境建议通过
 # LOCAL_AGENT__FINANCE_EXTENSION_PATH 指向已审计的本地 TypeScript 文件。
-# finance_extension_path = "/home/ubuntu/mota-agent-server/extensions/pi/mota-finance-data.ts"
+# finance_extension_path = "/home/ubuntu/ir-agent-server/extensions/pi/ir-finance-data.ts"
 # 策略分析师可配置 2-3 个标准 SKILL.md；生产环境建议通过
 # LOCAL_AGENT__STRATEGY_SKILL_PATHS 使用逗号分隔的绝对路径。
 # strategy_skill_paths = []
@@ -195,9 +195,9 @@ require_bearer_auth = true
 # 对外 card 的 version 字段(Agent 自身版本，不是协议版本)；留空取内置版本号。
 # agent_version = "1.0.0"
 # provider 是可选对象，但一旦声明，organization 与 url 必须同时给出。
-# provider_organization = "MOTA"
+# provider_organization = "Intelligent Router"
 # provider_url = "https://infoman.ai"
 # documentation_url = "https://infoman.ai/docs/a2a"
 max_request_body_bytes = 1048576
-# root well-known card 指向的 Agent;留空则回落 [mota].default_agent_slug。
+# root well-known card 指向的 Agent;留空则回落 [ir].default_agent_slug。
 default_card_slug = ""

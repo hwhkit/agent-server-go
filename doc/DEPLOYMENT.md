@@ -81,8 +81,8 @@ make deploy-pi PI_NPM_PACKAGE='@earendil-works/pi-coding-agent@X.Y.Z'
 部署脚本不上传生产密钥。使用 root-only 环境文件或秘密管理系统注入：
 
 - `DATABASE_URL`；
-- `MOTA__SIGNING_SECRET`、bind token 与 callback token；使用 callback token 时必须同时
-  配置仅含 scheme + host 的 `MOTA__CALLBACK_TOKEN_ORIGIN`；
+- `IR__SIGNING_SECRET`、bind token 与 callback token；使用 callback token 时必须同时
+  配置仅含 scheme + host 的 `IR__CALLBACK_TOKEN_ORIGIN`；
 - `ADMIN__PASSWORD` 或 Argon2id hash；
 - 稳定的 `ADMIN__SESSION_SECRET`；
 - Provider API key 和 MCP Authorization。

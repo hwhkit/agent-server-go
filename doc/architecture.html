@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#07110f">
-  <meta name="description" content="MOTA Go 智能体管理与执行服务系统架构图">
-  <title>MOTA Agent Server · Go 系统架构</title>
+  <meta name="description" content="Intelligent Router Go 智能体管理与执行服务系统架构图">
+  <title>Intelligent Router Agent Server · Go 系统架构</title>
   <style>
     :root {
       color-scheme: dark;
@@ -595,7 +595,7 @@
 
   <nav class="topbar" aria-label="主导航">
     <div class="wrap topbar-inner">
-      <a class="brand" href="#top"><span class="brand-mark" aria-hidden="true"></span>MOTA / AGENT FABRIC</a>
+      <a class="brand" href="#top"><span class="brand-mark" aria-hidden="true"></span>INTELLIGENT ROUTER / AGENT FABRIC</a>
       <div class="nav-links">
         <a href="#architecture">架构图</a>
         <a href="#flows">关键流程</a>
@@ -688,7 +688,7 @@
               <div class="plane-meta"><b>DATA PLANE / 任务执行面</b><span>每个 Agent 独立鉴权、并发、超时和输出契约</span></div>
 
               <button class="node actor" type="button" data-detail="caller" data-flows="request pull">
-                <span class="node-code">Actor</span><h3>调用方 / MoTA</h3><p>Push 请求、Pull 队列任务或异步 Callback 消费方。</p><small>06</small>
+                <span class="node-code">Actor</span><h3>调用方 / 平台</h3><p>Push 请求、Pull 队列任务或异步 Callback 消费方。</p><small>06</small>
               </button>
               <span class="connector" data-label="signed JSON" data-flows="request pull" aria-hidden="true"></span>
               <button class="node data" type="button" data-detail="gateway" data-flows="request">
@@ -696,7 +696,7 @@
               </button>
               <span class="connector" data-label="AgentRuntime" data-flows="request pull" aria-hidden="true"></span>
               <button class="node data" type="button" data-detail="adapter" data-flows="request pull">
-                <span class="node-code">Protocol</span><h3>协议适配器</h3><p>MoTA Push/Pull 与通用 JSON 统一映射为 AgentContext。</p><small>08</small>
+                <span class="node-code">Protocol</span><h3>协议适配器</h3><p>Push/Pull 与通用 JSON 统一映射为 AgentContext。</p><small>08</small>
               </button>
               <span class="connector" data-label="task context" data-flows="request pull" aria-hidden="true"></span>
               <button class="node data" type="button" data-detail="orchestrator" data-flows="request pull">
@@ -854,15 +854,15 @@
       </div>
 
       <div class="decision-bar" style="margin-top: 16px">
-        <div><strong>Current contract</strong><h3>统一传输信封，按岗位校验内容</h3><p>对外继续使用统一 MoTA Payload，同时允许每个 Agent 保存输入与输出 JSON Schema。</p></div>
-        <div class="decision-options"><span>MoTA Envelope</span><span>Per-Agent JSON Schema</span><span>输出契约校验</span></div>
+        <div><strong>Current contract</strong><h3>统一传输信封，按岗位校验内容</h3><p>对外继续使用统一 Payload，同时允许每个 Agent 保存输入与输出 JSON Schema。</p></div>
+        <div class="decision-options"><span>统一信封</span><span>Per-Agent JSON Schema</span><span>输出契约校验</span></div>
       </div>
     </section>
   </main>
 
   <footer>
     <div class="wrap footer-inner">
-      <span>MOTA AGENT SERVER / GO ARCHITECTURE</span>
+      <span>INTELLIGENT ROUTER AGENT SERVER / GO ARCHITECTURE</span>
       <span>STATIC DOCUMENT · <span id="year">2026</span></span>
     </div>
   </footer>
@@ -895,8 +895,8 @@
         meta: ["sync.RWMutex", "revision-aware", "hot reload"]
       },
       caller: {
-        title: "调用方 / MoTA 平台",
-        copy: "调用方可以通过动态 Push URL 请求 Agent；MoTA Pull worker 也复用同一编排和执行能力。",
+        title: "调用方 / Intelligent Router 平台",
+        copy: "调用方可以通过动态 Push URL 请求 Agent；Pull worker 也复用同一编排和执行能力。",
         meta: ["Push", "Pull", "async callback"]
       },
       gateway: {
@@ -906,8 +906,8 @@
       },
       adapter: {
         title: "协议适配器",
-        copy: "把现有 MoTA BoundTask、旧 Push 请求和通用 JSON 转换为统一 AgentContext，并在返回时恢复目标协议信封。",
-        meta: ["MOTA Push", "MOTA Pull", "generic JSON"]
+        copy: "把现有 BoundTask、旧 Push 请求和通用 JSON 转换为统一 AgentContext，并在返回时恢复目标协议信封。",
+        meta: ["Push", "Pull", "generic JSON"]
       },
       orchestrator: {
         title: "Run Orchestrator",

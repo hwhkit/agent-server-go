@@ -7,6 +7,10 @@
 > 也不构成“Go 与 Rust 没有差异”的保证。当前门禁、已知边界与待验证项请查阅
 > [`../RELEASE-READINESS.md`](../RELEASE-READINESS.md) 和
 > [`../MAINTENANCE.md`](../MAINTENANCE.md)。
+>
+> **更名说明（2026-11）：**产品已由 MoTA 更名为 **Intelligent Router**（Go 包 `ir`、
+> 二进制 `ir-agent-server`）。本文为历史记录，正文中的 `mota-*` 仓库名、`MOTA__*`
+> 环境变量与 `MoTA` 品牌字样均指更名前的旧名，不再代表当前代码。
 
 ## 0. 总体决策(已定,不再重新讨论)
 

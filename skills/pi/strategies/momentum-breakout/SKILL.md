@@ -5,7 +5,7 @@ description: Evaluate medium-term momentum and confirmed price/volume breakouts 
 
 # Momentum Breakout
 
-Use `mota_market_history` before applying this playbook. Work only from returned bars, indicators, quote timestamps, and explicit upstream evidence.
+Use `ir_market_history` before applying this playbook. Work only from returned bars, indicators, quote timestamps, and explicit upstream evidence.
 
 ## Decision method
 

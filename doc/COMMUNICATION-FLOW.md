@@ -1,4 +1,4 @@
-# 管理台、MOTA 平台与执行器通信流程
+# 管理台、Intelligent Router 平台与执行器通信流程
 
 本文描述 Go 服务的主要数据流。示例公网前缀 `/center` 由反向代理剥离；服务内部路由
 仍是 `/admin`、`/agent/{slug}` 和 `/api/admin/*`。
@@ -36,7 +36,7 @@ GET Provider + revision
 ## 2. 动态 Agent 同步请求
 
 ```text
-MOTA 平台
+Intelligent Router 平台
   -> POST /agent/{slug}
   -> 验签 / nonce 防重放 / 幂等认领
   -> agent_runs: running
@@ -54,7 +54,7 @@ MOTA 平台
 请求体有非空 `callbackUrl` 时：
 
 ```text
-MOTA 平台
+Intelligent Router 平台
   -> POST /agent/{slug}
   -> 验签 / 幂等认领 / agent_runs: running
   <- 202
@@ -85,13 +85,13 @@ Go 服务后台任务
 Push：
 
 ```text
-POST /mota/push
+POST /ir/push
   -> 原始 body HMAC
   -> PostgreSQL push_idempotency
   -> 同步 200，或异步 202 + callback
 ```
 
-`/mota/push` 不写 `agent_runs`；其可恢复状态保存在 Push 幂等表。完整信封、错误码和
+`/ir/push` 不写 `agent_runs`；其可恢复状态保存在 Push 幂等表。完整信封、错误码和
 callback 规则见 [PUSH-PRODUCTION.md](PUSH-PRODUCTION.md)。
 
 Pull：
@@ -109,8 +109,8 @@ heartbeat 独立循环
 
 | 路径 | 用途 | 认证 |
 |---|---|---|
-| `/mota/push` | bound-task Push | MOTA HMAC + run ID + 幂等键 |
-| `/agent/{slug}` | 动态 Agent | MOTA 兼容签名或 v1 时间戳/nonce 签名 |
+| `/ir/push` | bound-task Push | 平台 HMAC + run ID + 幂等键 |
+| `/agent/{slug}` | 动态 Agent | 旧兼容签名(body-only)或 v1 时间戳/nonce 签名 |
 | `/agent-center-go/{slug}` | 动态 Agent 公网别名 | canonical 仍为 `/agent/{slug}` |
 | `/a2a/*` | A2A v1.0（可选） | 派生 Bearer token |
 | `/admin`、`/api/admin/*` | 管理面 | Session + 写操作 CSRF + 角色 |
@@ -121,8 +121,8 @@ heartbeat 独立循环
 
 | 目标 | 用途 | 敏感数据 |
 |---|---|---|
-| MOTA callback | 异步结果 | callback v2 签名、可选旧 token |
-| MOTA heartbeat / Pull 队列 | 通道状态与任务 | Bearer bind token |
+| 平台 callback | 异步结果 | callback v2 签名、可选旧 token |
+| 平台 heartbeat / Pull 队列 | 通道状态与任务 | Bearer bind token |
 | LiteLLM / OpenAI / Anthropic | 模型与托管 Agent | Provider API key |
 | 本地 Agent CLI | 本机执行 | 受限环境变量与工作区 |
 

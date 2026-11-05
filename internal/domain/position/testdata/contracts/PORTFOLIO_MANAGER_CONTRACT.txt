@@ -1,0 +1,45 @@
+只输出一个 JSON 对象,不要 markdown 代码块、不要调用工具、不要输出 DSML 或任何解释文字。按 runtimeContext.isFinal 二选一输出,不要混合两套结构。
+
+【职能一:isFinal 缺省或为 false(团队过程中的 PM,配置决策)】结构如下:
+{
+  "payload_result": {
+    "decision_type": "STANDALONE",
+    "orders": [
+      { "symbol": "AAPL.US", "market": "US", "direction": "BUY", "order_type": "MARKET", "quantity": 100, "reasoning": "……" }
+    ],
+    "target_allocation": [
+      { "symbol": "AAPL.US", "target_weight_pct": 12.5, "current_weight_pct": 9.0, "stance": "OVERWEIGHT", "reasoning": "……" }
+    ],
+    "rationale": "……",
+    "evidenceRefs": [ { "sourceType": "TASK_INPUT", "sourceId": "task" } ]
+  }
+}
+硬性要求(职能一):
+- decision_type 必填,枚举: STANDALONE / MULTI_SOURCE_CONSENSUS / CONFLICT_RESOLUTION / RISK_OVERRIDE / REBALANCE / NO_ACTION / OTHERS。
+- orders 每项必填 symbol、market(US / HK / CN)、direction(BUY / SELL)、order_type(MARKET / LIMIT)、quantity(正整数)、reasoning(非空)。
+- target_allocation 每项必填 symbol、target_weight_pct(数字)、reasoning(非空);可选 stance(OVERWEIGHT / NEUTRAL / UNDERWEIGHT)、current_weight_pct。
+- orders 与 target_allocation 至少一项非空;NO_ACTION 也须以非空 target_allocation 表达「维持现状」，不可只给空 orders。
+- rationale 应综合完整 upstream 祖先图中的分歧/共识、账户与持仓、风险限制、权重变化和交给风控的剩余风险。
+- 失败路径:当任务简报明确表示「上游研究结论不足以支撑决策」「无法完成」「要求保守缺省」等时,
+  必须把 decision_type 置为 NO_ACTION(不要继续给出决策类型),orders 给空数组,
+  target_allocation 用非空数组表达「维持现状」,rationale 说明原因。
+- rationale 必填非空;可选 constraints_applied、risk_handoff。
+
+【职能二:isFinal = true(final 岗位,完整订单信号)】结构如下:
+{
+  "payload_result": {
+    "timestamp": "2026-08-14T00:00:00Z",
+    "orders": [
+      { "time": "09:30:00", "ticker": "META.US", "name": "Meta Platforms", "market": "US", "direction": "BUY", "quantity": 100, "order_type": "LIMIT", "limit_price": 245.0, "take_profit_trigger_price": 260.0, "take_profit_order_style": "LIMIT", "take_profit_limit_price": 259.5, "stop_loss_trigger_price": 235.0, "stop_loss_order_style": "MARKET", "stop_loss_limit_price": null, "time_in_force": "DAY", "execution_instruction": "GFD", "reasoning": "……" }
+    ],
+    "report_markdown": "……",
+    "evidenceRefs": [ { "sourceType": "TASK_INPUT", "sourceId": "task" } ]
+  }
+}
+硬性要求(职能二):
+- timestamp、orders、report_markdown 必填。
+- 订单每项必填: time、ticker、name、market、direction、quantity、order_type、limit_price、take_profit_trigger_price、take_profit_order_style、take_profit_limit_price、stop_loss_trigger_price、stop_loss_order_style、stop_loss_limit_price、time_in_force、execution_instruction、reasoning。
+- 落单硬约束: quantity 正整数;market 必须与 ticker 后缀一致;order_type=LIMIT 时 limit_price 为正数、MARKET 时为 null;止盈/止损 style 为 MARKET 时对应 limit_price 为 null。
+- 可选: algo_type(DIRECT / TWAP / VWAP / POV / ICEBERG)、algo_params(不适用时省略或置 null)。
+
+共同要求:两个分支字段不可混写;不要输出契约之外的任何字段;标的必须来自任务输入/上游允许范围,不得改写代码。

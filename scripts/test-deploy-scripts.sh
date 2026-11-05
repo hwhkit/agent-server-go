@@ -4,7 +4,7 @@ set -eu
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 project_root=$(dirname "$script_dir")
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/mota-go-deploy-test.XXXXXXXXXX")
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/ir-go-deploy-test.XXXXXXXXXX")
 cleanup() {
     rm -rf -- "$tmp"
 }
@@ -22,30 +22,30 @@ expect_failure() {
     fi
 }
 
-artifact=$tmp/mota-agent-server
+artifact=$tmp/ir-agent-server
 printf 'abc' > "$artifact"
 sha=$(sh "$script_dir/file-sha256.sh" "$artifact")
 expected=ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
 [ "$sha" = "$expected" ] || fail "portable SHA256 helper returned $sha"
 
 DEPLOY_DRY_RUN=1 sh "$script_dir/deploy-upload.sh" \
-    deploy@example.test /opt/mota/bin/mota-agent-server "$artifact" "$sha" >/dev/null
+    deploy@example.test /opt/ir/bin/ir-agent-server "$artifact" "$sha" >/dev/null
 DEPLOY_DRY_RUN=1 sh "$script_dir/deploy-restart.sh" \
-    deploy@example.test mota-agent-server-go /opt/mota/bin/mota-agent-server \
+    deploy@example.test ir-agent-server-go /opt/ir/bin/ir-agent-server \
     http://127.0.0.1:8080/health/ready 3 0 "$sha" >/dev/null
 DEPLOY_DRY_RUN=1 sh "$script_dir/deploy-pi.sh" \
-    deploy@example.test /opt/mota/env.conf \
+    deploy@example.test /opt/ir/env.conf \
     @earendil-works/pi-coding-agent@1.2.3 >/dev/null
 REMOTE_OP_DRY_RUN=1 sh "$script_dir/remote-service.sh" \
-    status deploy@example.test mota-agent-server-go >/dev/null
+    status deploy@example.test ir-agent-server-go >/dev/null
 
 # Guard the Makefile-to-wrapper argument contract: this catches accidentally
 # reverting to the old `ssh ... < deploy-restart.sh` calling convention.
 make -s -C "$project_root" deploy-restart \
     DEPLOY_DRY_RUN=1 \
     REMOTE_HOST=deploy@example.test \
-    REMOTE_SERVICE=mota-agent-server-go \
-    REMOTE_BIN=/opt/mota/bin/mota-agent-server \
+    REMOTE_SERVICE=ir-agent-server-go \
+    REMOTE_BIN=/opt/ir/bin/ir-agent-server \
     REMOTE_HEALTH_URL=http://127.0.0.1:8080/health/ready \
     REMOTE_HEALTH_ATTEMPTS=3 \
     REMOTE_HEALTH_INTERVAL=0 \
@@ -57,8 +57,8 @@ default_checksum_output=$(make -s -C "$project_root" deploy-restart \
     DEPLOY_DRY_RUN=1 \
     DEPLOY_ARTIFACT="$artifact" \
     REMOTE_HOST=deploy@example.test \
-    REMOTE_SERVICE=mota-agent-server-go \
-    REMOTE_BIN=/opt/mota/bin/mota-agent-server \
+    REMOTE_SERVICE=ir-agent-server-go \
+    REMOTE_BIN=/opt/ir/bin/ir-agent-server \
     REMOTE_HEALTH_URL=http://127.0.0.1:8080/health/ready \
     REMOTE_HEALTH_ATTEMPTS=3 \
     REMOTE_HEALTH_INTERVAL=0)
@@ -71,17 +71,17 @@ grep -F 'sudo sha256sum "/proc/$pid/exe"' "$script_dir/deploy-restart.sh" >/dev/
     fail "running executable hash must use the scoped sudo boundary"
 
 expect_failure env DEPLOY_DRY_RUN=1 sh "$script_dir/deploy-upload.sh" \
-    -unsafe /opt/mota/bin/mota-agent-server "$artifact" "$sha"
+    -unsafe /opt/ir/bin/ir-agent-server "$artifact" "$sha"
 expect_failure env DEPLOY_DRY_RUN=1 sh "$script_dir/deploy-upload.sh" \
     deploy@example.test relative/path "$artifact" "$sha"
 expect_failure env DEPLOY_DRY_RUN=1 sh "$script_dir/deploy-upload.sh" \
-    deploy@example.test /opt/mota/bin/mota-agent-server "$artifact" \
+    deploy@example.test /opt/ir/bin/ir-agent-server "$artifact" \
     aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 expect_failure env DEPLOY_DRY_RUN=1 sh "$script_dir/deploy-restart.sh" \
-    deploy@example.test 'bad;service' /opt/mota/bin/mota-agent-server \
+    deploy@example.test 'bad;service' /opt/ir/bin/ir-agent-server \
     http://127.0.0.1:8080/health/ready 3 0 "$sha"
 expect_failure env DEPLOY_DRY_RUN=1 sh "$script_dir/deploy-pi.sh" \
-    deploy@example.test /opt/mota/env.conf @earendil-works/pi-coding-agent@latest
+    deploy@example.test /opt/ir/env.conf @earendil-works/pi-coding-agent@latest
 expect_failure env REMOTE_OP_DRY_RUN=1 sh "$script_dir/remote-service.sh" \
     status deploy@example.test 'bad;service'
 

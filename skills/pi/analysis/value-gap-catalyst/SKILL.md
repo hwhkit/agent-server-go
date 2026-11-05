@@ -5,7 +5,7 @@ description: Identify valuation dislocations with a defensible margin of safety,
 
 # Value Gap Catalyst
 
-Use `mota_finance_snapshot` before producing assessments. Treat current quote, market value, SEC facts, and recent filings as dated evidence, not timeless inputs.
+Use `ir_finance_snapshot` before producing assessments. Treat current quote, market value, SEC facts, and recent filings as dated evidence, not timeless inputs.
 
 ## Analysis method
 

@@ -1,8 +1,8 @@
-# mota-agent-server-go
+# Intelligent Router (ir-agent-server)
 
-Go 实现的 MOTA 自托管 Agent 桥接服务。一个进程可同时提供：
+Go 实现的 Intelligent Router 自托管 Agent 桥接服务。一个进程可同时提供：
 
-- Push：MOTA 调用 `POST /mota/push`，服务同步返回或异步回调结果；
+- Push：上游平台调用 `POST /ir/push`，服务同步返回或异步回调结果；
 - Pull：worker 通过 `claim → renew → complete` 消费平台队列，并独立上报心跳；
 - 动态 Agent：`POST /agent/{slug}` 与 `/agent-center-go/{slug}`；
 - 管理台：`GET /admin`，包含 Provider、岗位职能体、运行、账号与审计管理；
@@ -48,7 +48,7 @@ make bootstrap-hwhkit
 ```
 
 该命令会把固定版本检出到仓库同级的 `.hwhkit-go-src`。手工执行时也必须在
-`mota-agent-server-go` 的**父目录**创建该目录，不能克隆到本仓库内部。
+`ir-agent-server-go` 的**父目录**创建该目录，不能克隆到本仓库内部。
 
 ## 快速开始
 
@@ -61,8 +61,8 @@ cp .env.example .env.dev
 至少设置：
 
 ```bash
-MOTA__SIGNING_SECRET='<平台签发的 mbt_ 密钥>'
-DATABASE_URL='postgres://postgres:postgres@127.0.0.1:5432/mota_agent'
+IR__SIGNING_SECRET='<平台签发的 mbt_ 密钥>'
+DATABASE_URL='postgres://postgres:postgres@127.0.0.1:5432/ir_agent'
 # 只验证协议桥时关闭管理平台；启用管理平台则按下文补齐管理员凭据。
 PLATFORM__ENABLED=false
 ```
@@ -79,7 +79,7 @@ openssl rand -base64 48
 make bootstrap-hwhkit
 make build
 set -a; . ./.env.dev; set +a
-./dist/mota-agent-server
+./dist/ir-agent-server
 ```
 
 验证健康状态：
@@ -95,13 +95,13 @@ curl -fsS http://127.0.0.1:8080/health/ready
 RUN_ID='run-1'
 IDEMPOTENCY_KEY='delivery-1'
 BODY='{"schemaVersion":"1.0","runId":"run-1","agentCode":"demo","positionType":"FUNDAMENTAL_ANALYST","templateInputData":[],"taskBrief":{},"callbackUrl":"https://platform.example.com/callback"}'
-SIG=$(python3 -c 'import hmac,hashlib,os,sys; print(hmac.new(os.environ["MOTA__SIGNING_SECRET"].encode(),sys.argv[1].encode(),hashlib.sha256).hexdigest())' "$BODY")
+SIG=$(python3 -c 'import hmac,hashlib,os,sys; print(hmac.new(os.environ["IR__SIGNING_SECRET"].encode(),sys.argv[1].encode(),hashlib.sha256).hexdigest())' "$BODY")
 
-curl -fsS -X POST http://127.0.0.1:8080/mota/push \
+curl -fsS -X POST http://127.0.0.1:8080/ir/push \
   -H 'Content-Type: application/json' \
-  -H "X-MoTA-Run-ID: $RUN_ID" \
-  -H "X-MoTA-Idempotency-Key: $IDEMPOTENCY_KEY" \
-  -H "X-MoTA-Signature: $SIG" \
+  -H "X-IR-Run-ID: $RUN_ID" \
+  -H "X-IR-Idempotency-Key: $IDEMPOTENCY_KEY" \
+  -H "X-IR-Signature: $SIG" \
   --data-binary "$BODY"
 ```
 
@@ -115,7 +115,7 @@ PLATFORM__PUBLIC_BASE_URL='http://127.0.0.1:8080'
 ADMIN__USERNAME='admin'
 ADMIN__PASSWORD='<独立强密码>'
 ADMIN__SESSION_SECRET='<至少 32 字节的稳定随机值>'
-DATABASE_URL='postgres://postgres:postgres@127.0.0.1:5432/mota_agent'
+DATABASE_URL='postgres://postgres:postgres@127.0.0.1:5432/ir_agent'
 ```
 
 打开 `http://127.0.0.1:8080/admin`。生产环境还应设置：
@@ -156,17 +156,17 @@ X-CSRF-Token: ...
 
 ## Push 协议摘要
 
-默认路径为 `/mota/push`，可通过 `MOTA__PUSH_PATH` 修改。
+默认路径为 `/ir/push`，可通过 `IR__PUSH_PATH` 修改。
 
 必需请求头：
 
 - `Content-Type: application/json`；
-- `X-MoTA-Run-ID`；
-- `X-MoTA-Idempotency-Key`；
-- `X-MoTA-Signature`。
+- `X-IR-Run-ID`；
+- `X-IR-Idempotency-Key`；
+- `X-IR-Signature`。
 
 服务对**原始请求体字节**计算 HMAC-SHA256，再解析 JSON。签名编码默认为小写 hex，
-也可设置 `MOTA__SIGNATURE_ENCODING=base64`。
+也可设置 `IR__SIGNATURE_ENCODING=base64`。
 
 常见状态码：
 
@@ -188,7 +188,7 @@ X-CSRF-Token: ...
 响应体最多读取 64 KiB。详见 [生产协议](doc/PUSH-PRODUCTION.md)。
 
 动态 `/agent/{slug}` 默认只接受覆盖 timestamp、nonce、run ID、幂等键和 body 摘要的
-`X-Agent-Signature` v1。旧 `X-MoTA-Signature` 仅在迁移期显式设置
+`X-Agent-Signature` v1。旧 `X-IR-Signature`(body-only)仅在迁移期显式设置
 `PLATFORM__ALLOW_LEGACY_BODY_SIGNATURE=true` 后启用；它缺少防重放能力，不应长期使用。
 
 ## Pull 协议摘要
@@ -196,24 +196,24 @@ X-CSRF-Token: ...
 设置：
 
 ```bash
-MOTA__PULL_ENABLED=true
-MOTA__QUEUE_URL='https://...'
-MOTA__BIND_TOKEN='<平台签发的绑定令牌>'
-MOTA__WORKER_ID='worker-1'
+IR__PULL_ENABLED=true
+IR__QUEUE_URL='https://...'
+IR__BIND_TOKEN='<平台签发的绑定令牌>'
+IR__WORKER_ID='worker-1'
 ```
 
-- `claim` 是长轮询，`MOTA__CLAIM_TIMEOUT_SECS` 不得小于 35；
-- 执行期间按 `MOTA__RENEW_INTERVAL_SECS` 续租；
+- `claim` 是长轮询，`IR__CLAIM_TIMEOUT_SECS` 不得小于 35；
+- 执行期间按 `IR__RENEW_INTERVAL_SECS` 续租；
 - `complete` 只有 `accepted=true` 才视为平台采纳；
 - heartbeat 与 claim 使用独立循环；
-- `MOTA__TASK_TIMEOUT_SECS` 限制单任务最长处理时间。
+- `IR__TASK_TIMEOUT_SECS` 限制单任务最长处理时间。
 
 ## 配置优先级
 
 配置按以下顺序覆盖：
 
 1. `config/default.toml`；
-2. `config/{MOTA_ENV}.toml`（`MOTA_ENV=default` 时跳过）；
+2. `config/{IR_ENV}.toml`（`IR_ENV=default` 时跳过）；
 3. 环境变量。
 
 空环境变量不会覆盖文件值。完整可用项见 [.env.example](.env.example) 和
