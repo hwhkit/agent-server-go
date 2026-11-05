@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -33,7 +34,23 @@ const agentColumns = `id, slug, name, description, enabled, executor_kind, execu
 	allowed_tools_json, permission_mode, timeout_secs, max_concurrency, queue_capacity,
 	revision, created_at, updated_at`
 
-func (s *AgentStore) scanAgent(row pgx.Row) (*agent.Agent, error) {
+// agentSelectBody 是列清单 + 聘任岗位子查询（不含 FROM，供 Search 追加
+// COUNT(*) OVER() 总数列）。
+const agentSelectBody = `SELECT ` + agentColumns + `,
+	COALESCE((SELECT array_agg(position_code ORDER BY position_code)
+		FROM agent_positions ap WHERE ap.agent_slug = a.slug), '{}')`
+
+const agentSelect = agentSelectBody + `
+	FROM agents a`
+
+// scanner 同时满足 pgx.Row 与 pgx.Rows 的扫描面。
+type scanner interface{ Scan(dest ...any) error }
+
+// scanAgentInto 扫描一行智能体。decrypt=true（执行路径，GetBySlug）解密
+// 签名密钥；false（管理列表路径）不解密，仅置 SecretConfigured——单个
+// 坏密文只影响自身标记，不再阻塞整页浏览。count 非 nil 时额外扫描一行
+// 窗口总数列（Search 的 COUNT(*) OVER()）。
+func (s *AgentStore) scanAgentInto(row scanner, decrypt bool, count *int64) (*agent.Agent, error) {
 	var (
 		a         agent.Agent
 		secretEnc string
@@ -70,6 +87,10 @@ func (s *AgentStore) scanAgent(row pgx.Row) (*agent.Agent, error) {
 	a.QueueCapacity = int(queue)
 	a.CreatedAt = parseTS(createdAt)
 	a.UpdatedAt = parseTS(updatedAt)
+	a.SecretConfigured = secretEnc != ""
+	if !decrypt {
+		return &a, nil
+	}
 	secret, err := s.cipher.Decrypt(secretEnc, a.Slug)
 	if err != nil {
 		// 密文损坏或主密钥不匹配：不回显任何密文细节。
@@ -79,15 +100,10 @@ func (s *AgentStore) scanAgent(row pgx.Row) (*agent.Agent, error) {
 	return &a, nil
 }
 
-const agentSelect = `SELECT ` + agentColumns + `,
-	COALESCE((SELECT array_agg(position_code ORDER BY position_code)
-		FROM agent_positions ap WHERE ap.agent_slug = a.slug), '{}')
-	FROM agents a`
-
 // GetBySlug 按 slug 取智能体（含聘任岗位与解密后的签名密钥）。
 func (s *AgentStore) GetBySlug(ctx context.Context, slug string) (*agent.Agent, error) {
 	row := s.db.Pool.QueryRow(ctx, agentSelect+` WHERE a.slug = $1`, slug)
-	a, err := s.scanAgent(row)
+	a, err := s.scanAgentInto(row, true, nil)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, agent.ErrNotFound
 	}
@@ -97,7 +113,7 @@ func (s *AgentStore) GetBySlug(ctx context.Context, slug string) (*agent.Agent, 
 	return a, nil
 }
 
-// List 返回智能体，按 slug 排序。
+// List 返回智能体，按 slug 排序（元数据扫描，不解密签名密钥）。
 func (s *AgentStore) List(ctx context.Context, includeDisabled bool) ([]agent.Agent, error) {
 	query := agentSelect
 	if !includeDisabled {
@@ -111,13 +127,59 @@ func (s *AgentStore) List(ctx context.Context, includeDisabled bool) ([]agent.Ag
 	defer rows.Close()
 	out := make([]agent.Agent, 0, 8)
 	for rows.Next() {
-		a, err := s.scanAgent(rows)
+		a, err := s.scanAgentInto(rows, false, nil)
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, *a)
 	}
 	return out, rows.Err()
+}
+
+// Search 是千级智能体规模的分页/搜索列表：ILIKE 模糊匹配 slug/name，
+// 窗口 COUNT 返回总数；元数据扫描不解密（坏密文行只影响自身标记）。
+func (s *AgentStore) Search(ctx context.Context, q agent.ListQuery) ([]agent.Agent, int64, error) {
+	where := ` WHERE TRUE`
+	args := []any{}
+	if !q.IncludeDisabled {
+		where += ` AND a.enabled`
+	}
+	if needle := strings.TrimSpace(q.Query); needle != "" {
+		args = append(args, "%"+needle+"%")
+		where += fmt.Sprintf(` AND (a.slug ILIKE $%d OR a.name ILIKE $%d)`, len(args), len(args))
+	}
+	limit := q.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	offset := q.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	args = append(args, limit, offset)
+	query := agentSelectBody + `, COUNT(*) OVER() AS total` + where +
+		fmt.Sprintf(` ORDER BY a.slug LIMIT $%d OFFSET $%d`, len(args)-1, len(args))
+	rows, err := s.db.Pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("search agents: %w", err)
+	}
+	defer rows.Close()
+	var total int64
+	out := make([]agent.Agent, 0, 8)
+	for rows.Next() {
+		a, err := s.scanAgentInto(rows, false, &total)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, *a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	return out, total, nil
 }
 
 // Upsert 创建或更新智能体。语义与旧栈一致：

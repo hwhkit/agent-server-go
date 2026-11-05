@@ -229,6 +229,11 @@ func schemaStatements() []string {
 		`ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 1`,
 		`ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS usage_json TEXT`,
 		`CREATE INDEX IF NOT EXISTS idx_agent_runs_team ON agent_runs(team_run_id) WHERE team_run_id IS NOT NULL`,
+		// 千级智能体规模索引：按智能体查运行史、在飞状态筛选、审计按动作检索。
+		`CREATE INDEX IF NOT EXISTS idx_agent_runs_slug_created ON agent_runs(agent_slug, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_runs_active ON agent_runs(created_at DESC) ` +
+			`WHERE status IN ('queued','leased','running')`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_action_created ON audit_log(action, created_at DESC)`,
 		// 连接器令牌生命周期补列（旧栈忽略这些列，共存安全）。
 		`ALTER TABLE agent_pull_connectors ADD COLUMN IF NOT EXISTS expires_ns BIGINT`,
 		`ALTER TABLE agent_pull_connectors ADD COLUMN IF NOT EXISTS revoked_ns BIGINT`,

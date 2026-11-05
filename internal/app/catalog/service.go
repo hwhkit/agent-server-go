@@ -149,6 +149,12 @@ func (s *Service) ListAgents(ctx context.Context, includeDisabled bool) ([]agent
 	return s.agents.List(ctx, includeDisabled)
 }
 
+// SearchAgents 是千级智能体规模的分页/搜索列表（管理台用）；结果不解密
+// 签名密钥，只带 SecretConfigured 标记。
+func (s *Service) SearchAgents(ctx context.Context, q agent.ListQuery) ([]agent.Agent, int64, error) {
+	return s.agents.Search(ctx, q)
+}
+
 // GetAgent 按 slug 取智能体。
 func (s *Service) GetAgent(ctx context.Context, slug string) (*agent.Agent, error) {
 	return s.agents.GetBySlug(ctx, strings.ToLower(strings.TrimSpace(slug)))

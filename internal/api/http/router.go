@@ -22,12 +22,20 @@ type RouterDeps struct {
 	A2A *A2ADeps
 	// Health 是就绪探针的存储探活来源。
 	Health dashboard.HealthSource
+	// Metrics 非 nil 时挂 GET /metrics（Prometheus 文本格式）并为全部
+	// 路由启用请求计数中间件。
+	Metrics *MetricsRegistry
 }
 
 // NewRouter 组装服务的完整 HTTP 路由。
 func NewRouter(deps RouterDeps) chi.Router {
 	router := chi.NewRouter()
 	router.Use(SecurityHeaders)
+	// chi 要求：中间件必须在任何路由注册之前 Use。/metrics 端点由 hwhkit
+	// 框架在外层 mux 提供（promhttp），这里只做请求计数。
+	if deps.Metrics != nil {
+		router.Use(deps.Metrics.Instrument)
+	}
 
 	router.Get("/health", HealthHandler())
 	router.Get("/health/ready", ReadyHandler(deps.Health))

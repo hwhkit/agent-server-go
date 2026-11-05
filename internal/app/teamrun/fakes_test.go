@@ -6,6 +6,7 @@ package teamrun
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -295,6 +296,33 @@ func (f *fakeAgentRepo) List(_ context.Context, includeDisabled bool) ([]agent.A
 		}
 	}
 	return out, nil
+}
+
+func (f *fakeAgentRepo) Search(_ context.Context, q agent.ListQuery) ([]agent.Agent, int64, error) {
+	all, err := f.List(context.Background(), q.IncludeDisabled)
+	if err != nil {
+		return nil, 0, err
+	}
+	limit := q.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	filtered := make([]agent.Agent, 0, len(all))
+	for _, a := range all {
+		if q.Query != "" && !strings.Contains(a.Slug, q.Query) && !strings.Contains(a.Name, q.Query) {
+			continue
+		}
+		filtered = append(filtered, a)
+	}
+	total := int64(len(filtered))
+	if q.Offset >= len(filtered) {
+		return nil, total, nil
+	}
+	filtered = filtered[q.Offset:]
+	if len(filtered) > limit {
+		filtered = filtered[:limit]
+	}
+	return filtered, total, nil
 }
 
 func (f *fakeAgentRepo) Upsert(_ context.Context, a *agent.Agent, _ *int64) (int64, error) {

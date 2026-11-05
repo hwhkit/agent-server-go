@@ -124,6 +124,32 @@ func (f *fakeAgents) List(context.Context, bool) ([]agent.Agent, error) {
 	return out, nil
 }
 
+func (f *fakeAgents) Search(_ context.Context, q agent.ListQuery) ([]agent.Agent, int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	limit := q.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	out := make([]agent.Agent, 0, len(f.items))
+	for _, a := range f.items {
+		if q.Query != "" && !strings.Contains(a.Slug, q.Query) && !strings.Contains(a.Name, q.Query) {
+			continue
+		}
+		out = append(out, *a)
+	}
+	total := int64(len(out))
+	if q.Offset < len(out) {
+		out = out[q.Offset:]
+		if len(out) > limit {
+			out = out[:limit]
+		}
+	} else {
+		out = nil
+	}
+	return out, total, nil
+}
+
 func (f *fakeAgents) Upsert(_ context.Context, a *agent.Agent, ifMatch *int64) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -431,8 +431,19 @@ func agentView(a *agent.Agent, secretConfigured bool) map[string]any {
 	}
 }
 
+// listAgents 是分页/搜索列表（千级智能体规模）：limit/offset/query 参数，
+// 响应 {"items":…,"total":…}。列表路径不解密签名密钥——
+// secret_configured 来自存储派生标记，密文永不参与。
 func (h *adminHandler) listAgents(w http.ResponseWriter, r *http.Request) {
-	items, err := h.deps.Catalog.ListAgents(r.Context(), r.URL.Query().Get("include_disabled") == "true")
+	query := r.URL.Query()
+	limit, _ := strconv.Atoi(query.Get("limit"))
+	offset, _ := strconv.Atoi(query.Get("offset"))
+	items, total, err := h.deps.Catalog.SearchAgents(r.Context(), agent.ListQuery{
+		IncludeDisabled: query.Get("include_disabled") == "true",
+		Query:           query.Get("query"),
+		Limit:           limit,
+		Offset:          offset,
+	})
 	if err != nil {
 		writeAdminError(w, http.StatusInternalServerError, "storage_error", "list agents failed")
 		return
@@ -440,11 +451,11 @@ func (h *adminHandler) listAgents(w http.ResponseWriter, r *http.Request) {
 	views := make([]map[string]any, 0, len(items))
 	for i := range items {
 		item := items[i]
-		configured := len(item.SigningSecret) > 0
-		item.SigningSecret = nil // 视图永不携带明文密钥
+		configured := item.SecretConfigured
+		item.SigningSecret = nil // 视图永不携带明文密钥（列表路径本就未解密）
 		views = append(views, agentView(&item, configured))
 	}
-	writeAdminData(w, http.StatusOK, views)
+	writeAdminData(w, http.StatusOK, map[string]any{"items": views, "total": total})
 }
 
 func (h *adminHandler) getAgent(w http.ResponseWriter, r *http.Request) {

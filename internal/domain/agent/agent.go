@@ -51,10 +51,25 @@ type Agent struct {
 	QueueCapacity  int
 	Enabled        bool
 	// SigningSecret 是动态入口的 HMAC 密钥（AES-256-GCM 加密存储，不回显）。
+	// 仅执行路径（GetBySlug）填充；管理列表查询不解密。
 	SigningSecret []byte
-	Revision      int64
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	// SecretConfigured 是列表/视图用的派生态：签名密钥是否已配置。列表查询
+	// 不解密（单个坏密文不影响浏览整页），执行路径始终解密并严格校验。
+	SecretConfigured bool
+	Revision         int64
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
+// ListQuery 是管理台规模的智能体列表查询条件。
+type ListQuery struct {
+	// Query 模糊匹配 slug 与 name（大小写不敏感）；空 = 全部。
+	Query string
+	// IncludeDisabled 为 true 时包含停用智能体。
+	IncludeDisabled bool
+	// Limit/Offset 分页；Limit<=0 视作 50，上限 500。
+	Limit  int
+	Offset int
 }
 
 var slugPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$`)
@@ -158,6 +173,9 @@ func (a *Agent) ServesPosition(code string) bool {
 type Repository interface {
 	GetBySlug(ctx context.Context, slug string) (*Agent, error)
 	List(ctx context.Context, includeDisabled bool) ([]Agent, error)
+	// Search 是分页/搜索列表（千级智能体规模）：结果不携带解密密钥，
+	// 只置 SecretConfigured 标记。
+	Search(ctx context.Context, q ListQuery) ([]Agent, int64, error)
 	Upsert(ctx context.Context, a *Agent, ifMatchRevision *int64) (int64, error)
 	Delete(ctx context.Context, slug string) error
 	// RegistryVersion 返回全局注册表版本，用于多实例收敛轮询。

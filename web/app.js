@@ -250,14 +250,15 @@
       ]);
   };
 
-  // 下拉数据缓存（岗位/智能体选择器共用）。
+  // 下拉数据缓存（岗位/智能体选择器共用）。智能体下拉有界（200）：千级
+  // 规模下 select 全量加载不可行，更多条目走列表页的搜索式选择。
   const loadCatalog = async () => {
     const [positions, agents] = await Promise.all([
       api.get("/positions?include_disabled=true"),
-      api.get("/agents?include_disabled=true"),
+      api.get("/agents?include_disabled=true&limit=200"),
     ]);
     state.cache.positions = positions || [];
-    state.cache.agents = agents || [];
+    state.cache.agents = (agents && agents.items) || [];
     return state.cache;
   };
 
@@ -498,13 +499,12 @@
   // ---- 智能体列表 ----
   const agentsTab = async (body) => {
     const { positions } = await loadCatalog();
-    const agents = state.cache.agents;
     const columns = [
       { label: t("agent.slug") }, { label: t("agent.name") }, { label: t("agent.binding") },
       { label: t("agent.positions") }, { label: t("agent.secret") },
       { label: t("common.enabled") }, { label: t("common.revision") }, { label: t("common.actions") },
     ];
-    const rows = agents.map((a) => h("tr", {},
+    const renderAgentRow = (a) => h("tr", {},
       h("td", { class: "mono" }, a.slug),
       h("td", {}, a.name, a.description ? h("div", { class: "muted small" }, a.description) : null),
       h("td", {}, h("span", { class: "chip accent" }, a.executor_kind), h("span", { class: "chip" }, a.execution_mode)),
@@ -528,12 +528,32 @@
               rerender();
             } catch (err) { reportError(err); }
           }),
-        }, t("common.delete")))));
-    if (!rows.length) rows.push(emptyRow(columns.length));
+        }, t("common.delete"))));
+
+    // 千级规模：服务端分页 + 搜索（limit/offset/query），本地不缓存全量。
+    const pageSize = 30;
+    const listWrap = h("div");
+    const queryInput = textInput("", { placeholder: `${t("agent.slug")} / ${t("agent.name")}`,
+      style: { width: "180px" } });
+    const showDisabled = checkbox(false, t("common.disabled"));
+    const apply = h("button", { class: "btn", onclick: () => load(1) }, t("common.filter"));
+    const newBtn = h("button", { class: "btn primary", onclick: () => agentEditor(null, positions) },
+      `+ ${t("agent.new")}`);
     body.append(panel(null, null,
-      h("div", { class: "row mb" },
-        h("button", { class: "btn primary", onclick: () => agentEditor(null, positions) }, `+ ${t("agent.new")}`)),
-      table(columns, rows)));
+      h("div", { class: "row mb" }, newBtn, queryInput, showDisabled, apply),
+      listWrap));
+
+    const load = async (page) => {
+      const params = new URLSearchParams({ limit: String(pageSize), offset: String((page - 1) * pageSize) });
+      if (queryInput.value.trim()) params.set("query", queryInput.value.trim());
+      if (showDisabled.checked) params.set("include_disabled", "true");
+      const data = await api.get(`/agents?${params}`);
+      clear(listWrap);
+      const rows = (data.items || []).map(renderAgentRow);
+      if (!rows.length) rows.push(emptyRow(columns.length));
+      listWrap.append(table(columns, rows), pager(data.total || 0, page, pageSize, load));
+    };
+    await load(1);
   };
 
   const EXECUTOR_KINDS = ["codex", "pi", "opencode", "qwen_code", "gemini_cli", "openhands",

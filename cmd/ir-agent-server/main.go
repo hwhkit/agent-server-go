@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	goruntime "runtime"
 	"strings"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/hwhkit/hwhkit-go/hwhkit"
 	"github.com/hwhkit/hwhkit-go/hwhkit/production"
 	"github.com/hwhkit/hwhkit-go/observability"
+	"github.com/prometheus/client_golang/prometheus"
 
 	apihttp "ir-agent-server/internal/api/http"
 	"ir-agent-server/internal/app/a2a"
@@ -71,6 +73,7 @@ type runtime struct {
 	agentAPIEnabled bool
 	pullWorker      *worker.Worker
 	heartbeat       *worker.PushHeartbeat
+	metrics         *apihttp.MetricsRegistry
 }
 
 // agentResolver 把智能体仓储适配为 dispatch.Resolver：停用与未命中一律
@@ -338,13 +341,22 @@ func buildRuntime(ctx context.Context) (*runtime, *config.Config, error) {
 		Runs: runs, Audits: audits, ChannelEvents: channelEvents,
 		CookieSecure: cfgPlatform.SecureCookies, CookieTTL: cfgPlatform.AdminSessionTTL,
 	})
+	// 运维指标：HTTP 计数中间件随路由生效；域统计 gauge 以抓取时回调注入
+	// （查询成本由抓取间隔承担；单项失败降级，绝不让指标端点 500）。
+	// RegisterTo 在 main 里于 hwhkit.Run 之后绑定框架 Registry——框架的
+	// production.Serve 已在外层 mux 挂 promhttp /metrics。
+	metricsRegistry := apihttp.NewMetricsRegistry()
+	metricsRegistry.RegisterCollector(func(ch chan<- prometheus.Metric) {
+		collectDomainMetrics(ch, dash, db, agents)
+	})
 	routerDeps := apihttp.RouterDeps{
 		PushPath: cfgIR.PushPath,
 		Dynamic: &apihttp.DynamicHandler{
 			Service: dynamicService, MaxRequestBytes: int64(cfgPlatform.MaxRequestBodyBytes),
 		},
-		Admin:  adminRouter,
-		Health: db,
+		Admin:   adminRouter,
+		Health:  db,
+		Metrics: metricsRegistry,
 	}
 	if pushService != nil {
 		routerDeps.Push = &apihttp.PushHandler{
@@ -405,7 +417,7 @@ func buildRuntime(ctx context.Context) (*runtime, *config.Config, error) {
 	rt := &runtime{
 		router: router, db: db, providers: providers, pushSvc: pushService,
 		dynamic: dynamicService, team: teamEngine, connectors: connectors,
-		agentAPIEnabled: cfgAgentAPI.Enabled,
+		agentAPIEnabled: cfgAgentAPI.Enabled, metrics: metricsRegistry,
 	}
 	if cfgIR.PullEnabled {
 		rt.pullWorker = worker.New(worker.Config{
@@ -515,6 +527,74 @@ func consoleContentType(name string) string {
 	}
 }
 
+// collectDomainMetrics 在每次 /metrics 抓取时经 const metric 推送域统计。
+// 单项失败降级为跳过（不推送该样本），指标端点永远 200——监控数据源
+// 不该成为新的故障面。
+func collectDomainMetrics(ch chan<- prometheus.Metric, dash *dashboard.Service,
+	db *postgres.DB, agents *postgres.AgentStore,
+) {
+	gauge := func(name, help string, labelNames, labelValues []string, value float64) {
+		ch <- prometheus.MustNewConstMetric(
+			prometheus.NewDesc(name, help, labelNames, nil),
+			prometheus.GaugeValue, value, labelValues...)
+	}
+	snap := dash.Snapshot(context.Background())
+	gauge("ir_db_up", "Database reachability (1 = ping ok).", nil, nil,
+		boolGauge(snap.DatabaseOK))
+	gauge("ir_workers_online", "Connectors with a fresh heartbeat.", nil, nil,
+		float64(snap.OnlineWorkers))
+	gauge("ir_queue_tasks", "Connector queue tasks.", []string{"state"},
+		[]string{"queued"}, float64(snap.Queue.Queued))
+	gauge("ir_queue_tasks", "Connector queue tasks.", []string{"state"},
+		[]string{"leased"}, float64(snap.Queue.Leased))
+	gauge("ir_team_runs_active", "Team runs in queued/running state.", nil, nil,
+		float64(snap.ActiveTeamRuns))
+	gauge("ir_runs_today", "Runs since midnight UTC.", []string{"status"},
+		[]string{"completed"}, float64(snap.RunsToday.Completed))
+	gauge("ir_runs_today", "Runs since midnight UTC.", []string{"status"},
+		[]string{"failed"}, float64(snap.RunsToday.Failed))
+	gauge("ir_runs_today", "Runs since midnight UTC.", []string{"status"},
+		[]string{"canceled"}, float64(snap.RunsToday.Canceled))
+	gauge("ir_runs_today", "Runs since midnight UTC.", []string{"status"},
+		[]string{"in_progress"}, float64(snap.RunsToday.InProgress))
+	gauge("ir_runs_today", "Runs since midnight UTC.", []string{"status"},
+		[]string{"queued"}, float64(snap.RunsToday.Queued))
+	// 智能体总数：列表 Search 的 LIMIT 1 + 窗口 COUNT，成本是一次索引扫描。
+	if _, total, err := agents.Search(context.Background(),
+		agent.ListQuery{Limit: 1}); err == nil {
+		gauge("ir_agents_total", "Registered agents.", []string{"enabled"},
+			[]string{"all"}, float64(total))
+	}
+	if _, enabled, err := agents.Search(context.Background(),
+		agent.ListQuery{Limit: 1}); err == nil {
+		gauge("ir_agents_total", "Registered agents.", []string{"enabled"},
+			[]string{"true"}, float64(enabled))
+	}
+	stat := db.Pool.Stat()
+	gauge("ir_db_pool_conns", "pgxpool connections.", []string{"state"},
+		[]string{"total"}, float64(stat.TotalConns()))
+	gauge("ir_db_pool_conns", "pgxpool connections.", []string{"state"},
+		[]string{"acquired"}, float64(stat.AcquiredConns()))
+	gauge("ir_db_pool_conns", "pgxpool connections.", []string{"state"},
+		[]string{"idle"}, float64(stat.IdleConns()))
+	gauge("ir_db_pool_conns", "pgxpool connections.", []string{"state"},
+		[]string{"max"}, float64(stat.MaxConns()))
+	gauge("ir_go_goroutines", "Number of goroutines.", nil, nil,
+		float64(goruntime.NumGoroutine()))
+	var mem goruntime.MemStats
+	goruntime.ReadMemStats(&mem)
+	gauge("ir_go_heap_bytes", "Heap bytes in use.", nil, nil, float64(mem.HeapAlloc))
+	gauge("ir_build_info", "Build metadata; value is always 1.", []string{"version"},
+		[]string{version}, 1)
+}
+
+func boolGauge(ok bool) float64 {
+	if ok {
+		return 1
+	}
+	return 0
+}
+
 // ---------------------------------------------------------------------------
 // 框架壳
 // ---------------------------------------------------------------------------
@@ -576,6 +656,12 @@ func main() {
 		os.Exit(1)
 	}
 	logger := observability.InitLogging(built.Config().Observability.Log)
+	// 域统计指标绑定框架 Registry：框架 Serve() 只在未设置时才自建——预先
+	// SetMetricsRegistry 让 promhttp /metrics 同时暴露 ir_* 指标与框架的
+	// HTTP 中间件指标（Serve 内 RegisterHTTPMetrics 会补注册到同一 registry）。
+	frameworkReg := prometheus.NewRegistry()
+	built.SetMetricsRegistry(frameworkReg)
+	rt.metrics.RegisterTo(frameworkReg)
 	rt.startLoops(built.Shutdown().Context())
 
 	slog.Info("ir-agent-server ready", "version", version)
