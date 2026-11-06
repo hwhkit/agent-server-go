@@ -220,6 +220,9 @@ func (s *RunStore) List(ctx context.Context, f run.Filter) ([]run.Run, int, erro
 	if !f.Until.IsZero() {
 		add(`created_at <= $%d`, formatTS(f.Until))
 	}
+	if !f.Before.IsZero() {
+		add(`created_at < $%d`, formatTS(f.Before))
+	}
 	where := ``
 	if len(conditions) > 0 {
 		where = ` WHERE ` + strings.Join(conditions, ` AND `)

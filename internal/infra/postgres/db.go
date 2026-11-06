@@ -22,12 +22,51 @@ type DB struct {
 }
 
 // Open 连接 PostgreSQL、执行迁移与 seed。
+// PoolConfig 是连接池调优参数（千级 Agent 规模旋钮）。零值字段回落
+// 生产默认（MaxConns=8 与历史行为一致）。
+type PoolConfig struct {
+	// MaxConns 是池上限。执行并发大（GlobalMaxConcurrency 高）或多副本
+	// 共库时按 (并发 × 副本 / 4) 起估；上限 256 防误配打爆 PostgreSQL。
+	MaxConns int32
+	// MinConns 是池保底连接数（预热，避免首波请求建连抖动）。
+	MinConns int32
+}
+
+// validate 检查显式配置的合法性。
+func (c PoolConfig) validate() error {
+	if c.MaxConns < 0 || c.MaxConns > 256 {
+		return fmt.Errorf("pool max conns must be 1-256, got %d", c.MaxConns)
+	}
+	if c.MinConns < 0 {
+		return fmt.Errorf("pool min conns must be >= 0, got %d", c.MinConns)
+	}
+	if c.MaxConns > 0 && c.MinConns > c.MaxConns {
+		return fmt.Errorf("pool min conns (%d) must not exceed max conns (%d)", c.MinConns, c.MaxConns)
+	}
+	return nil
+}
+
+// Open 连接存储并执行迁移与 seed（生产默认池参数）。
 func Open(ctx context.Context, databaseURL string) (*DB, error) {
+	return OpenTuned(ctx, databaseURL, PoolConfig{})
+}
+
+// OpenTuned 以显式池参数连接存储（装配根使用；测试用 Open）。
+func OpenTuned(ctx context.Context, databaseURL string, poolCfg PoolConfig) (*DB, error) {
+	if err := poolCfg.validate(); err != nil {
+		return nil, fmt.Errorf("pool config: %w", err)
+	}
 	poolConfig, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse PostgreSQL connection string: %w", err)
 	}
 	poolConfig.MaxConns = 8
+	if poolCfg.MaxConns > 0 {
+		poolConfig.MaxConns = poolCfg.MaxConns
+	}
+	if poolCfg.MinConns > 0 {
+		poolConfig.MinConns = poolCfg.MinConns
+	}
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		return nil, fmt.Errorf("connect PostgreSQL: %w", err)

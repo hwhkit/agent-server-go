@@ -784,3 +784,50 @@ func TestRetentionSweep(t *testing.T) {
 		t.Errorf("expired session sweep = (%d sessions, %v)", sessions, err)
 	}
 }
+
+// TestRunListKeysetBefore 覆盖 A8：Before 游标严格小于语义（与 Until 的
+// <= 边界区分），供深分页/导出替代 OFFSET 全扫。
+func TestRunListKeysetBefore(t *testing.T) {
+	db := setupDB(t)
+	ctx := context.Background()
+	store := postgres.NewRunStore(db)
+	base := time.Now().UTC().Add(-time.Hour)
+	ids := []string{"it-keyset-a", "it-keyset-b", "it-keyset-c"}
+	for index, id := range ids {
+		if err := store.Append(ctx, run.Run{
+			RunID: id, AgentSlug: "it-keyset", Status: run.StatusCompleted,
+			CreatedAt: base.Add(time.Duration(index) * time.Minute),
+		}); err != nil {
+			t.Fatalf("append %s: %v", id, err)
+		}
+		t.Cleanup(func() {
+			_, _ = db.Pool.Exec(ctx, `DELETE FROM agent_runs WHERE run_id = $1`, id)
+		})
+	}
+	// 第一页两条 → 游标=第二条时间戳 → 下一页只剩一条且不为空页重复。
+	first, _, err := store.List(ctx, run.Filter{
+		AgentSlug: "it-keyset", Limit: 2, Offset: 0,
+	})
+	if err != nil || len(first) != 2 {
+		t.Fatalf("first page = (%d items, %v)", len(first), err)
+	}
+	cursor := first[1].CreatedAt
+	rest, _, err := store.List(ctx, run.Filter{
+		AgentSlug: "it-keyset", Limit: 2, Before: cursor,
+	})
+	if err != nil {
+		t.Fatalf("keyset page: %v", err)
+	}
+	if len(rest) != 1 || rest[0].RunID != "it-keyset-a" {
+		t.Errorf("keyset page = %d items (%v), want it-keyset-a only", len(rest), rest)
+	}
+	// 严格小于：用第一页首条（DESC 序=最新一条）做游标必须排除它自身，
+	// 只返回其余两条（Until 的 <= 在此会连边界一起返回）。
+	strict, _, err := store.List(ctx, run.Filter{
+		AgentSlug: "it-keyset", Limit: 2, Before: first[0].CreatedAt,
+	})
+	if err != nil || len(strict) != 2 || strict[0].RunID == first[0].RunID {
+		t.Errorf("strict-less cursor = %d items (err %v), want 2 excluding boundary %s",
+			len(strict), err, first[0].RunID)
+	}
+}

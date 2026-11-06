@@ -137,7 +137,11 @@ func buildRuntime(ctx context.Context) (*runtime, *config.Config, error) {
 	if databaseURL == "" {
 		return nil, nil, errors.New("DATABASE_URL must be set for PostgreSQL storage")
 	}
-	db, err := postgres.Open(ctx, databaseURL)
+	// 连接池按配置调优（PLATFORM__DB_MAX_CONNS，默认 8）：执行并发大或
+	// 多副本共库时按需上调，上限在配置加载期校验。
+	db, err := postgres.OpenTuned(ctx, databaseURL, postgres.PoolConfig{
+		MaxConns: int32(cfgPlatform.DBMaxConns),
+	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("connect storage: %w", err)
 	}
@@ -335,6 +339,7 @@ func buildRuntime(ctx context.Context) (*runtime, *config.Config, error) {
 	dash := dashboard.NewService(dashboard.Deps{
 		Version: version, Health: db, Runs: runs,
 		Queue: queue, Workers: workers, TeamRuns: teamRuns,
+		CacheTTL: 2 * time.Second,
 	})
 
 	// 13. HTTP 路由。

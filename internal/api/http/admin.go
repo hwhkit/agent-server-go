@@ -286,6 +286,30 @@ func (h *adminHandler) listRuns(w http.ResponseWriter, r *http.Request) {
 	if status := query.Get("status"); status != "" {
 		filter.Statuses = []run.Status{run.Status(status)}
 	}
+	// before=RFC3339 启用 keyset 分页（深分页/导出场景）：严格小于游标，
+	// 响应附 next_cursor（本页末条时间戳，页满才有值）供下一页取用。
+	if raw := strings.TrimSpace(query.Get("before")); raw != "" {
+		cursor, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			writeAdminError(w, http.StatusBadRequest, "invalid_request",
+				"before must be an RFC3339 timestamp")
+			return
+		}
+		filter.Before = cursor
+		filter.Limit = limit
+		filter.Offset = 0
+		items, _, err := h.deps.Runs.List(r.Context(), filter)
+		if err != nil {
+			writeAdminError(w, http.StatusInternalServerError, "storage_error", "list runs failed")
+			return
+		}
+		payload := map[string]any{"items": items}
+		if len(items) == limit && limit > 0 {
+			payload["next_cursor"] = items[len(items)-1].CreatedAt.Format(time.RFC3339Nano)
+		}
+		writeAdminData(w, http.StatusOK, payload)
+		return
+	}
 	items, total, err := h.deps.Runs.List(r.Context(), filter)
 	if err != nil {
 		writeAdminError(w, http.StatusInternalServerError, "storage_error", "list runs failed")

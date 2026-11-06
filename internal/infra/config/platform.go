@@ -133,6 +133,9 @@ type PlatformConfig struct {
 	// 超窗即被周期清扫。0（默认）= 关闭——保留期限是合规决策，由部署方
 	// 显式开启；过期管理会话无论如何都会被清扫。
 	RetentionDays int
+	// DBMaxConns 是 PostgreSQL 连接池上限。0（默认）= 8；执行并发高或多
+	// 副本共库时按需上调，上限 256（加载期校验，防误配打爆数据库）。
+	DBMaxConns int
 
 	AdminUsername          string
 	AdminPassword          string
@@ -177,6 +180,7 @@ type PlatformSectionFile struct {
 	MaxRequestBodyBytes      *int    `toml:"max_request_body_bytes"`
 	GlobalMaxConcurrency     *int    `toml:"global_max_concurrency"`
 	RetentionDays            *int    `toml:"retention_days"`
+	DBMaxConns               *int    `toml:"db_max_conns"`
 	AllowLegacyBodySignature *bool   `toml:"allow_legacy_body_signature"`
 }
 
@@ -270,6 +274,7 @@ func (r *PlatformRootFile) merge(other *PlatformRootFile) {
 	mergePtr(&r.Platform.MaxRequestBodyBytes, other.Platform.MaxRequestBodyBytes)
 	mergePtr(&r.Platform.GlobalMaxConcurrency, other.Platform.GlobalMaxConcurrency)
 	mergePtr(&r.Platform.RetentionDays, other.Platform.RetentionDays)
+	mergePtr(&r.Platform.DBMaxConns, other.Platform.DBMaxConns)
 	mergePtr(&r.Platform.AllowLegacyBodySignature, other.Platform.AllowLegacyBodySignature)
 
 	mergePtr(&r.Admin.Username, other.Admin.Username)
@@ -399,6 +404,7 @@ func PlatformConfigFromFile(root *PlatformRootFile) (*PlatformConfig, error) {
 		MaxRequestBodyBytes:      derefIntOr(root.Platform.MaxRequestBodyBytes, 2*1024*1024),
 		GlobalMaxConcurrency:     derefIntOr(root.Platform.GlobalMaxConcurrency, 16),
 		RetentionDays:            derefIntOr(root.Platform.RetentionDays, 0),
+		DBMaxConns:               derefIntOr(root.Platform.DBMaxConns, 0),
 		AllowLegacyBodySignature: derefBoolOr(root.Platform.AllowLegacyBodySignature, false),
 
 		AdminUsername:          strings.TrimSpace(derefOr(root.Admin.Username, "admin")),
@@ -641,6 +647,9 @@ func applyPlatformEnv(root *PlatformRootFile) error {
 	if err := setEnvInt("PLATFORM__RETENTION_DAYS", &root.Platform.RetentionDays); err != nil {
 		return err
 	}
+	if err := setEnvInt("PLATFORM__DB_MAX_CONNS", &root.Platform.DBMaxConns); err != nil {
+		return err
+	}
 	if err := setEnvUint("ADMIN__SESSION_TTL_SECS", &root.Admin.SessionTTLSecs); err != nil {
 		return err
 	}
@@ -852,6 +861,9 @@ func (c *PlatformConfig) Validate() error {
 	}
 	if c.GlobalMaxConcurrency < 1 || c.GlobalMaxConcurrency > 256 {
 		return errors.New("[platform].global_max_concurrency must be between 1 and 256")
+	}
+	if c.DBMaxConns < 0 || c.DBMaxConns > 256 {
+		return errors.New("[platform].db_max_conns must be between 0 (default 8) and 256")
 	}
 
 	if c.AdminUsername == "" || len(c.AdminUsername) > 120 {
