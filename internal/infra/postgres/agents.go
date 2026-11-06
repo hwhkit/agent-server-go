@@ -48,9 +48,8 @@ type scanner interface{ Scan(dest ...any) error }
 
 // scanAgentInto 扫描一行智能体。decrypt=true（执行路径，GetBySlug）解密
 // 签名密钥；false（管理列表路径）不解密，仅置 SecretConfigured——单个
-// 坏密文只影响自身标记，不再阻塞整页浏览。count 非 nil 时额外扫描一行
-// 窗口总数列（Search 的 COUNT(*) OVER()）。
-func (s *AgentStore) scanAgentInto(row scanner, decrypt bool, count *int64) (*agent.Agent, error) {
+// 坏密文只影响自身标记，不再阻塞整页浏览。
+func (s *AgentStore) scanAgentInto(row scanner, decrypt bool) (*agent.Agent, error) {
 	var (
 		a         agent.Agent
 		secretEnc string
@@ -65,11 +64,11 @@ func (s *AgentStore) scanAgentInto(row scanner, decrypt bool, count *int64) (*ag
 		conc      int64
 		queue     int64
 	)
-	err := row.Scan(&a.ID, &a.Slug, &a.Name, &a.Description, &a.Enabled, &kind, &mode,
+	dest := []any{&a.ID, &a.Slug, &a.Name, &a.Description, &a.Enabled, &kind, &mode,
 		&secretEnc, &a.SignatureEncoding, &a.SystemPrompt, &a.WorkspacePath, &model,
 		&toolsJSON, &a.PermissionMode, &timeout, &conc, &queue,
-		&a.Revision, &createdAt, &updatedAt, &positions)
-	if err != nil {
+		&a.Revision, &createdAt, &updatedAt, &positions}
+	if err := row.Scan(dest...); err != nil {
 		return nil, err
 	}
 	a.Binding = exec.Binding{Kind: exec.Kind(kind), Mode: exec.Mode(mode)}
@@ -103,7 +102,7 @@ func (s *AgentStore) scanAgentInto(row scanner, decrypt bool, count *int64) (*ag
 // GetBySlug 按 slug 取智能体（含聘任岗位与解密后的签名密钥）。
 func (s *AgentStore) GetBySlug(ctx context.Context, slug string) (*agent.Agent, error) {
 	row := s.db.Pool.QueryRow(ctx, agentSelect+` WHERE a.slug = $1`, slug)
-	a, err := s.scanAgentInto(row, true, nil)
+	a, err := s.scanAgentInto(row, true)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, agent.ErrNotFound
 	}
@@ -127,7 +126,7 @@ func (s *AgentStore) List(ctx context.Context, includeDisabled bool) ([]agent.Ag
 	defer rows.Close()
 	out := make([]agent.Agent, 0, 8)
 	for rows.Next() {
-		a, err := s.scanAgentInto(rows, false, nil)
+		a, err := s.scanAgentInto(rows, false)
 		if err != nil {
 			return nil, err
 		}
@@ -159,18 +158,17 @@ func (s *AgentStore) Search(ctx context.Context, q agent.ListQuery) ([]agent.Age
 	if offset < 0 {
 		offset = 0
 	}
-	args = append(args, limit, offset)
-	query := agentSelectBody + `, COUNT(*) OVER() AS total` + where +
-		fmt.Sprintf(` ORDER BY a.slug LIMIT $%d OFFSET $%d`, len(args)-1, len(args))
-	rows, err := s.db.Pool.Query(ctx, query, args...)
+	dataArgs := append(append([]any{}, args...), limit, offset)
+	query := agentSelectBody + ` FROM agents a` + where +
+		fmt.Sprintf(` ORDER BY a.slug LIMIT $%d OFFSET $%d`, len(dataArgs)-1, len(dataArgs))
+	rows, err := s.db.Pool.Query(ctx, query, dataArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("search agents: %w", err)
 	}
 	defer rows.Close()
-	var total int64
 	out := make([]agent.Agent, 0, 8)
 	for rows.Next() {
-		a, err := s.scanAgentInto(rows, false, &total)
+		a, err := s.scanAgentInto(rows, false)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -178,6 +176,12 @@ func (s *AgentStore) Search(ctx context.Context, q agent.ListQuery) ([]agent.Age
 	}
 	if err := rows.Err(); err != nil {
 		return nil, 0, err
+	}
+	// 总数独立计数：窗口 COUNT 在空页（offset 越界）时无行可扫，拿不到总数。
+	var total int64
+	if err := s.db.Pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM agents a`+where, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count agents: %w", err)
 	}
 	return out, total, nil
 }

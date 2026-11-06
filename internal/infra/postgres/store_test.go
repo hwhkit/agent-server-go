@@ -644,3 +644,75 @@ func TestConnectorTokensAndWorkers(t *testing.T) {
 		}
 	}
 }
+
+// TestAgentStoreSearch 覆盖千级规模列表路径：分页/搜索/总数窗口列、
+// 列表不解密（SigningSecret 为空、SecretConfigured 标记）。
+func TestAgentStoreSearch(t *testing.T) {
+	db := setupDB(t)
+	ctx := context.Background()
+	cipher, err := crypto.NewSecretCipher("it-shared-master")
+	if err != nil {
+		t.Fatalf("cipher: %v", err)
+	}
+	store := postgres.NewAgentStore(db, cipher)
+
+	slugs := []string{"it-search-alpha", "it-search-beta", "other-suffix"}
+	for _, slug := range slugs {
+		a := newTestAgent(slug)
+		if slug == "it-search-beta" {
+			a.Name = "贝塔搜索体"
+		}
+		if _, err := store.Upsert(ctx, a, nil); err != nil {
+			t.Fatalf("upsert %s: %v", slug, err)
+		}
+		t.Cleanup(func() { _ = store.Delete(context.Background(), slug) })
+	}
+
+	// 全量分页：total 覆盖窗口总数；列表不解密。
+	items, total, err := store.Search(ctx, agent.ListQuery{Limit: 2, Offset: 0,
+		IncludeDisabled: true})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if total < 3 {
+		t.Errorf("total = %d (window count must cover all matches)", total)
+	}
+	if len(items) != 2 {
+		t.Errorf("page size = %d", len(items))
+	}
+	for _, item := range items {
+		if len(item.SigningSecret) != 0 {
+			t.Errorf("list must not carry decrypted secret for %s", item.Slug)
+		}
+		if !item.SecretConfigured {
+			t.Errorf("secret flag missing for %s", item.Slug)
+		}
+	}
+
+	// slug 前缀搜索。
+	_, total, err = store.Search(ctx, agent.ListQuery{Query: "it-search",
+		IncludeDisabled: true})
+	if err != nil || total != 2 {
+		t.Errorf("slug query total = %d err = %v", total, err)
+	}
+
+	// 名称模糊搜索（中文 ILIKE）。
+	items, total, err = store.Search(ctx, agent.ListQuery{Query: "贝塔",
+		IncludeDisabled: true})
+	if err != nil || total != 1 || len(items) != 1 || items[0].Slug != "it-search-beta" {
+		t.Errorf("name query = (%d, %v) items = %v", total, err, items)
+	}
+
+	// 偏移页与 empty 页。
+	items, total, err = store.Search(ctx, agent.ListQuery{Query: "it-search",
+		IncludeDisabled: true, Limit: 2, Offset: 2})
+	if err != nil || len(items) != 0 || total != 2 {
+		t.Errorf("offset page = (%d items, total %d, err %v)", len(items), total, err)
+	}
+
+	// 执行路径不受影响：GetBySlug 仍解密。
+	got, err := store.GetBySlug(ctx, "it-search-alpha")
+	if err != nil || string(got.SigningSecret) != "0123456789abcdef-secret" {
+		t.Errorf("get-by-slug decrypt = (%q, %v)", got.SigningSecret, err)
+	}
+}
