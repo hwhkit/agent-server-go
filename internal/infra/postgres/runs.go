@@ -27,6 +27,43 @@ const runColumns = `agent_slug, run_id, agent_revision, executor_kind, execution
 	position_code, status, attempts, team_run_id, team_step_id, request_json, result_json,
 	executor_result_json, usage_json, duration_ms, error_code, response_code, created_at, completed_at`
 
+// runColumnsLean 是列表查询的瘦列集：不含 request/result/executor 三个
+// 大文本列（单列可达 MiB 级）。千级 Agent 的运行表上，列表页每行拖
+// MiB 级 blob 是首要读放大；全量载荷走 Get（详情端点按 runID 精确取）。
+// Input/Output/ExecutorOutput 在列表结果中保持 nil（API 层不出现这三个键）。
+const runColumnsLean = `agent_slug, run_id, agent_revision, executor_kind, execution_mode,
+	position_code, status, attempts, team_run_id, team_step_id, usage_json,
+	duration_ms, error_code, response_code, created_at, completed_at`
+
+// scanRunLean 是 scanRun 的瘦列变体（大文本三列不扫，字段保持 nil）。
+func scanRunLean(row pgx.Row) (*run.Run, error) {
+	var (
+		r           run.Run
+		kind        *string
+		mode        *string
+		posCode     *string
+		status      string
+		attempts    int
+		teamRunID   *string
+		teamStepID  *string
+		usageJSON   *string
+		errorCode   *string
+		createdAt   string
+		completedAt *string
+	)
+	err := row.Scan(&r.AgentSlug, &r.RunID, &r.AgentRevision, &kind, &mode, &posCode,
+		&status, &attempts, &teamRunID, &teamStepID, &usageJSON, &r.DurationMS,
+		&errorCode, &r.ResponseCode, &createdAt, &completedAt)
+	if err != nil {
+		return nil, err
+	}
+	r.Status = run.Status(status)
+	r.Attempt = attempts
+	applyRunNulls(&r, kind, mode, posCode, teamRunID, teamStepID, usageJSON,
+		errorCode, createdAt, completedAt)
+	return &r, nil
+}
+
 func scanRun(row pgx.Row) (*run.Run, error) {
 	var (
 		r            run.Run
@@ -87,6 +124,34 @@ func scanRun(row pgx.Row) (*run.Run, error) {
 		r.CompletedAt = &parsed
 	}
 	return &r, nil
+}
+
+// applyRunNulls 把瘦列集的可空列落到实体（lean 扫描共享；usage 解析同源）。
+func applyRunNulls(r *run.Run, kind, mode, posCode, teamRunID, teamStepID,
+	usageJSON, errorCode *string, createdAt string, completedAt *string,
+) {
+	for _, pair := range []struct {
+		src *string
+		dst *string
+	}{
+		{kind, &r.ExecutorKind}, {mode, &r.ExecutionMode}, {posCode, &r.PositionCode},
+		{teamRunID, &r.TeamRunID}, {teamStepID, &r.TeamStepID}, {errorCode, &r.ErrorCode},
+	} {
+		if pair.src != nil {
+			*pair.dst = *pair.src
+		}
+	}
+	if usageJSON != nil && *usageJSON != "" {
+		var usage exec.Usage
+		if err := json.Unmarshal([]byte(*usageJSON), &usage); err == nil {
+			r.Usage = &usage
+		}
+	}
+	r.CreatedAt = parseTS(createdAt)
+	if completedAt != nil {
+		parsed := parseTS(*completedAt)
+		r.CompletedAt = &parsed
+	}
 }
 
 // Append 幂等插入运行记录：同 (agent_slug, run_id) 已存在时静默忽略。
@@ -233,7 +298,7 @@ func (s *RunStore) List(ctx context.Context, f run.Filter) ([]run.Run, int, erro
 	}
 	args = append(args, limit, f.Offset)
 	rows, err := s.db.Pool.Query(ctx,
-		`SELECT `+runColumns+` FROM agent_runs`+where+
+		`SELECT `+runColumnsLean+` FROM agent_runs`+where+
 			fmt.Sprintf(` ORDER BY created_at DESC LIMIT $%d OFFSET $%d`, len(args)-1, len(args)), args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list runs: %w", err)
@@ -241,7 +306,7 @@ func (s *RunStore) List(ctx context.Context, f run.Filter) ([]run.Run, int, erro
 	defer rows.Close()
 	out := make([]run.Run, 0, limit)
 	for rows.Next() {
-		r, err := scanRun(rows)
+		r, err := scanRunLean(rows)
 		if err != nil {
 			return nil, 0, err
 		}

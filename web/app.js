@@ -1205,6 +1205,11 @@
     const arrow = row.firstChild;
     if (existing) { existing.remove(); arrow.textContent = "▸"; return; }
     arrow.textContent = "▾";
+    // 列表是瘦列（无 Input/Output）：展开时按 runID 取详情。
+    if (run.Input == null && run.Output == null) {
+      try { run = await api.get(`/runs/${encodeURIComponent(run.RunID)}`); }
+      catch { /* 详情失败时以列表行数据兜底展示 */ }
+    }
     const cell = h("td", { colspan: 8 });
     const detail = h("div", {},
       h("div", { class: "kv mb" },

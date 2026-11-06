@@ -77,6 +77,7 @@ func AdminRouter(deps AdminDeps) chi.Router {
 			r.Get("/team-runs", h.listTeamRuns)
 			r.Get("/team-runs/{id}", h.getTeamRun)
 			r.Get("/runs", h.listRuns)
+			r.Get("/runs/{run_id}", h.getRun)
 			r.Get("/agent-connectors", h.listConnectors)
 			r.Get("/providers", h.listProviders)
 			r.Get("/audits", h.listAudits)
@@ -316,6 +317,20 @@ func (h *adminHandler) listRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeAdminData(w, http.StatusOK, map[string]any{"items": items, "total": total})
+}
+
+// getRun 返回单条运行的完整载荷（列表是瘦列：Input/Output 在详情按需取）。
+func (h *adminHandler) getRun(w http.ResponseWriter, r *http.Request) {
+	item, err := h.deps.Runs.Get(r.Context(), chi.URLParam(r, "run_id"))
+	if errors.Is(err, run.ErrNotFound) {
+		writeAdminError(w, http.StatusNotFound, "not_found", "run not found")
+		return
+	}
+	if err != nil {
+		writeAdminError(w, http.StatusInternalServerError, "storage_error", "load run failed")
+		return
+	}
+	writeAdminData(w, http.StatusOK, item)
 }
 
 func (h *adminHandler) listAudits(w http.ResponseWriter, r *http.Request) {

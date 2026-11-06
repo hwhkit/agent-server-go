@@ -277,6 +277,11 @@ func (s *TeamRunStore) ListActive(ctx context.Context, limit int) ([]team.TeamRu
 // SaveSteps 以状态前置条件（CAS）推进步骤状态：行锁下校验 cas 中每个步骤的
 // 当前状态与期望一致，任何一项不符即整体放弃（返回 false），防止双实例
 // 重复推进同一步骤。已落定的团队运行拒绝再写。
+// SaveSteps 是团队运行推进的唯一写路径（v0.2 迭代 A10 评估结论：保持
+// 现状）。单行 FOR UPDATE + 全量 steps JSON 重编码，百步 DAG 每步完成
+// 约 100KB 级重编码、全程 ~10MB 事务量——Postgres 无压力；并发推进由
+// 行锁串行化 + CAS 失败触发引擎重折（正确性自洽）。真正的规模约束是
+// steps_json 内联的步骤输出体积（≤4MiB/步），由 OutputRef 上限治理。
 func (s *TeamRunStore) SaveSteps(ctx context.Context, id string, steps map[string]team.StepRun,
 	status team.TeamRunStatus, cas map[string]team.StepState) (bool, error) {
 	tx, err := s.db.Pool.Begin(ctx)
