@@ -731,3 +731,27 @@ func TestLoadPlatformConfigResolvesWorkspaceRoot(t *testing.T) {
 		t.Errorf("workspace_root = %q, want %q", resolvedRoot, resolvedDir)
 	}
 }
+
+// TestPlatformRetentionDays 覆盖保留窗口的默认关闭与 env 注入。
+// 负值不阻断加载：Sweep 对 <=0 一律视为关闭（保守语义在存储层收口）。
+func TestPlatformRetentionDays(t *testing.T) {
+	cfg, err := PlatformConfigFromFile(validPlatformRoot())
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.RetentionDays != 0 {
+		t.Errorf("retention days default = %d, want 0 (disabled)", cfg.RetentionDays)
+	}
+	t.Setenv("PLATFORM__RETENTION_DAYS", "45")
+	root := validPlatformRoot()
+	if err := applyPlatformEnv(root); err != nil {
+		t.Fatalf("apply env: %v", err)
+	}
+	cfg, err = PlatformConfigFromFile(root)
+	if err != nil {
+		t.Fatalf("load with env: %v", err)
+	}
+	if cfg.RetentionDays != 45 {
+		t.Errorf("retention days = %d, want 45", cfg.RetentionDays)
+	}
+}

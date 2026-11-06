@@ -716,3 +716,71 @@ func TestAgentStoreSearch(t *testing.T) {
 		t.Errorf("get-by-slug decrypt = (%q, %v)", got.SigningSecret, err)
 	}
 }
+
+// TestRetentionSweep 覆盖 A6：超窗 channel_events/audit_log 清扫、窗口内
+// 保留、days<=0 只清过期会话（保守语义在存储层收口）。
+func TestRetentionSweep(t *testing.T) {
+	db := setupDB(t)
+	ctx := context.Background()
+	store := postgres.NewRetentionStore(db)
+
+	old := "2020-01-01T00:00:00.000000000Z"
+	now := time.Now().UTC().Format("2006-01-02T15:04:05.000000000Z07:00")
+	seed := func(table, created string) {
+		columns := "(event_type, url, created_at)"
+		values := "($1, '', $2)"
+		if table == "audit_log" {
+			columns = "(actor, action, target, details, created_at)"
+			values = "($1, 'test.action', 'it', '{}', $2)"
+		}
+		if _, err := db.Pool.Exec(ctx,
+			`INSERT INTO `+table+` `+columns+` VALUES `+values,
+			"it-retention", created); err != nil {
+			t.Fatalf("seed %s: %v", table, err)
+		}
+		where := "event_type = $1"
+		if table == "audit_log" {
+			where = "actor = $1"
+		}
+		t.Cleanup(func() {
+			_, _ = db.Pool.Exec(ctx, `DELETE FROM `+table+` WHERE `+where, "it-retention")
+		})
+	}
+	seed("channel_events", old)
+	seed("channel_events", now)
+	seed("audit_log", old)
+	seed("audit_log", now)
+
+	// days<=0：只清过期会话，历史表不动。
+	events, audits, _, err := store.Sweep(ctx, 0)
+	if err != nil || events != 0 || audits != 0 {
+		t.Fatalf("disabled sweep = (%d, %d, %v)", events, audits, err)
+	}
+	// 45 天窗口：旧行清、新行留。
+	events, audits, _, err = store.Sweep(ctx, 45)
+	if err != nil || events != 1 || audits != 1 {
+		t.Fatalf("sweep = (%d, %d, %v), want (1, 1, nil)", events, audits, err)
+	}
+	var alive int
+	if err := db.Pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM channel_events WHERE event_type = 'it-retention'`).Scan(&alive); err != nil {
+		t.Fatal(err)
+	}
+	if alive != 1 {
+		t.Errorf("channel events survivors = %d, want 1", alive)
+	}
+	// 过期会话清扫：插入一条已过期会话后必被清掉。
+	if _, err := db.Pool.Exec(ctx,
+		`INSERT INTO admin_sessions (token_hash, username, csrf_token, expires_at, created_at)
+		 VALUES ('it-retention-expired', 'it-retention', 'csrf', 1577836800, $1)
+		 ON CONFLICT DO NOTHING`, now); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Pool.Exec(ctx, `DELETE FROM admin_sessions WHERE token_hash = 'it-retention-expired'`)
+	})
+	_, _, sessions, err := store.Sweep(ctx, 0)
+	if err != nil || sessions < 1 {
+		t.Errorf("expired session sweep = (%d sessions, %v)", sessions, err)
+	}
+}

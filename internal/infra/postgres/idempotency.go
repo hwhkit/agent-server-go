@@ -215,3 +215,19 @@ func (s *PushIdempotencyStore) update(ctx context.Context, key, runID, requestHa
 	}
 	return nil
 }
+
+// SweepStaleProcessing 清扫崩溃遗留的陈旧 processing 租约（超过
+// PushLeaseStaleAfter 没有推进的行）。这与 Begin 的陈旧接管语义等价：
+// 存活请求本来就能接管这些行；清扫只是让永远不回来的键不占表容量。
+// 终态行（sync_done/sync_failed/async_accepted）按协议永不时间清理——
+// 签名请求不含时间戳，终态是重放判定的唯一依据。
+func (s *PushIdempotencyStore) SweepStaleProcessing(ctx context.Context) (int64, error) {
+	cutoff := time.Now().Unix() - int64(platform.PushLeaseStaleAfter/time.Second)
+	tag, err := s.db.Pool.Exec(ctx,
+		`DELETE FROM push_idempotency WHERE status = $1 AND updated_at < $2`,
+		platform.IdempotencyProcessing, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}

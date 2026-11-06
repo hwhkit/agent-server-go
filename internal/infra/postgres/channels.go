@@ -3,6 +3,8 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -34,6 +36,57 @@ func (s *AgentStore) ListChannels(ctx context.Context) ([]agent.Channel, error) 
 		channels = append(channels, agent.Channel{Slug: slug, SigningSecret: secret})
 	}
 	return channels, rows.Err()
+}
+
+// CachedChannelLister 是心跳通道的读缓存装饰器（app/worker.ChannelLister
+// 同形）：心跳 tick（5s 级）不再每轮全表解密。失效条件为「注册表版本变化
+// 或 TTL 过期」二者任一——版本在智能体创建/编辑/删除/换钥时递增，换钥
+// 即使在 TTL 窗口内也能立即生效；版本探测失败时降级供旧缓存（心跳循环
+// 不因一次版本查询抖动而整体失败）。
+type CachedChannelLister struct {
+	store *AgentStore
+	ttl   time.Duration
+
+	mu        sync.Mutex
+	cached    []agent.Channel
+	fetchedAt time.Time
+	version   int64
+}
+
+// NewCachedChannelLister 组装通道缓存（ttl <= 0 视作 10s）。
+func NewCachedChannelLister(store *AgentStore, ttl time.Duration) *CachedChannelLister {
+	if ttl <= 0 {
+		ttl = 10 * time.Second
+	}
+	return &CachedChannelLister{store: store, ttl: ttl}
+}
+
+// ListChannels 实现 app/worker.ChannelLister。
+func (c *CachedChannelLister) ListChannels(ctx context.Context) ([]agent.Channel, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	version, versionErr := c.store.RegistryVersion(ctx)
+	fresh := time.Since(c.fetchedAt) < c.ttl
+	if fresh && c.cached != nil {
+		if versionErr != nil || version == c.version {
+			// 版本查询失败：降级返回缓存（心跳可用性优先）。
+			return c.cached, nil
+		}
+	}
+	channels, err := c.store.ListChannels(ctx)
+	if err != nil {
+		if c.cached != nil {
+			// 重读失败也降级供旧缓存（版本已变化时下一 tick 会再试）。
+			return c.cached, nil
+		}
+		return nil, err
+	}
+	c.cached = channels
+	c.fetchedAt = time.Now()
+	if versionErr == nil {
+		c.version = version
+	}
+	return channels, nil
 }
 
 // ChannelEventStore 是通道事件存储（channel_events 表）。

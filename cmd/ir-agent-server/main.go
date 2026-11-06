@@ -74,6 +74,9 @@ type runtime struct {
 	pullWorker      *worker.Worker
 	heartbeat       *worker.PushHeartbeat
 	metrics         *apihttp.MetricsRegistry
+	pushIdempotency *postgres.PushIdempotencyStore
+	retention       *postgres.RetentionStore
+	retentionDays   int
 }
 
 // agentResolver 把智能体仓储适配为 dispatch.Resolver：停用与未命中一律
@@ -418,6 +421,8 @@ func buildRuntime(ctx context.Context) (*runtime, *config.Config, error) {
 		router: router, db: db, providers: providers, pushSvc: pushService,
 		dynamic: dynamicService, team: teamEngine, connectors: connectors,
 		agentAPIEnabled: cfgAgentAPI.Enabled, metrics: metricsRegistry,
+		pushIdempotency: pushIdempotency, retention: postgres.NewRetentionStore(db),
+		retentionDays: cfgPlatform.RetentionDays,
 	}
 	if cfgIR.PullEnabled {
 		rt.pullWorker = worker.New(worker.Config{
@@ -435,11 +440,14 @@ func buildRuntime(ctx context.Context) (*runtime, *config.Config, error) {
 		slog.Warn("pull worker disabled (IR__PULL_ENABLED=false)")
 	}
 	if strings.TrimSpace(cfgIR.HeartbeatURL) != "" {
+		// 心跳通道走读缓存：5s tick 不再每轮全表解密（注册表版本栅栏 +
+		// 10s TTL；换钥即版本变化，缓存立即失效）。
+		channelLister := postgres.NewCachedChannelLister(agents, 10*time.Second)
 		rt.heartbeat = worker.NewPushHeartbeat(worker.PushHeartbeatConfig{
 			HeartbeatURL:    cfgIR.HeartbeatURL,
 			DefaultInterval: cfgIR.HeartbeatInterval,
 			TaskTimeout:     cfgIR.TaskTimeout,
-		}, httpx.CallbackPoster{Client: callbackHTTPClient}, agents, channelEvents, dispatcher)
+		}, httpx.CallbackPoster{Client: callbackHTTPClient}, channelLister, channelEvents, dispatcher)
 	}
 	return rt, cfgIR, nil
 }
@@ -456,6 +464,51 @@ func (rt *runtime) startLoops(ctx context.Context) {
 	}
 	if rt.heartbeat != nil {
 		go rt.heartbeat.Run(ctx)
+	}
+	// 运行数据治理：push 陈旧 processing 租约 10min 一扫（与陈旧接管
+	// 阈值同源）；保留策略 1h 一扫（窗口可配，0 = 只清过期会话）。
+	go runPushLeaseGC(ctx, rt.pushIdempotency)
+	go runRetentionSweep(ctx, rt.retention, rt.retentionDays)
+}
+
+// runPushLeaseGC 周期清扫崩溃遗留的陈旧 processing 租约。终态行按协议
+// 永不清理；失败只记日志（下一 tick 重试）。
+func runPushLeaseGC(ctx context.Context, store *postgres.PushIdempotencyStore) {
+	ticker := time.NewTicker(10 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		if removed, err := store.SweepStaleProcessing(ctx); err != nil {
+			slog.Warn("push lease GC failed", "err", err)
+		} else if removed > 0 {
+			slog.Info("push lease GC removed stale processing rows", "removed", removed)
+		}
+	}
+}
+
+// runRetentionSweep 周期执行历史数据保留清扫。days <= 0 时只清过期会话。
+func runRetentionSweep(ctx context.Context, store *postgres.RetentionStore, days int) {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		events, audits, sessions, err := store.Sweep(ctx, days)
+		if err != nil {
+			slog.Warn("retention sweep failed", "err", err)
+			continue
+		}
+		if events > 0 || audits > 0 || sessions > 0 {
+			slog.Info("retention sweep", "channel_events", events,
+				"audit_rows", audits, "expired_sessions", sessions)
+		}
 	}
 }
 

@@ -163,3 +163,52 @@ func TestPushIdempotencyStaleTakeoverAndRelease(t *testing.T) {
 		t.Errorf("foreign complete = %v, want ErrPushLeaseLost", err)
 	}
 }
+
+// TestSweepStaleProcessing 覆盖 A5：陈旧 processing 租约被清扫、新鲜
+// processing 与全部终态行（含同期写入的）保留——终态按协议永不时间清理。
+func TestSweepStaleProcessing(t *testing.T) {
+	db := setupDB(t)
+	ctx := context.Background()
+	store, err := postgres.NewPushIdempotencyStore(ctx, db)
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+
+	old := time.Now().Add(-2 * time.Hour).Unix()
+	fresh := time.Now().Unix()
+	rows := []struct {
+		key, runID, status string
+		updatedAt          int64
+	}{
+		{"it-sweep-stale", "run-sweep-stale", "processing", old},
+		{"it-sweep-fresh", "run-sweep-fresh", "processing", fresh},
+		{"it-sweep-done", "run-sweep-done", "sync_done", old}, // 终态：陈旧也保留
+	}
+	for _, row := range rows {
+		if _, err := db.Pool.Exec(ctx,
+			`INSERT INTO push_idempotency (key, run_id, request_hash, status, response_body, updated_at)
+			 VALUES ($1, $2, $3, $4, NULL, $5) ON CONFLICT DO NOTHING`,
+			row.key, row.runID, "hash-"+row.key, row.status, row.updatedAt); err != nil {
+			t.Fatalf("seed %s: %v", row.key, err)
+		}
+		t.Cleanup(func() {
+			_, _ = db.Pool.Exec(ctx, `DELETE FROM push_idempotency WHERE key = $1`, row.key)
+		})
+	}
+
+	removed, err := store.SweepStaleProcessing(ctx)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if removed != 1 {
+		t.Errorf("removed = %d, want 1 (only the stale processing row)", removed)
+	}
+	var alive int
+	if err := db.Pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM push_idempotency WHERE key IN ('it-sweep-fresh','it-sweep-done')`).Scan(&alive); err != nil {
+		t.Fatal(err)
+	}
+	if alive != 2 {
+		t.Errorf("survivors = %d, want 2 (fresh processing + stale terminal)", alive)
+	}
+}
