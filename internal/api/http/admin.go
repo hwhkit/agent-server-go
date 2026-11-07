@@ -82,6 +82,7 @@ func AdminRouter(deps AdminDeps) chi.Router {
 			r.Get("/providers", h.listProviders)
 			r.Get("/agents/export", h.exportAgents)
 			r.Get("/audits", h.listAudits)
+			r.Get("/audits/export", h.exportAudits)
 			r.Get("/channel-events", h.listChannelEvents)
 			r.Get("/users", h.listUsers)
 
@@ -99,6 +100,7 @@ func AdminRouter(deps AdminDeps) chi.Router {
 				r.Delete("/teams/{id}", h.deleteTeam)
 				r.Post("/team-runs", h.submitTeamRun)
 				r.Post("/team-runs/{id}/cancel", h.cancelTeamRun)
+				r.Post("/team-runs/{id}/retry", h.retryTeamRun)
 				r.Post("/agent-connectors", h.issueConnector)
 				r.Delete("/agent-connectors/{name}", h.revokeConnector)
 				r.Put("/providers/{id}", h.updateProvider)
@@ -289,6 +291,25 @@ func (h *adminHandler) listRuns(w http.ResponseWriter, r *http.Request) {
 	if status := query.Get("status"); status != "" {
 		filter.Statuses = []run.Status{run.Status(status)}
 	}
+	// 时间范围与错误码筛选（B2）：since/until 接 RFC3339（容错到秒），
+	// error_code 精确匹配。
+	for _, bound := range []struct {
+		name string
+		dst  *time.Time
+	}{
+		{"since", &filter.Since}, {"until", &filter.Until},
+	} {
+		if raw := strings.TrimSpace(query.Get(bound.name)); raw != "" {
+			parsed, err := time.Parse(time.RFC3339, raw)
+			if err != nil {
+				writeAdminError(w, http.StatusBadRequest, "invalid_request",
+					bound.name+" must be an RFC3339 timestamp")
+				return
+			}
+			*bound.dst = parsed
+		}
+	}
+	filter.ErrorCode = strings.TrimSpace(query.Get("error_code"))
 	// before=RFC3339 启用 keyset 分页（深分页/导出场景）：严格小于游标，
 	// 响应附 next_cursor（本页末条时间戳，页满才有值）供下一页取用。
 	if raw := strings.TrimSpace(query.Get("before")); raw != "" {
@@ -319,6 +340,41 @@ func (h *adminHandler) listRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeAdminData(w, http.StatusOK, map[string]any{"items": items, "total": total})
+}
+
+// exportAudits 审计日志 CSV 导出（B4，管理员专属——与在线查询同一道
+// 后端强制）。复用 listAudits 的筛选参数（actor/action/limit 上限 10000）。
+func (h *adminHandler) exportAudits(w http.ResponseWriter, r *http.Request) {
+	if !h.requireAdminRole(w, r) {
+		return
+	}
+	query := audit.Query{
+		Actor:  r.URL.Query().Get("actor"),
+		Action: audit.Action(r.URL.Query().Get("action")),
+	}
+	query.Limit, _ = strconv.Atoi(r.URL.Query().Get("limit"))
+	if query.Limit <= 0 || query.Limit > 10000 {
+		query.Limit = 10000
+	}
+	items, total, err := h.deps.Audits.List(r.Context(), query)
+	if err != nil {
+		writeAdminError(w, http.StatusInternalServerError, "storage_error", "export audits failed")
+		return
+	}
+	var b strings.Builder
+	b.WriteString("id,time,actor,action,target,detail\n")
+	for _, event := range items {
+		b.WriteString(csvLine(
+			strconv.FormatInt(event.ID, 10),
+			event.CreatedAt.Format(time.RFC3339Nano),
+			event.Actor, string(event.Action), event.Target,
+			string(event.Detail)))
+	}
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="audit-export.csv"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(b.String()))
+	_ = total
 }
 
 // ---------------------------------------------------------------------------
@@ -777,6 +833,32 @@ func (h *adminHandler) cancelTeamRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// retryTeamRun 以新幂等键重放一条已落定的团队运行（B10）：非终态 409。
+func (h *adminHandler) retryTeamRun(w http.ResponseWriter, r *http.Request) {
+	retried, err := h.deps.Engine.Retry(r.Context(), chi.URLParam(r, "id"),
+		sessionUserFrom(r).Username)
+	switch {
+	case errors.Is(err, teamrun.ErrNotRetryable):
+		writeAdminError(w, http.StatusConflict, "not_retryable", err.Error())
+		return
+	case errors.Is(err, team.ErrNotFound):
+		writeAdminError(w, http.StatusNotFound, "not_found", "team run not found")
+		return
+	case err != nil:
+		if errors.Is(err, teamrun.ErrTeamBusy) {
+			writeAdminError(w, http.StatusConflict, "team_busy", err.Error())
+			return
+		}
+		if errors.Is(err, teamrun.ErrTeamUnavailable) {
+			writeAdminError(w, http.StatusNotFound, "team_unavailable", err.Error())
+			return
+		}
+		writeAdminError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	writeAdminData(w, http.StatusAccepted, teamRunView(retried))
 }
 
 func teamRunView(tr *team.TeamRun) map[string]any {

@@ -3,6 +3,7 @@ package teamrun
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -416,5 +417,37 @@ func TestRenderPlaceholders(t *testing.T) {
 	fallback, err := Render(nil, rc)
 	if err != nil || string(fallback) != `{"symbol":"AAPL"}` {
 		t.Errorf("fallback = %s/%v", fallback, err)
+	}
+}
+
+// TestRetryNotRetryable 锁定 B10 语义：未落定的团队运行重试必须拒绝
+// （ErrNotRetryable），终态允许以新幂等键重放且键可追溯。
+func TestRetryNotRetryable(t *testing.T) {
+	agents := newFakeAgentRepo(testAgent("desk-1", "FUNDAMENTAL_ANALYST"))
+	teams := newFakeTeamRepo(testTeam("t-retry",
+		team.Step{ID: "a", Target: stepTarget("agent:desk-1")}))
+	fixture := newEngineFixture(teams, agents)
+	ctx := context.Background()
+
+	sub, err := fixture.engine.Submit(ctx, Submission{
+		TeamID: "t-retry", IdempotencyKey: "retry-orig",
+	})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if _, err := fixture.engine.Retry(ctx, sub.ID, "tester"); !errors.Is(err, ErrNotRetryable) {
+		t.Errorf("retry before terminal = %v, want ErrNotRetryable", err)
+	}
+	fixture.engine.Wait()
+	retried, err := fixture.engine.Retry(ctx, sub.ID, "tester")
+	if err != nil {
+		t.Fatalf("retry after terminal: %v", err)
+	}
+	if retried.ID == sub.ID {
+		t.Error("retry must create a new team run")
+	}
+	if !strings.HasPrefix(retried.IdempotencyKey, sub.IdempotencyKey+"/retry/") {
+		t.Errorf("retry idempotency key %q must trace to origin %q",
+			retried.IdempotencyKey, sub.IdempotencyKey)
 	}
 }

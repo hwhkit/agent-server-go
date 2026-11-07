@@ -92,7 +92,9 @@ type Filter struct {
 	// Before 是 keyset 游标（created_at < Before，严格小于）：深分页/导出
 	// 用它替代 OFFSET——OFFSET 在大表上是 O(offset) 全扫。与 Until 的
 	// 区别仅在边界比较（Until 为 <=）。
-	Before         time.Time
+	Before time.Time
+	// ErrorCode 是精确错误码筛选（运维定位一类失败）。
+	ErrorCode      string
 	Limit          int
 	Offset         int
 	SingleRunsOnly bool // 仅单发运行（无团队关联）

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -111,6 +112,29 @@ type Submission struct {
 
 // Submit 幂等提交团队运行：同 IdempotencyKey 重放返回既有运行。
 // 成功创建后立即异步推进一轮（恢复循环兜底）。
+// ErrNotRetryable 表示目标团队运行尚未落定（重试只针对终态）。
+var ErrNotRetryable = errors.New("team run is not in a terminal state")
+
+// Retry 以新幂等键重放一次已落定的团队运行（B10）：沿用运行时固化的
+// 团队快照 ID 与原始输入——与「重新提交」的区别是无需再填表单，且
+// 重试链通过幂等键前缀可追溯（orig-key/retry-*）。
+func (e *Engine) Retry(ctx context.Context, id, actor string) (*team.TeamRun, error) {
+	origin, err := e.teamRuns.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if !origin.Status.Terminal() {
+		return nil, ErrNotRetryable
+	}
+	return e.Submit(ctx, Submission{
+		TeamID: origin.Snapshot.ID,
+		Input:  origin.Input,
+		IdempotencyKey: fmt.Sprintf("%s/retry/%s", origin.IdempotencyKey,
+			strings.ReplaceAll(strconv.FormatInt(time.Now().UnixNano(), 36), "-", "")),
+		Actor: actor,
+	})
+}
+
 func (e *Engine) Submit(ctx context.Context, submission Submission) (*team.TeamRun, error) {
 	definition, err := e.teams.Get(ctx, submission.TeamID)
 	if err != nil {

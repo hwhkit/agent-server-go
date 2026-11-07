@@ -1209,12 +1209,14 @@
 
   const agentRunsTab = async (body) => {
     const filterBar = h("div", { class: "row mb" });
-    const agentInput = textInput("", { placeholder: t("run.agent"), style: { width: "150px" } });
-    const positionInput = textInput("", { placeholder: t("run.position"), style: { width: "170px" } });
+    const agentInput = textInput("", { placeholder: t("run.agent"), style: { width: "130px" } });
+    const positionInput = textInput("", { placeholder: t("run.position"), style: { width: "140px" } });
     const statusSelect = selectInput(RUN_STATUSES.map((s) => ({ value: s, label: s || t("common.all") })), "");
+    const errorCodeInput = textInput("", { placeholder: t("run.errorCode"), style: { width: "140px" } });
+    const sinceInput = h("input", { type: "datetime-local", title: t("run.since") });
     const singleOnly = checkbox(false, t("run.singleOnly"));
     const apply = h("button", { class: "btn", onclick: () => load(1) }, t("common.filter"));
-    filterBar.append(agentInput, positionInput, statusSelect, singleOnly, apply);
+    filterBar.append(agentInput, positionInput, statusSelect, errorCodeInput, sinceInput, singleOnly, apply);
 
     const listWrap = h("div");
     body.append(panel(t("run.tab.agent"), null, filterBar, listWrap));
@@ -1230,6 +1232,11 @@
       if (agentInput.value.trim()) params.set("agent", agentInput.value.trim());
       if (positionInput.value.trim()) params.set("position", positionInput.value.trim());
       if (statusSelect.value) params.set("status", statusSelect.value);
+      if (errorCodeInput.value.trim()) params.set("error_code", errorCodeInput.value.trim());
+      if (sinceInput.value) {
+        const parsed = new Date(sinceInput.value);
+        if (!Number.isNaN(parsed.getTime())) params.set("since", parsed.toISOString());
+      }
       if (singleOnly.checked) params.set("single_only", "true");
       const data = await api.get(`/runs?${params}`);
       clear(listWrap);
@@ -1343,18 +1350,31 @@
           h("td", {}, statusChip(tr.status)),
           h("td", { class: "muted small nowrap" }, fmtTime(tr.created_at)),
           h("td", { class: "muted small nowrap" }, fmtTime(tr.completed_at)),
-          h("td", {}, isActiveTeamRun(tr.status)
-            ? h("button", {
-              class: "btn sm danger",
-              onclick: async () => {
-                try {
-                  await api.post(`/team-runs/${encodeURIComponent(tr.id)}/cancel`);
-                  toast(t("run.canceled"), "ok");
-                  load(page);
-                } catch (err) { reportError(err); }
-              },
-            }, t("run.cancel"))
-            : null));
+          h("td", { class: "nowrap" },
+            isActiveTeamRun(tr.status)
+              ? h("button", {
+                class: "btn sm danger",
+                onclick: async () => {
+                  try {
+                    await api.post(`/team-runs/${encodeURIComponent(tr.id)}/cancel`);
+                    toast(t("run.canceled"), "ok");
+                    load(page);
+                  } catch (err) { reportError(err); }
+                },
+              }, t("run.cancel"))
+              : tr.status === "failed"
+                ? h("button", {
+                  class: "btn sm",
+                  title: t("run.retry"),
+                  onclick: async () => {
+                    try {
+                      const retried = await api.post(`/team-runs/${encodeURIComponent(tr.id)}/retry`);
+                      toast(`${t("run.retry.done")} · ${retried.id}`, "ok");
+                      load(page);
+                    } catch (err) { reportError(err); }
+                  },
+                }, t("run.retry"))
+                : null));
         rows.push(row);
       }
       if (!rows.length) rows.push(emptyRow(columns.length));
@@ -1443,8 +1463,28 @@
     const actionInput = textInput("", { placeholder: t("audit.action"), style: { width: "180px" } });
     const listWrap = h("div");
     const apply = h("button", { class: "btn", onclick: () => load() }, t("common.filter"));
+    const csvBtn = h("button", {
+      class: "btn",
+      onclick: () => {
+        const params = new URLSearchParams({ limit: "10000" });
+        if (actorInput.value.trim()) params.set("actor", actorInput.value.trim());
+        if (actionInput.value.trim()) params.set("action", actionInput.value.trim());
+        fetch(`${API_BASE}/audits/export?${params}`, { credentials: "same-origin" })
+          .then((response) => {
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            return response.blob();
+          })
+          .then((blob) => {
+            const url = URL.createObjectURL(blob);
+            const link = h("a", { href: url, download: "audit-export.csv" });
+            link.click();
+            URL.revokeObjectURL(url);
+          })
+          .catch((err) => toast(err.message, "err"));
+      },
+    }, "⬇ CSV");
     container.append(panel(t("audit.title"), null,
-      h("div", { class: "row mb" }, actorInput, actionInput, apply), listWrap));
+      h("div", { class: "row mb" }, actorInput, actionInput, apply, csvBtn), listWrap));
     const columns = [
       { label: t("audit.time") }, { label: t("audit.actor") }, { label: t("audit.action") },
       { label: t("audit.target") }, { label: t("audit.detail") },
