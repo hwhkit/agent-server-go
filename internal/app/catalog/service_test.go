@@ -150,6 +150,14 @@ func (f *fakeAgents) Search(_ context.Context, q agent.ListQuery) ([]agent.Agent
 	return out, total, nil
 }
 
+func (f *fakeAgents) ImportUpsert(ctx context.Context, a *agent.Agent, secretEnc string,
+	ifMatch *int64,
+) (int64, error) {
+	return f.Upsert(ctx, a, ifMatch)
+}
+
+func (f *fakeAgents) ExportAll(context.Context) ([]agent.Export, error) { return nil, nil }
+
 func (f *fakeAgents) Upsert(_ context.Context, a *agent.Agent, ifMatch *int64) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

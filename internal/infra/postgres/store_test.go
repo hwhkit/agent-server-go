@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -830,4 +831,65 @@ func TestRunListKeysetBefore(t *testing.T) {
 		t.Errorf("strict-less cursor = %d items (err %v), want 2 excluding boundary %s",
 			len(strict), err, first[0].RunID)
 	}
+}
+
+// TestAgentImportExportRoundTrip 覆盖 B1 存储面：ExportAll 返回密文原样
+// （不解密）；ImportUpsert 以密文落库（明文密钥永不过手），导入后
+// GetBySlug 解密与导出前一致——同主密钥迁移语义。
+func TestAgentImportExportRoundTrip(t *testing.T) {
+	db := setupDB(t)
+	ctx := context.Background()
+	cipher, err := crypto.NewSecretCipher("it-shared-master")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := postgres.NewAgentStore(db, cipher)
+
+	source := newTestAgent("it-migrate-src")
+	if _, err := store.Upsert(ctx, source, nil); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Delete(context.Background(), source.Slug) })
+
+	exports, err := store.ExportAll(ctx)
+	if err != nil || len(exports) == 0 {
+		t.Fatalf("export = (%d, %v)", len(exports), err)
+	}
+	var exported *agent.Export
+	for index := range exports {
+		if exports[index].Slug == source.Slug {
+			exported = &exports[index]
+		}
+	}
+	if exported == nil || exported.SecretEnc == "" {
+		t.Fatal("export must carry the ciphertext")
+	}
+	if strings.Contains(exported.SecretEnc, "0123456789abcdef-secret") {
+		t.Error("export must never contain the plaintext secret")
+	}
+
+	// 密文迁移语义：AAD 绑定 slug，故目标环境用同一 slug（环境重建）。
+	// 删行模拟新环境后，导出的密文可直接落库并解密回原钥。
+	if err := store.Delete(ctx, source.Slug); err != nil {
+		t.Fatalf("delete source: %v", err)
+	}
+	target := newTestAgent(source.Slug)
+	target.SigningSecret = nil
+	if _, err := store.ImportUpsert(ctx, target, exported.SecretEnc, nil); err != nil {
+		t.Fatalf("import upsert: %v", err)
+	}
+
+	imported, err := store.GetBySlug(ctx, source.Slug)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(imported.SigningSecret) != "0123456789abcdef-secret" {
+		t.Error("imported ciphertext must decrypt to the original secret under the same master key")
+	}
+
+	// 空 ciphertext 必须被拒绝（防静默落空钥）。
+	if _, err := store.ImportUpsert(ctx, newTestAgent("it-migrate-blank"), "  ", nil); err == nil {
+		t.Error("blank ciphertext must be rejected")
+	}
+	_ = store.Delete(ctx, "it-migrate-blank")
 }

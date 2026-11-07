@@ -325,6 +325,25 @@ func (f *fakeAgentRepo) Search(_ context.Context, q agent.ListQuery) ([]agent.Ag
 	return filtered, total, nil
 }
 
+func (f *fakeAgentRepo) ImportUpsert(ctx context.Context, a *agent.Agent, secretEnc string,
+	_ *int64,
+) (int64, error) {
+	if secretEnc == "" {
+		return 0, errors.New("empty secret ciphertext")
+	}
+	return f.Upsert(ctx, a, nil)
+}
+
+func (f *fakeAgentRepo) ExportAll(_ context.Context) ([]agent.Export, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]agent.Export, 0, len(f.agents))
+	for _, a := range f.agents {
+		out = append(out, agent.Export{Agent: *a, SecretEnc: "enc-" + a.Slug})
+	}
+	return out, nil
+}
+
 func (f *fakeAgentRepo) Upsert(_ context.Context, a *agent.Agent, _ *int64) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

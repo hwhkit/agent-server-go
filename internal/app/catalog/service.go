@@ -9,6 +9,7 @@ package catalog
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -155,13 +156,108 @@ func (s *Service) SearchAgents(ctx context.Context, q agent.ListQuery) ([]agent.
 	return s.agents.Search(ctx, q)
 }
 
+// ExportAgents 导出全部智能体（迁移格式：含签名密钥密文，明文永不过手）。
+func (s *Service) ExportAgents(ctx context.Context) ([]agent.Export, error) {
+	return s.agents.ExportAll(ctx)
+}
+
+// ImportAgentEntry 是批量导入的单条输入。
+type ImportAgentEntry struct {
+	// 内嵌 agent.Agent：迁移格式的顶层键（slug/name/binding/…）直接映射
+	// 字段（agent.SigningSecret 带 json:"-"——明文密钥走本条目专属字段，
+	// 保证任何 Agent 序列化都永不携带明文）。
+	agent.Agent
+	SigningSecret string `json:"signing_secret,omitempty"` // 明文录入（新环境）
+	SecretEnc     string `json:"secret_enc,omitempty"`     // 密文迁移（同主密钥）
+}
+
+// ImportAgentResult 是批量导入的单条结果。
+type ImportAgentResult struct {
+	Slug     string `json:"slug"`
+	Status   string `json:"status"` // created | updated | failed
+	Revision int64  `json:"revision,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
+// ImportAgents 批量导入智能体（上限 500/批，与列表上限对齐）。逐条独立
+// 落库：单条失败不阻断整批，失败明细随结果返回。整批追加一条
+// agent.import 审计事件（批量操作有自己的审计行，含成败汇总）。
+func (s *Service) ImportAgents(ctx context.Context, entries []ImportAgentEntry,
+	actor string,
+) ([]ImportAgentResult, error) {
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("import payload must contain at least one agent")
+	}
+	if len(entries) > 500 {
+		return nil, fmt.Errorf("import batch size %d exceeds the 500 limit", len(entries))
+	}
+	results := make([]ImportAgentResult, 0, len(entries))
+	created, updated, failed := 0, 0, 0
+	for _, entry := range entries {
+		result := ImportAgentResult{Slug: entry.Agent.Slug}
+		status, err := s.importOne(ctx, entry)
+		if err != nil {
+			result.Status = "failed"
+			result.Error = err.Error()
+			failed++
+		} else {
+			result.Status = status
+			if status == "created" {
+				created++
+			} else {
+				updated++
+			}
+		}
+		results = append(results, result)
+	}
+	if err := s.audit.Append(ctx, audit.Event{
+		Actor: actor, Action: "agent.import",
+		Target: fmt.Sprintf("%d agents", len(entries)),
+		Detail: json.RawMessage(fmt.Sprintf(
+			`{"total":%d,"created":%d,"updated":%d,"failed":%d}`,
+			len(entries), created, updated, failed)),
+	}); err != nil {
+		// 审计失败不回滚已导入的数据（与逐条审计同一豁免口径）。
+		return results, nil
+	}
+	return results, nil
+}
+
+// importOne 落库单条导入：密文路径走 ImportUpsert，明文路径走 Upsert。
+// created/updated 以导入前的存在性判定（Upsert 的 revision 值域不可靠）。
+func (s *Service) importOne(ctx context.Context, entry ImportAgentEntry) (string, error) {
+	entity := entry.Agent
+	if entry.SigningSecret != "" {
+		entity.SigningSecret = []byte(entry.SigningSecret)
+	}
+	existed := true
+	if _, err := s.agents.GetBySlug(ctx, entity.Slug); errors.Is(err, agent.ErrNotFound) {
+		existed = false
+	} else if err != nil {
+		return "", err
+	}
+	var revision int64
+	var err error
+	if entry.SecretEnc != "" {
+		revision, err = s.agents.ImportUpsert(ctx, &entity, entry.SecretEnc, nil)
+	} else {
+		revision, err = s.agents.Upsert(ctx, &entity, nil)
+	}
+	if err != nil {
+		return "", err
+	}
+	_ = revision
+	if existed {
+		return "updated", nil
+	}
+	return "created", nil
+}
+
 // GetAgent 按 slug 取智能体。
 func (s *Service) GetAgent(ctx context.Context, slug string) (*agent.Agent, error) {
 	return s.agents.GetBySlug(ctx, strings.ToLower(strings.TrimSpace(slug)))
 }
 
-// SaveAgent 创建或更新智能体。创建必须携带签名密钥；更新时
-// a.SigningSecret 为空表示保留既有密文。聘任的岗位必须全部存在。
 func (s *Service) SaveAgent(ctx context.Context, a *agent.Agent, ifMatchRevision *int64, actor string) (int64, error) {
 	creating := ifMatchRevision == nil
 	if err := a.Validate(creating); err != nil {

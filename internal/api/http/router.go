@@ -20,8 +20,10 @@ type RouterDeps struct {
 	Dynamic *DynamicHandler
 	// A2A 为 nil 表示 [a2a].enabled=false。
 	A2A *A2ADeps
-	// Health 是就绪探针的存储探活来源。
+	// Health 是就绪探针的必需项（数据库探活）。
 	Health dashboard.HealthSource
+	// Readiness 是就绪探针的补充检查项（B7：迁移标记/队列/注册表）。
+	Readiness []ReadinessCheck
 	// Metrics 非 nil 时挂 GET /metrics（Prometheus 文本格式）并为全部
 	// 路由启用请求计数中间件。
 	Metrics *MetricsRegistry
@@ -38,7 +40,7 @@ func NewRouter(deps RouterDeps) chi.Router {
 	}
 
 	router.Get("/health", HealthHandler())
-	router.Get("/health/ready", ReadyHandler(deps.Health))
+	router.Get("/health/ready", ReadyHandler(deps.Health, deps.Readiness))
 
 	if deps.Push != nil {
 		pushPath := deps.PushPath

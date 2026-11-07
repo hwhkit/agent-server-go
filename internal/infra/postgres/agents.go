@@ -192,6 +192,86 @@ func (s *AgentStore) Search(ctx context.Context, q agent.ListQuery) ([]agent.Age
 //   - 聘任集合整组替换；
 //   - 每次写操作递增全局注册表版本（多实例收敛）。
 func (s *AgentStore) Upsert(ctx context.Context, a *agent.Agent, ifMatchRevision *int64) (int64, error) {
+	return s.upsert(ctx, a, ifMatchRevision, false, func(currentEnc string) (string, error) {
+		if len(a.SigningSecret) == 0 {
+			return currentEnc, nil
+		}
+		enc, err := s.cipher.Encrypt(string(a.SigningSecret), a.Slug)
+		if err != nil {
+			return "", fmt.Errorf("encrypt signing secret: %w", err)
+		}
+		return enc, nil
+	})
+}
+
+// ImportUpsert 实现 agent.Repository：密文直接落库（导出方与导入方主密钥
+// 一致时，密钥迁移不需要明文过手）。
+func (s *AgentStore) ImportUpsert(ctx context.Context, a *agent.Agent,
+	secretEnc string, ifMatchRevision *int64,
+) (int64, error) {
+	if strings.TrimSpace(secretEnc) == "" {
+		return 0, fmt.Errorf("import upsert requires a non-empty secret ciphertext")
+	}
+	// 密文导入在新建时同样不要求明文密钥（密钥存在性由上方的非空校验保证）。
+	return s.upsert(ctx, a, ifMatchRevision, true, func(string) (string, error) {
+		return secretEnc, nil
+	})
+}
+
+// ExportAll 实现 agent.Repository：全量导出（密文原样，不解密）。
+func (s *AgentStore) ExportAll(ctx context.Context) ([]agent.Export, error) {
+	rows, err := s.db.Pool.Query(ctx, agentSelect+` ORDER BY a.slug`)
+	if err != nil {
+		return nil, fmt.Errorf("export agents: %w", err)
+	}
+	defer rows.Close()
+	out := make([]agent.Export, 0, 64)
+	for rows.Next() {
+		var (
+			a         agent.Agent
+			secretEnc string
+			kind      string
+			mode      string
+			model     *string
+			toolsJSON string
+			positions []string
+			createdAt string
+			updatedAt string
+			timeout   int64
+			conc      int64
+			queue     int64
+		)
+		if err := rows.Scan(&a.ID, &a.Slug, &a.Name, &a.Description, &a.Enabled, &kind, &mode,
+			&secretEnc, &a.SignatureEncoding, &a.SystemPrompt, &a.WorkspacePath, &model,
+			&toolsJSON, &a.PermissionMode, &timeout, &conc, &queue,
+			&a.Revision, &createdAt, &updatedAt, &positions); err != nil {
+			return nil, err
+		}
+		a.Binding = exec.Binding{Kind: exec.Kind(kind), Mode: exec.Mode(mode)}
+		a.Model = model
+		if toolsJSON != "" {
+			var tools []string
+			if err := json.Unmarshal([]byte(toolsJSON), &tools); err == nil {
+				a.AllowedTools = tools
+			}
+		}
+		a.Positions = positions
+		a.TimeoutSecs = uint64(timeout)
+		a.MaxConcurrency = int(conc)
+		a.QueueCapacity = int(queue)
+		a.CreatedAt = parseTS(createdAt)
+		a.UpdatedAt = parseTS(updatedAt)
+		a.SecretConfigured = secretEnc != ""
+		out = append(out, agent.Export{Agent: a, SecretEnc: secretEnc})
+	}
+	return out, rows.Err()
+}
+
+// upsert 是 Upsert/ImportUpsert 的共享事务体；secretFor 决定落库密文
+// （入参 currentEnc 为既有密文，新建时为空串）。
+func (s *AgentStore) upsert(ctx context.Context, a *agent.Agent, ifMatchRevision *int64,
+	importPath bool, secretFor func(currentEnc string) (string, error),
+) (int64, error) {
 	tools, err := json.Marshal(orEmpty(a.AllowedTools))
 	if err != nil {
 		return 0, fmt.Errorf("encode allowed_tools: %w", err)
@@ -215,7 +295,8 @@ func (s *AgentStore) Upsert(ctx context.Context, a *agent.Agent, ifMatchRevision
 		if ifMatchRevision != nil {
 			return 0, agent.ErrNotFound
 		}
-		if err := a.Validate(true); err != nil {
+		// importPath 的密钥存在性由密文非空校验保证，明文校验会误杀密文导入。
+		if err := a.Validate(!importPath); err != nil {
 			return 0, err
 		}
 	} else {
@@ -227,11 +308,9 @@ func (s *AgentStore) Upsert(ctx context.Context, a *agent.Agent, ifMatchRevision
 		}
 	}
 
-	secretEnc := currentSecret
-	if len(a.SigningSecret) > 0 {
-		if secretEnc, err = s.cipher.Encrypt(string(a.SigningSecret), a.Slug); err != nil {
-			return 0, fmt.Errorf("encrypt signing secret: %w", err)
-		}
+	secretEnc, err := secretFor(currentSecret)
+	if err != nil {
+		return 0, err
 	}
 
 	now := nowTS()

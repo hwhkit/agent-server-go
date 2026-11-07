@@ -26,39 +26,56 @@ const (
 )
 
 // Agent 是智能体实体。
+// json 标签服务于批量迁移格式（/agents/export|import）——管理 API 的
+// 展示态另由视图层组装，不受此影响。
 type Agent struct {
 	// ID 是存储主键（网关幂等记录键的组成部分）。
-	ID          int64
-	Slug        string
-	Name        string
-	Description string
+	ID          int64  `json:"id,omitempty"`
+	Slug        string `json:"slug"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
 	// Binding 是执行绑定；remote-pull 绑定的智能体由连接器队列派发，
 	// 不占用全局执行并发闸。
-	Binding exec.Binding
+	Binding exec.Binding `json:"binding"`
 	// Positions 是聘任的岗位 Code 集合（去重、非空才可启用）。
-	Positions    []string
-	SystemPrompt string
+	Positions    []string `json:"positions,omitempty"`
+	SystemPrompt string   `json:"system_prompt,omitempty"`
 	// WorkspacePath 是本地 CLI 执行器的工作目录。
-	WorkspacePath string
-	Model         *string
-	AllowedTools  []string
+	WorkspacePath string   `json:"workspace_path,omitempty"`
+	Model         *string  `json:"claude_model,omitempty"`
+	AllowedTools  []string `json:"allowed_tools,omitempty"`
 	// SignatureEncoding 是动态入口签名编码（hex/base64）。
-	SignatureEncoding string
+	SignatureEncoding string `json:"signature_encoding,omitempty"`
 	// PermissionMode 是本地 CLI 执行器的权限口径。
-	PermissionMode string
-	TimeoutSecs    uint64
-	MaxConcurrency int
-	QueueCapacity  int
-	Enabled        bool
+	PermissionMode string `json:"permission_mode,omitempty"`
+	TimeoutSecs    uint64 `json:"timeout_secs,omitempty"`
+	MaxConcurrency int    `json:"max_concurrency,omitempty"`
+	QueueCapacity  int    `json:"queue_capacity,omitempty"`
+	Enabled        bool   `json:"enabled"`
 	// SigningSecret 是动态入口的 HMAC 密钥（AES-256-GCM 加密存储，不回显）。
-	// 仅执行路径（GetBySlug）填充；管理列表查询不解密。
-	SigningSecret []byte
+	// 仅执行路径（GetBySlug）填充；任何序列化永不携带明文。
+	SigningSecret []byte `json:"-"`
 	// SecretConfigured 是列表/视图用的派生态：签名密钥是否已配置。列表查询
 	// 不解密（单个坏密文不影响浏览整页），执行路径始终解密并严格校验。
-	SecretConfigured bool
-	Revision         int64
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	SecretConfigured bool      `json:"secret_configured,omitempty"`
+	Revision         int64     `json:"revision,omitempty"`
+	CreatedAt        time.Time `json:"created_at,omitempty"`
+	UpdatedAt        time.Time `json:"updated_at,omitempty"`
+}
+
+// Export 是智能体导出记录（迁移格式）：携带签名密钥密文（AAD=slug，
+// 主密钥一致的目标环境可直接落库，明文密钥永不出现在导出流）。
+type Export struct {
+	Agent
+	// SecretEnc 是 AES-GCM 密文（AAD=slug）；明文密钥永不序列化。
+	SecretEnc string `json:"secret_enc"`
+}
+
+// ImportEntry 是批量导入条目：SigningSecret（明文，新环境录入）与
+// SecretEnc（密文，同主密钥迁移）二选一，都空且目标已存在 = 保留既有密钥。
+type ImportEntry struct {
+	Agent
+	SecretEnc string `json:"secret_enc"`
 }
 
 // ListQuery 是管理台规模的智能体列表查询条件。
@@ -177,6 +194,12 @@ type Repository interface {
 	// 只置 SecretConfigured 标记。
 	Search(ctx context.Context, q ListQuery) ([]Agent, int64, error)
 	Upsert(ctx context.Context, a *Agent, ifMatchRevision *int64) (int64, error)
+	// ImportUpsert 与 Upsert 同语义，但签名密钥直接落传入密文（批量
+	// 导入的密文迁移路径；明文永不过手）。
+	ImportUpsert(ctx context.Context, a *Agent, secretEnc string,
+		ifMatchRevision *int64) (int64, error)
+	// ExportAll 导出全部智能体（含密文，不解密）——迁移与备份格式。
+	ExportAll(ctx context.Context) ([]Export, error)
 	Delete(ctx context.Context, slug string) error
 	// RegistryVersion 返回全局注册表版本，用于多实例收敛轮询。
 	RegistryVersion(ctx context.Context) (int64, error)

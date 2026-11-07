@@ -80,6 +80,7 @@ func AdminRouter(deps AdminDeps) chi.Router {
 			r.Get("/runs/{run_id}", h.getRun)
 			r.Get("/agent-connectors", h.listConnectors)
 			r.Get("/providers", h.listProviders)
+			r.Get("/agents/export", h.exportAgents)
 			r.Get("/audits", h.listAudits)
 			r.Get("/channel-events", h.listChannelEvents)
 			r.Get("/users", h.listUsers)
@@ -101,6 +102,7 @@ func AdminRouter(deps AdminDeps) chi.Router {
 				r.Post("/agent-connectors", h.issueConnector)
 				r.Delete("/agent-connectors/{name}", h.revokeConnector)
 				r.Put("/providers/{id}", h.updateProvider)
+				r.Post("/agents/import", h.importAgents)
 				r.Post("/users", h.createUser)
 				r.Put("/users/{username}", h.updateUser)
 				r.Delete("/users/{username}", h.deleteUser)
@@ -319,7 +321,93 @@ func (h *adminHandler) listRuns(w http.ResponseWriter, r *http.Request) {
 	writeAdminData(w, http.StatusOK, map[string]any{"items": items, "total": total})
 }
 
-// getRun 返回单条运行的完整载荷（列表是瘦列：Input/Output 在详情按需取）。
+// ---------------------------------------------------------------------------
+// 智能体批量导入/导出（B1，管理员专属）
+// ---------------------------------------------------------------------------
+
+// exportAgents 导出全部智能体。format=json（迁移格式，含签名密钥密文——
+// 密文 AAD=slug，主密钥一致的目标环境可直接落库；明文永不出现在导出流）
+// 或 format=csv（观察/表格用途，不含任何密钥材料）。管理员专属：密文即
+// 凭据材料。
+func (h *adminHandler) exportAgents(w http.ResponseWriter, r *http.Request) {
+	if !h.requireAdminRole(w, r) {
+		return
+	}
+	exports, err := h.deps.Catalog.ExportAgents(r.Context())
+	if err != nil {
+		writeAdminError(w, http.StatusInternalServerError, "storage_error", "export agents failed")
+		return
+	}
+	switch strings.ToLower(r.URL.Query().Get("format")) {
+	case "csv":
+		var b strings.Builder
+		b.WriteString("slug,name,description,executor_kind,execution_mode,positions,enabled," +
+			"timeout_secs,max_concurrency,queue_capacity,revision,secret_configured\n")
+		for _, export := range exports {
+			a := export.Agent
+			b.WriteString(csvLine(a.Slug, a.Name, a.Description, string(a.Binding.Kind),
+				string(a.Binding.Mode), strings.Join(a.Positions, ";"),
+				strconv.FormatBool(a.Enabled), strconv.FormatUint(a.TimeoutSecs, 10),
+				strconv.Itoa(a.MaxConcurrency), strconv.Itoa(a.QueueCapacity),
+				strconv.FormatInt(a.Revision, 10), strconv.FormatBool(a.SecretConfigured)))
+		}
+		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+		w.Header().Set("Content-Disposition", `attachment; filename="agents-export.csv"`)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(b.String()))
+	default: // json
+		writeAdminData(w, http.StatusOK, map[string]any{"agents": exports})
+	}
+}
+
+// csvLine 以最小 CSV 转义（引号包裹含逗号/引号/换行的字段）拼一行。
+func csvLine(fields ...string) string {
+	escaped := make([]string, len(fields))
+	for i, field := range fields {
+		if strings.ContainsAny(field, ",\"\n\r") {
+			escaped[i] = `"` + strings.ReplaceAll(field, `"`, `""`) + `"`
+		} else {
+			escaped[i] = field
+		}
+	}
+	return strings.Join(escaped, ",") + "\n"
+}
+
+// importAgents 批量导入智能体：JSON {"agents":[…]}，单条可为明文
+// signing_secret（新环境录入）或 secret_enc（同主密钥迁移密文）。逐条
+// 独立落库，返回 per-item 结果与成败汇总。
+func (h *adminHandler) importAgents(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		Agents []catalog.ImportAgentEntry `json:"agents"`
+	}
+	if err := decodeAdminBody(w, r, &payload); err != nil {
+		return
+	}
+	results, err := h.deps.Catalog.ImportAgents(r.Context(), payload.Agents,
+		sessionUserFrom(r).Username)
+	if err != nil {
+		writeAdminError(w, http.StatusUnprocessableEntity, "invalid_request", err.Error())
+		return
+	}
+	created, updated, failed := 0, 0, 0
+	for _, result := range results {
+		switch result.Status {
+		case "created":
+			created++
+		case "updated":
+			updated++
+		default:
+			failed++
+		}
+	}
+	writeAdminData(w, http.StatusOK, map[string]any{
+		"results": results, "created": created, "updated": updated, "failed": failed,
+	})
+}
+
+// ---------------------------------------------------------------------------
+// 团队运行 / 连接器令牌
+// ---------------------------------------------------------------------------
 func (h *adminHandler) getRun(w http.ResponseWriter, r *http.Request) {
 	item, err := h.deps.Runs.Get(r.Context(), chi.URLParam(r, "run_id"))
 	if errors.Is(err, run.ErrNotFound) {

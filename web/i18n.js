@@ -104,6 +104,11 @@ window.I18N = {
     "agent.sigEncoding": "签名编码",
     "agent.new": "新建智能体",
     "agent.edit": "编辑智能体",
+    "agent.import": "批量导入",
+    "agent.import.payload": "导入 JSON（/agents/export 导出的迁移格式；secret_enc 为密文迁移，signing_secret 为明文录入）",
+    "agent.import.submit": "导入",
+    "agent.import.done": "导入完成",
+    "agent.import.empty": "导入内容为空",
 
     "prov.sub": "系统级执行后端配置；保存后对后续任务热更新，运行中任务不受影响。密钥字段永不回显，留空 = 保留。",
     "prov.configured": "已配置",
@@ -327,6 +332,11 @@ window.I18N = {
     "agent.sigEncoding": "Signature encoding",
     "agent.new": "New agent",
     "agent.edit": "Edit agent",
+    "agent.import": "Import",
+    "agent.import.payload": "Import JSON (the /agents/export migration format; secret_enc migrates ciphertext, signing_secret enters plaintext)",
+    "agent.import.submit": "Import",
+    "agent.import.done": "Import complete",
+    "agent.import.empty": "Import payload is empty",
 
     "prov.sub": "System-level execution backend config; saves hot-apply to subsequent tasks, running tasks keep their snapshot. Secrets are never echoed; empty = keep.",
     "prov.configured": "configured",

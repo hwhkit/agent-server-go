@@ -43,9 +43,10 @@ func (m Mode) Valid() bool {
 }
 
 // Binding 是「执行器种类 × 执行模式」的绑定值对象。
+// json 标签对齐迁移/管理格式的既有字段名（executor_kind/execution_mode）。
 type Binding struct {
-	Kind Kind
-	Mode Mode
+	Kind Kind `json:"executor_kind"`
+	Mode Mode `json:"execution_mode"`
 }
 
 // Validate 校验绑定一致性：remote-pull 模式与 kind 必须互相匹配，

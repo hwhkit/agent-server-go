@@ -24,6 +24,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	hwconfig "github.com/hwhkit/hwhkit-go/config"
 	"github.com/hwhkit/hwhkit-go/core/appctx"
+	"github.com/hwhkit/hwhkit-go/core/health"
 	"github.com/hwhkit/hwhkit-go/hwhkit"
 	"github.com/hwhkit/hwhkit-go/hwhkit/production"
 	"github.com/hwhkit/hwhkit-go/observability"
@@ -77,6 +78,9 @@ type runtime struct {
 	pushIdempotency *postgres.PushIdempotencyStore
 	retention       *postgres.RetentionStore
 	retentionDays   int
+	// healthChecks 由 buildRuntime 用其局部仓储构造，main 里注册到框架
+	// 健康注册表（/health/ready checks 数组的数据源）。
+	healthChecks []health.Check
 }
 
 // agentResolver 把智能体仓储适配为 dispatch.Resolver：停用与未命中一律
@@ -454,6 +458,43 @@ func buildRuntime(ctx context.Context) (*runtime, *config.Config, error) {
 			TaskTimeout:     cfgIR.TaskTimeout,
 		}, httpx.CallbackPoster{Client: callbackHTTPClient}, channelLister, channelEvents, dispatcher)
 	}
+	// B7：就绪检查闭包（迁移标记/注册表/队列；依赖本函数局部仓储），
+	// main 在 hwhkit.Run 后注册到框架健康注册表。
+	rt.healthChecks = append(rt.healthChecks, &health.CheckFunc{N: "migrations",
+		F: func(ctx context.Context) health.Result {
+			var marker int
+			err := db.Pool.QueryRow(ctx,
+				`SELECT 1 FROM platform_settings WHERE key = 'agent_registry_revision'`).Scan(&marker)
+			return readinessResult("migrations", err)
+		}},
+		&health.CheckFunc{N: "agent_registry",
+			F: func(ctx context.Context) health.Result {
+				_, err := agents.RegistryVersion(ctx)
+				return readinessResult("agent_registry", err)
+			}})
+	if cfgAgentAPI.Enabled {
+		rt.healthChecks = append(rt.healthChecks, &health.CheckFunc{N: "queue",
+			F: func(ctx context.Context) health.Result {
+				_, err := queue.QueueTotals(ctx)
+				return readinessResult("queue", err)
+			}})
+	}
+
+	// B8：非敏感生效配置摘要（运维核对；凭据/密钥永不打印）。
+	slog.Info("configuration summary",
+		"push_enabled", cfgIR.PushEnabled, "push_path", cfgIR.PushPath,
+		"push_mode", cfgIR.PushMode,
+		"pull_enabled", cfgIR.PullEnabled,
+		"agent_api_enabled", cfgAgentAPI.Enabled,
+		"a2a_enabled", cfgA2A.Enabled, "a2a_base_path", cfgA2A.BasePath,
+		"public_base_url", cfgPlatform.PublicBaseURL,
+		"secure_cookies", cfgPlatform.SecureCookies,
+		"global_max_concurrency", cfgPlatform.GlobalMaxConcurrency,
+		"db_max_conns", cfgPlatform.DBMaxConns,
+		"retention_days", cfgPlatform.RetentionDays,
+		"workspace_root", cfgPlatform.WorkspaceRoot,
+		"max_request_body_bytes", cfgPlatform.MaxRequestBodyBytes,
+		"version", version)
 	return rt, cfgIR, nil
 }
 
@@ -646,6 +687,16 @@ func collectDomainMetrics(ch chan<- prometheus.Metric, dash *dashboard.Service,
 		[]string{version}, 1)
 }
 
+// readinessResult 把检查错误折叠为框架健康结果（失败=unhealthy+稳定文案）。
+func readinessResult(name string, err error) health.Result {
+	result := health.Result{Name: name, Status: health.StatusHealthy}
+	if err != nil {
+		result.Status = health.StatusUnhealthy
+		result.Detail = name + " check failed"
+	}
+	return result
+}
+
 func boolGauge(ok bool) float64 {
 	if ok {
 		return 1
@@ -720,6 +771,12 @@ func main() {
 	frameworkReg := prometheus.NewRegistry()
 	built.SetMetricsRegistry(frameworkReg)
 	rt.metrics.RegisterTo(frameworkReg)
+
+	// B7：就绪检查注册到框架健康注册表（/health/ready 由框架外层 mux
+	// 提供，checks 数组逐项可见；数据库探活已由框架装配）。
+	for _, check := range rt.healthChecks {
+		built.Health().Register(check)
+	}
 	rt.startLoops(built.Shutdown().Context())
 
 	slog.Info("ir-agent-server ready", "version", version)

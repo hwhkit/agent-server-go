@@ -539,8 +539,29 @@
     const apply = h("button", { class: "btn", onclick: () => load(1) }, t("common.filter"));
     const newBtn = h("button", { class: "btn primary", onclick: () => agentEditor(null, positions) },
       `+ ${t("agent.new")}`);
+    // 批量迁移入口（B1）：导出 JSON（迁移，含密文）/CSV（观察），导入粘贴 JSON。
+    const exportBtn = (format) => h("button", {
+      class: "btn",
+      onclick: async () => {
+        try {
+          const response = await fetch(`/api/admin/v2/agents/export?format=${format}`,
+            { credentials: "same-origin" });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const blob = await response.blob();
+          const url = URL.createObjectURL(blob);
+          const link = h("a", { href: url, download: `agents.${format}` });
+          link.click();
+          URL.revokeObjectURL(url);
+        } catch (err) { reportError(err); }
+      },
+    }, `⬇ ${format.toUpperCase()}`);
+    const importBtn = h("button", {
+      class: "btn",
+      onclick: () => importAgentsModal(),
+    }, `⬆ ${t("agent.import")}`);
     body.append(panel(null, null,
-      h("div", { class: "row mb" }, newBtn, queryInput, showDisabled, apply),
+      h("div", { class: "row mb" }, newBtn, queryInput, showDisabled, apply,
+        h("div", { class: "spacer" }), exportBtn("json"), exportBtn("csv"), importBtn),
       listWrap));
 
     const load = async (page) => {
@@ -783,6 +804,43 @@
       h("div", { class: "row mb" },
         h("button", { class: "btn primary", onclick: issueConnectorModal }, `+ ${t("conn.issue")}`)),
       table(columns, rows)));
+  };
+
+  // 批量导入对话框：粘贴 /agents/export 导出的 JSON，逐条结果显示。
+  const importAgentsModal = () => {
+    const payload = h("textarea", { rows: 10,
+      placeholder: '{"agents":[{"slug":"…","name":"…","binding":{"executor_kind":"pi","execution_mode":"local"},"positions":["FUNDAMENTAL_ANALYST"],"signing_secret":"…"}]}\n（或粘贴 /agents/export 导出的 JSON；密文迁移用 secret_enc 字段替代 signing_secret）' });
+    const summary = h("div", { class: "small mt" });
+    const doImport = async (close) => {
+      clear(summary);
+      let parsed;
+      try { parsed = JSON.parse(payload.value); }
+      catch (err) { summary.append(h("div", { class: "err-text" }, `JSON: ${err.message}`)); return; }
+      const agentsList = Array.isArray(parsed) ? parsed : parsed.agents;
+      if (!Array.isArray(agentsList) || !agentsList.length) {
+        summary.append(h("div", { class: "err-text" }, t("agent.import.empty")));
+        return;
+      }
+      try {
+        const result = await api.post("/agents/import", { agents: agentsList });
+        summary.append(h("div", { class: "ok-text" },
+          `✓ ${t("agent.import.done")} — created ${result.created} · updated ${result.updated} · failed ${result.failed}`));
+        const failures = (result.results || []).filter((item) => item.status === "failed");
+        for (const failure of failures.slice(0, 5)) {
+          summary.append(h("div", { class: "err-text" }, `${failure.slug}: ${failure.error}`));
+        }
+      } catch (err) {
+        summary.append(h("div", { class: "err-text" }, err.message));
+      }
+    };
+    openModal(t("agent.import"),
+      h("div", {},
+        field(t("agent.import.payload"), payload, { full: true }), summary),
+      [
+        { label: t("common.close"), onClick: (close) => close() },
+        { label: t("agent.import.submit"), kind: "primary", onClick: doImport },
+      ],
+      { wide: true });
   };
 
   const issueConnectorModal = async () => {
