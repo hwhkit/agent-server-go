@@ -25,6 +25,13 @@ const (
 	DefaultPermissionMode = "dontAsk"
 )
 
+// 运行约束上限（C5 领域不变量）：拦异常值而非合理调优。
+const (
+	MaxTimeoutSecs   = 24 * 60 * 60 // 墙钟上限 24h
+	MaxConcurrency   = 64
+	MaxQueueCapacity = 1000
+)
+
 // Agent 是智能体实体。
 // json 标签服务于批量迁移格式（/agents/export|import）——管理 API 的
 // 展示态另由视图层组装，不受此影响。
@@ -186,6 +193,17 @@ func (a *Agent) Validate(requireSecret bool) error {
 	}
 	if n := len(a.SigningSecret); n != 0 && (n < 16 || n > 512) {
 		return fmt.Errorf("signing_secret must be 16-512 bytes, got %d", n)
+	}
+	// C5 不变量下沉：运行约束上限收进领域校验——管理 API、批量导入与
+	// 任何未来写入路径共享同一防线。上限拦异常值而非合理调优。
+	if a.TimeoutSecs > MaxTimeoutSecs {
+		return fmt.Errorf("timeout_secs must be <= %d (24h), got %d", MaxTimeoutSecs, a.TimeoutSecs)
+	}
+	if a.MaxConcurrency > MaxConcurrency {
+		return fmt.Errorf("max_concurrency must be <= %d, got %d", MaxConcurrency, a.MaxConcurrency)
+	}
+	if a.QueueCapacity > MaxQueueCapacity {
+		return fmt.Errorf("queue_capacity must be <= %d, got %d", MaxQueueCapacity, a.QueueCapacity)
 	}
 	return nil
 }

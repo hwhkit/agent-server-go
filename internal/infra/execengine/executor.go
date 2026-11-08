@@ -122,6 +122,10 @@ func (e *AgentExecutor) SetConfig(config *PlatformConfig) {
 
 // NewAgentExecutor 组装执行器。workspace 根目录必须存在且可解析,否则直接失败 ——
 // 逃逸检查依赖一个稳定的规范化基准路径。
+//
+// 内聚决策（v0.2 R9 评估，doc/v0.2-ITERATIONS.md C4）：本包保持单包形态——
+// 执行器/归一化/契约/用量分享同一组私有类型与模板流程，拆分会为内部
+// 协作引入导出面；3k+ 行是「一个执行子系统」的合理单位。
 func NewAgentExecutor(processor Processor, httpClient *http.Client, config *PlatformConfig) (*AgentExecutor, error) {
 	root, err := CanonicalizePath(config.WorkspaceRoot)
 	if err != nil {

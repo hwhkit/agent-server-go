@@ -2,9 +2,12 @@
 // If-Match 乐观并发、内置资源保护与审计事件生成。
 //
 // 存储语义（事务内 revision 递增、注册表版本收敛、聘任级联）由
-// infra/postgres 仓储保证；本包只做用例编排。审计当前为「变更后追加」，
-// 与业务变更的同事务耦合在 P6 admin API 装配时通过 tx 组合器收口
-// （见 doc/ARCHITECTURE-V2.md §8）。
+// infra/postgres 仓储保证；本包只做用例编排。
+//
+// 审计口径（C2 评估收口）：「变更后追加 + 失败留日志」而非同事务耦合——
+// 审计是旁路观测面，同事务化需要 tx 端口贯穿全部仓储（抽象成本高），
+// 且「业务成功但审计失败」的正确处置是可观测（slog.Error）而非回滚业务。
+// 该决策随 v0.2 R8 记录于 doc/v0.2-ITERATIONS.md。
 package catalog
 
 import (
@@ -12,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"ir-agent-server/internal/domain/agent"
@@ -50,13 +54,19 @@ func NewService(deps Deps) *Service {
 		teams: deps.Teams, audit: deps.Audit}
 }
 
-// record 追加审计事件；失败只记日志路径（返回给调用方决定是否补偿），
-// 不阻断已提交的业务变更。
+// record 追加审计事件（C2 收口：全服务唯一的审计出口）。审计失败绝不
+// 回滚已提交的业务变更（审计是旁路观测），但必须留日志——静默丢失审计
+// 行等于合规盲区。
 func (s *Service) record(ctx context.Context, events ...audit.Event) error {
 	if s.audit == nil || len(events) == 0 {
 		return nil
 	}
-	return s.audit.Append(ctx, events...)
+	if err := s.audit.Append(ctx, events...); err != nil {
+		slog.Error("catalog audit append failed (business change already committed)",
+			"err", err, "events", len(events))
+		return err
+	}
+	return nil
 }
 
 func wrapValidation(err error) error {
@@ -210,16 +220,13 @@ func (s *Service) ImportAgents(ctx context.Context, entries []ImportAgentEntry,
 		}
 		results = append(results, result)
 	}
-	if err := s.audit.Append(ctx, audit.Event{
+	_ = s.record(ctx, audit.Event{
 		Actor: actor, Action: "agent.import",
 		Target: fmt.Sprintf("%d agents", len(entries)),
 		Detail: json.RawMessage(fmt.Sprintf(
 			`{"total":%d,"created":%d,"updated":%d,"failed":%d}`,
 			len(entries), created, updated, failed)),
-	}); err != nil {
-		// 审计失败不回滚已导入的数据（与逐条审计同一豁免口径）。
-		return results, nil
-	}
+	})
 	return results, nil
 }
 
