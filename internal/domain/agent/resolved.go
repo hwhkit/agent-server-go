@@ -10,14 +10,18 @@ import (
 // ResolvedConfig 是一个智能体的存储态运行快照（含解密后的明文签名密钥，
 // 禁止序列化外发）。旧栈名 AgentConfig；执行引擎与调度层共享此值对象。
 type ResolvedConfig struct {
-	ID                int64
-	Slug              string
-	Name              string
-	Description       string
-	Enabled           bool
-	ExecutorKind      exec.Kind
-	ExecutionMode     exec.Mode
-	SigningSecret     string
+	ID            int64
+	Slug          string
+	Name          string
+	Description   string
+	Enabled       bool
+	ExecutorKind  exec.Kind
+	ExecutionMode exec.Mode
+	SigningSecret string
+	// PrevSigningSecret 是宽限窗口内的上一代密钥（空 = 无宽限）。
+	PrevSigningSecret string
+	// SecretRotatedAt 是轮换时刻（Resolved 以 UTC RFC3339 文本承载）。
+	SecretRotatedAt   string
 	SignatureEncoding string
 	SystemPrompt      string
 	WorkspacePath     string
@@ -62,11 +66,20 @@ func (a *Agent) Resolved() *ResolvedConfig {
 	if len(a.SigningSecret) > 0 {
 		secret = string(a.SigningSecret)
 	}
+	prevSecret := ""
+	if len(a.PrevSigningSecret) > 0 {
+		prevSecret = string(a.PrevSigningSecret)
+	}
+	rotatedAt := ""
+	if !a.SecretRotatedAt.IsZero() {
+		rotatedAt = a.SecretRotatedAt.UTC().Format("2006-01-02T15:04:05.000000000Z07:00")
+	}
 	return &ResolvedConfig{
 		ID: a.ID, Slug: a.Slug, Name: a.Name, Description: a.Description,
 		Enabled: a.Enabled, ExecutorKind: a.Binding.Kind, ExecutionMode: a.Binding.Mode,
-		SigningSecret: secret, SignatureEncoding: a.SignatureEncoding,
-		SystemPrompt: a.SystemPrompt, WorkspacePath: a.WorkspacePath,
+		SigningSecret: secret, PrevSigningSecret: prevSecret, SecretRotatedAt: rotatedAt,
+		SignatureEncoding: a.SignatureEncoding,
+		SystemPrompt:      a.SystemPrompt, WorkspacePath: a.WorkspacePath,
 		ClaudeModel: model, AllowedTools: a.AllowedTools,
 		PermissionMode: a.PermissionMode, TimeoutSecs: a.TimeoutSecs,
 		MaxConcurrency: a.MaxConcurrency, QueueCapacity: a.QueueCapacity,

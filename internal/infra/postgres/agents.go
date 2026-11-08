@@ -30,9 +30,9 @@ func NewAgentStore(db *DB, cipher *crypto.SecretCipher) *AgentStore {
 var _ agent.Repository = (*AgentStore)(nil)
 
 const agentColumns = `id, slug, name, description, enabled, executor_kind, execution_mode,
-	signing_secret_enc, signature_encoding, system_prompt, workspace_path, claude_model,
-	allowed_tools_json, permission_mode, timeout_secs, max_concurrency, queue_capacity,
-	revision, created_at, updated_at`
+	signing_secret_enc, prev_secret_enc, secret_rotated_at, signature_encoding,
+	system_prompt, workspace_path, claude_model, allowed_tools_json, permission_mode,
+	timeout_secs, max_concurrency, queue_capacity, revision, created_at, updated_at`
 
 // agentSelectBody 是列清单 + 聘任岗位子查询（不含 FROM，供 Search 追加
 // COUNT(*) OVER() 总数列）。
@@ -53,6 +53,8 @@ func (s *AgentStore) scanAgentInto(row scanner, decrypt bool) (*agent.Agent, err
 	var (
 		a         agent.Agent
 		secretEnc string
+		prevEnc   *string
+		rotatedAt *string
 		kind      string
 		mode      string
 		model     *string
@@ -65,8 +67,8 @@ func (s *AgentStore) scanAgentInto(row scanner, decrypt bool) (*agent.Agent, err
 		queue     int64
 	)
 	dest := []any{&a.ID, &a.Slug, &a.Name, &a.Description, &a.Enabled, &kind, &mode,
-		&secretEnc, &a.SignatureEncoding, &a.SystemPrompt, &a.WorkspacePath, &model,
-		&toolsJSON, &a.PermissionMode, &timeout, &conc, &queue,
+		&secretEnc, &prevEnc, &rotatedAt, &a.SignatureEncoding, &a.SystemPrompt,
+		&a.WorkspacePath, &model, &toolsJSON, &a.PermissionMode, &timeout, &conc, &queue,
 		&a.Revision, &createdAt, &updatedAt, &positions}
 	if err := row.Scan(dest...); err != nil {
 		return nil, err
@@ -96,6 +98,13 @@ func (s *AgentStore) scanAgentInto(row scanner, decrypt bool) (*agent.Agent, err
 		return nil, fmt.Errorf("decrypt signing secret for agent %s", a.Slug)
 	}
 	a.SigningSecret = []byte(secret)
+	// 宽限旧钥：解密失败不阻塞执行（宽限是尽力而为的平滑通道）。
+	if prevEnc != nil && *prevEnc != "" && rotatedAt != nil && *rotatedAt != "" {
+		if prev, prevErr := s.cipher.Decrypt(*prevEnc, a.Slug); prevErr == nil {
+			a.PrevSigningSecret = []byte(prev)
+			a.SecretRotatedAt = parseTS(*rotatedAt)
+		}
+	}
 	return &a, nil
 }
 
@@ -230,6 +239,8 @@ func (s *AgentStore) ExportAll(ctx context.Context) ([]agent.Export, error) {
 		var (
 			a         agent.Agent
 			secretEnc string
+			prevEnc   *string
+			rotatedAt *string
 			kind      string
 			mode      string
 			model     *string
@@ -242,8 +253,8 @@ func (s *AgentStore) ExportAll(ctx context.Context) ([]agent.Export, error) {
 			queue     int64
 		)
 		if err := rows.Scan(&a.ID, &a.Slug, &a.Name, &a.Description, &a.Enabled, &kind, &mode,
-			&secretEnc, &a.SignatureEncoding, &a.SystemPrompt, &a.WorkspacePath, &model,
-			&toolsJSON, &a.PermissionMode, &timeout, &conc, &queue,
+			&secretEnc, &prevEnc, &rotatedAt, &a.SignatureEncoding, &a.SystemPrompt,
+			&a.WorkspacePath, &model, &toolsJSON, &a.PermissionMode, &timeout, &conc, &queue,
 			&a.Revision, &createdAt, &updatedAt, &positions); err != nil {
 			return nil, err
 		}
@@ -284,9 +295,12 @@ func (s *AgentStore) upsert(ctx context.Context, a *agent.Agent, ifMatchRevision
 
 	var currentSecret string
 	var currentRevision int64
+	var currentPrev string
+	var currentRotated *string
 	err = tx.QueryRow(ctx,
-		`SELECT signing_secret_enc, revision FROM agents WHERE slug = $1 FOR UPDATE`, a.Slug).
-		Scan(&currentSecret, &currentRevision)
+		`SELECT signing_secret_enc, revision, prev_secret_enc, secret_rotated_at
+		 FROM agents WHERE slug = $1 FOR UPDATE`, a.Slug).
+		Scan(&currentSecret, &currentRevision, &currentPrev, &currentRotated)
 	creating := errors.Is(err, pgx.ErrNoRows)
 	if err != nil && !creating {
 		return 0, fmt.Errorf("lock agent: %w", err)
@@ -312,31 +326,43 @@ func (s *AgentStore) upsert(ctx context.Context, a *agent.Agent, ifMatchRevision
 	if err != nil {
 		return 0, err
 	}
+	// 轮换检测：新密文 ≠ 旧密文时，旧密文进宽限位（PrevSigningSecret），
+	// 未变化则原样保留既有宽限状态。
+	prevEnc := &currentPrev
+	rotatedAt := currentRotated
+	if secretEnc != currentSecret {
+		prev := currentSecret
+		prevEnc = &prev
+		rotatedTS := nowTS()
+		rotatedAt = &rotatedTS
+	}
 
 	now := nowTS()
 	var newRevision int64
 	if creating {
 		err = tx.QueryRow(ctx,
 			`INSERT INTO agents (slug, name, description, enabled, executor_kind, execution_mode,
-				signing_secret_enc, signature_encoding, system_prompt, workspace_path, claude_model,
-				allowed_tools_json, permission_mode, timeout_secs, max_concurrency, queue_capacity,
+				signing_secret_enc, prev_secret_enc, secret_rotated_at, signature_encoding,
+				system_prompt, workspace_path, claude_model, allowed_tools_json,
+				permission_mode, timeout_secs, max_concurrency, queue_capacity,
 				revision, created_at, updated_at)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,1,$17,$17)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,1,$19,$19)
 			 RETURNING revision, id`,
 			a.Slug, a.Name, a.Description, a.Enabled, string(a.Binding.Kind), string(a.Binding.Mode),
-			secretEnc, a.SignatureEncoding, a.SystemPrompt, a.WorkspacePath, a.Model,
-			string(tools), a.PermissionMode, int64(a.TimeoutSecs), int64(a.MaxConcurrency),
+			secretEnc, prevEnc, rotatedAt, a.SignatureEncoding, a.SystemPrompt, a.WorkspacePath,
+			a.Model, string(tools), a.PermissionMode, int64(a.TimeoutSecs), int64(a.MaxConcurrency),
 			int64(a.QueueCapacity), now).Scan(&newRevision, &a.ID)
 	} else {
 		err = tx.QueryRow(ctx,
 			`UPDATE agents SET name=$2, description=$3, enabled=$4, executor_kind=$5, execution_mode=$6,
-				signing_secret_enc=$7, signature_encoding=$8, system_prompt=$9, workspace_path=$10,
-				claude_model=$11, allowed_tools_json=$12, permission_mode=$13, timeout_secs=$14,
-				max_concurrency=$15, queue_capacity=$16, revision=$17, updated_at=$18
+				signing_secret_enc=$7, prev_secret_enc=$8, secret_rotated_at=$9, signature_encoding=$10,
+				system_prompt=$11, workspace_path=$12, claude_model=$13, allowed_tools_json=$14,
+				permission_mode=$15, timeout_secs=$16, max_concurrency=$17, queue_capacity=$18,
+				revision=$19, updated_at=$20
 			 WHERE slug=$1 RETURNING revision`,
 			a.Slug, a.Name, a.Description, a.Enabled, string(a.Binding.Kind), string(a.Binding.Mode),
-			secretEnc, a.SignatureEncoding, a.SystemPrompt, a.WorkspacePath, a.Model,
-			string(tools), a.PermissionMode, int64(a.TimeoutSecs), int64(a.MaxConcurrency),
+			secretEnc, prevEnc, rotatedAt, a.SignatureEncoding, a.SystemPrompt, a.WorkspacePath,
+			a.Model, string(tools), a.PermissionMode, int64(a.TimeoutSecs), int64(a.MaxConcurrency),
 			int64(a.QueueCapacity), currentRevision+1, now).Scan(&newRevision)
 	}
 	if err != nil {

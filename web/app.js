@@ -1461,8 +1461,6 @@
     }
     const actorInput = textInput("", { placeholder: t("audit.actor"), style: { width: "150px" } });
     const actionInput = textInput("", { placeholder: t("audit.action"), style: { width: "180px" } });
-    const listWrap = h("div");
-    const apply = h("button", { class: "btn", onclick: () => load() }, t("common.filter"));
     const csvBtn = h("button", {
       class: "btn",
       onclick: () => {
@@ -1483,30 +1481,29 @@
           .catch((err) => toast(err.message, "err"));
       },
     }, "⬇ CSV");
-    container.append(panel(t("audit.title"), null,
-      h("div", { class: "row mb" }, actorInput, actionInput, apply, csvBtn), listWrap));
     const columns = [
       { label: t("audit.time") }, { label: t("audit.actor") }, { label: t("audit.action") },
       { label: t("audit.target") }, { label: t("audit.detail") },
     ];
-    const load = async () => {
-      const params = new URLSearchParams({ limit: "100" });
-      if (actorInput.value.trim()) params.set("actor", actorInput.value.trim());
-      if (actionInput.value.trim()) params.set("action", actionInput.value.trim());
-      const data = await api.get(`/audits?${params}`);
-      clear(listWrap);
-      const rows = (data.items || []).map((e) => h("tr", {},
+    // B5：走通用列表组件（筛选行+分页+表格一体）。
+    const list = makeList({
+      columns, pageSize: 100,
+      controls: [
+        { el: actorInput, param: "actor", value: () => actorInput.value.trim() },
+        { el: actionInput, param: "action", value: () => actionInput.value.trim() },
+      ],
+      extras: [csvBtn],
+      fetch: (params) => api.get(`/audits?${params}`),
+      renderRow: (e) => h("tr", {},
         h("td", { class: "muted small nowrap" }, fmtTime(e.CreatedAt)),
         h("td", { class: "mono" }, e.Actor),
         h("td", {}, h("span", { class: "chip accent" }, String(e.Action))),
         h("td", { class: "mono small" }, e.Target || "—"),
         h("td", { class: "mono small muted", style: { maxWidth: "380px", wordBreak: "break-all" } },
-          e.Detail ? prettyJSON(e.Detail) : "—")));
-      if (!rows.length) rows.push(emptyRow(columns.length));
-      listWrap.append(table(columns, rows),
-        h("div", { class: "muted small mt" }, `total ${data.total || 0}`));
-    };
-    await load();
+          e.Detail ? prettyJSON(e.Detail) : "—")),
+    });
+    container.append(panel(t("audit.title"), null, list.root));
+    await list.load(1);
   };
 
   // -----------------------------------------------------------------------

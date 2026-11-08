@@ -55,12 +55,29 @@ type Agent struct {
 	// SigningSecret 是动态入口的 HMAC 密钥（AES-256-GCM 加密存储，不回显）。
 	// 仅执行路径（GetBySlug）填充；任何序列化永不携带明文。
 	SigningSecret []byte `json:"-"`
+	// PrevSigningSecret 是上一代密钥的解密结果（轮换宽限窗口内有效），
+	// 仅执行路径填充；验证顺序 = 先当前密钥、失败且窗口未过再试旧钥。
+	PrevSigningSecret []byte `json:"-"`
+	// SecretRotatedAt 是本轮密钥轮换的时间（零值 = 未轮换）；宽限窗口以
+	// 它起算。
+	SecretRotatedAt time.Time `json:"-"`
 	// SecretConfigured 是列表/视图用的派生态：签名密钥是否已配置。列表查询
 	// 不解密（单个坏密文不影响浏览整页），执行路径始终解密并严格校验。
 	SecretConfigured bool      `json:"secret_configured,omitempty"`
 	Revision         int64     `json:"revision,omitempty"`
 	CreatedAt        time.Time `json:"created_at,omitempty"`
 	UpdatedAt        time.Time `json:"updated_at,omitempty"`
+}
+
+// SecretGraceWindow 是签名密钥轮换宽限窗口：换钥后旧钥在该时长内仍被
+// 动态入口接受（调用方平滑换钥不断流），过期后仅新钥有效。
+const SecretGraceWindow = 24 * time.Hour
+
+// PrevSecretActive 报告旧钥是否仍在宽限窗口内。
+func (a *Agent) PrevSecretActive(now time.Time) bool {
+	return len(a.PrevSigningSecret) > 0 &&
+		!a.SecretRotatedAt.IsZero() &&
+		now.Sub(a.SecretRotatedAt) < SecretGraceWindow
 }
 
 // Export 是智能体导出记录（迁移格式）：携带签名密钥密文（AAD=slug，

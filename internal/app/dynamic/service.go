@@ -171,6 +171,32 @@ type gatewayRequest struct {
 // runId/幂等键校验 → 幂等租约 → 三道容量闸 → 登记运行 → 同步执行或
 // 异步 202 → 落库并回响应。任何一步失败都必须释放已获得的幂等租约，
 // 否则同一个键会被永久占住。
+// verifyWithGrace 按宽限窗口双钥验证签名：先当前密钥，失败且旧钥仍在
+// 轮换宽限窗口（agent.SecretGraceWindow，自 rotatedAt 起算）内时再试旧钥
+// （B3：换钥平滑不断流）。旧钥命中时记录日志供运维观察迁移进度。
+func (s *Service) verifyWithGrace(resolved *agent.ResolvedConfig, signed, expected string,
+	encoding platform.SignatureEncoding,
+) bool {
+	if platform.VerifyBodySignature([]byte(resolved.SigningSecret), []byte(signed),
+		expected, encoding) {
+		return true
+	}
+	if resolved.PrevSigningSecret == "" || resolved.SecretRotatedAt == "" {
+		return false
+	}
+	rotatedAt, err := time.Parse(time.RFC3339Nano, resolved.SecretRotatedAt)
+	if err != nil || time.Since(rotatedAt) >= agent.SecretGraceWindow {
+		return false
+	}
+	ok := platform.VerifyBodySignature([]byte(resolved.PrevSigningSecret), []byte(signed),
+		expected, encoding)
+	if ok {
+		slog.Info("agent request verified with previous signing secret (rotation grace)",
+			"agent", resolved.Slug)
+	}
+	return ok
+}
+
 func (s *Service) Handle(ctx context.Context, req Request) Response {
 	started := s.now()
 	stored, err := s.agents.GetBySlug(ctx, strings.ToLower(strings.TrimSpace(req.Slug)))
@@ -285,8 +311,8 @@ func (s *Service) authenticate(ctx context.Context, req Request, resolved *agent
 			return "", "", s.authError(401, "legacy_signature_disabled",
 				"X-IR-Signature is disabled for dynamic Agent requests; use X-Agent-Signature v1"), false
 		}
-		if !platform.VerifyBodySignature([]byte(resolved.SigningSecret), req.Body,
-			legacySignature, resolved.SignatureEncodingOrHex()) {
+		if !s.verifyWithGrace(resolved, string(req.Body), legacySignature,
+			resolved.SignatureEncodingOrHex()) {
 			slog.Warn("legacy X-IR-Signature Agent request rejected: signature mismatch",
 				"agent", resolved.Slug)
 			return "", "", s.authError(401, "invalid_signature", "Request signature is invalid"), false
@@ -333,8 +359,8 @@ func (s *Service) verifyAgentSignatureV1(ctx context.Context, req Request, resol
 
 	canonical := platform.AgentSignatureV1Canonical(resolved.Slug, timestampText, nonce,
 		signedRunID, signedKey, req.Body)
-	if !platform.VerifyBodySignature([]byte(resolved.SigningSecret), []byte(canonical),
-		signature, resolved.SignatureEncodingOrHex()) {
+	if !s.verifyWithGrace(resolved, canonical, signature,
+		resolved.SignatureEncodingOrHex()) {
 		slog.Warn("agent request rejected: canonical signature mismatch", "agent", resolved.Slug)
 		return s.authError(401, "invalid_signature", "Request signature is invalid"), false
 	}

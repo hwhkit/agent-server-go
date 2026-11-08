@@ -274,6 +274,9 @@ func schemaStatements() []string {
 			`WHERE status IN ('queued','leased','running')`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_action_created ON audit_log(action, created_at DESC)`,
 		// 连接器令牌生命周期补列（旧栈忽略这些列，共存安全）。
+		`ALTER TABLE agents ADD COLUMN IF NOT EXISTS prev_secret_enc TEXT`,
+		`ALTER TABLE agents ADD COLUMN IF NOT EXISTS secret_rotated_at TEXT`,
+		// 连接器令牌生命周期补列（旧栈忽略这些列，共存安全）。
 		`ALTER TABLE agent_pull_connectors ADD COLUMN IF NOT EXISTS expires_ns BIGINT`,
 		`ALTER TABLE agent_pull_connectors ADD COLUMN IF NOT EXISTS revoked_ns BIGINT`,
 		// 全局注册表版本行（多实例收敛轮询用）。
