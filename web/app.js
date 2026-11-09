@@ -913,6 +913,8 @@
         " ",
         h("button", { class: "btn sm primary", onclick: () => submitRunModal(team) }, t("team.run.submit")),
         " ",
+        h("button", { class: "btn sm", onclick: () => shareTeamModal(team) }, t("team.share")),
+        " ",
         h("button", {
           class: "btn sm danger",
           onclick: () => confirmDelete(team.id, async () => {
@@ -1160,6 +1162,52 @@
         { label: t("common.save"), kind: "primary", onClick: save },
       ],
       { wide: true, dismissable: false });
+  };
+
+  // 分享对话框：生成/轮换公开链接（复制即用）+ 撤销。链接带一次性 token，
+  // 页面在 /share/{token}，访客无需登录即可触发并查看交易信号。
+  const shareTeamModal = async (team) => {
+    const statusEl = h("div", { class: "small mt" });
+    const linkBox = h("div", { class: "token-reveal mt" });
+    const renderShare = (data) => {
+      clear(linkBox);
+      linkBox.append(h("code", {}, data.url),
+        h("button", {
+          class: "btn sm",
+          onclick: async () => {
+            try { await navigator.clipboard.writeText(data.url); toast(t("common.copied"), "ok"); }
+            catch { /* 剪贴板不可用时手选 */ }
+          },
+        }, t("common.copy")));
+    };
+    const issue = async (rotate) => {
+      clear(statusEl);
+      try {
+        const data = await api.post(`/teams/${encodeURIComponent(team.id)}/share`);
+        renderShare(data);
+        statusEl.append(h("div", { class: "ok-text" },
+          rotate ? t("team.share.rotated") : t("team.share.done")));
+      } catch (err) { reportError(err); }
+    };
+    openModal(`${t("team.share")} · ${team.name || team.id}`,
+      h("div", {},
+        h("p", { class: "muted small" }, t("team.share.hint")),
+        linkBox, statusEl),
+      [
+        {
+          label: t("team.share.revoke"), kind: "danger",
+          onClick: async (close) => {
+            try {
+              await api.del(`/teams/${encodeURIComponent(team.id)}/share`);
+              toast(t("team.share.revoked"), "ok");
+              close();
+            } catch (err) { reportError(err); }
+          },
+        },
+        { label: t("common.close"), onClick: (close) => close() },
+        { label: t("team.share.rotate"), kind: "primary", onClick: () => issue(true) },
+      ]);
+    await issue(false);
   };
 
   const submitRunModal = (team) => {

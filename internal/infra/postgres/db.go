@@ -282,7 +282,7 @@ func schemaStatements() []string {
 		// 全局注册表版本行（多实例收敛轮询用）。
 		`INSERT INTO platform_settings (key, value) VALUES ('agent_registry_revision', '1') ON CONFLICT (key) DO NOTHING`,
 	}
-	return append(statements, channelEventsStatements()...)
+	return append(append(statements, channelEventsStatements()...), teamSharesStatements()...)
 }
 
 // Migrate 执行幂等 DDL。
@@ -406,3 +406,13 @@ func channelEventsStatements() []string {
 
 // Ping 探活（仪表盘/就绪探针）。
 func (db *DB) Ping(ctx context.Context) error { return db.Pool.Ping(ctx) }
+
+// teamSharesStatements 是分享链接表的幂等 DDL：partial unique index 保证
+// 每团队同时至多一个活跃分享（Create 的轮换语义依赖它）。
+func teamSharesStatements() []string {
+	return []string{
+		teamSharesDDL,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_team_shares_active
+		 ON team_shares(team_id) WHERE revoked_at IS NULL`,
+	}
+}

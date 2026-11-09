@@ -40,11 +40,13 @@ import (
 	"ir-agent-server/internal/app/dispatch"
 	"ir-agent-server/internal/app/dynamic"
 	"ir-agent-server/internal/app/push"
+	"ir-agent-server/internal/app/share"
 	"ir-agent-server/internal/app/teamrun"
 	"ir-agent-server/internal/app/worker"
 	"ir-agent-server/internal/domain/account"
 	"ir-agent-server/internal/domain/agent"
 	"ir-agent-server/internal/domain/platform"
+	"ir-agent-server/internal/domain/team"
 	infrabackend "ir-agent-server/internal/infra/backend"
 	"ir-agent-server/internal/infra/config"
 	"ir-agent-server/internal/infra/crypto"
@@ -175,6 +177,7 @@ func buildRuntime(ctx context.Context) (*runtime, *config.Config, error) {
 	gateway := postgres.NewGatewayStore(db)
 	a2aTasks := postgres.NewA2ATaskStore(db)
 	channelEvents := postgres.NewChannelEventStore(db)
+	teamShares := postgres.NewTeamShareStore(db)
 	pushIdempotency, err := postgres.NewPushIdempotencyStore(ctx, db)
 	if err != nil {
 		db.Close()
@@ -334,7 +337,8 @@ func buildRuntime(ctx context.Context) (*runtime, *config.Config, error) {
 
 	// 12. 目录 / 团队编排 / 总览。
 	catalogService := catalog.NewService(catalog.Deps{
-		Positions: positions, Agents: agents, Teams: teams, Audit: audits,
+		Positions: positions, Agents: agents, Teams: teams,
+		Shares: teamShares, Audit: audits,
 	})
 	teamEngine := teamrun.NewEngine(teamrun.Deps{
 		Teams: teams, TeamRuns: teamRuns, AgentRuns: runs,
@@ -352,6 +356,7 @@ func buildRuntime(ctx context.Context) (*runtime, *config.Config, error) {
 		Connectors: connectors, Accounts: accountService, Providers: providers,
 		Runs: runs, Audits: audits, ChannelEvents: channelEvents,
 		CookieSecure: cfgPlatform.SecureCookies, CookieTTL: cfgPlatform.AdminSessionTTL,
+		PublicBaseURL: cfgPlatform.PublicBaseURL,
 	})
 	// 运维指标：HTTP 计数中间件随路由生效；域统计 gauge 以抓取时回调注入
 	// （查询成本由抓取间隔承担；单项失败降级，绝不让指标端点 500）。
@@ -361,8 +366,12 @@ func buildRuntime(ctx context.Context) (*runtime, *config.Config, error) {
 	metricsRegistry.RegisterCollector(func(ch chan<- prometheus.Metric) {
 		collectDomainMetrics(ch, dash, db, agents)
 	})
+	// 公开分享服务：token 限流 + 脱敏视图 + 越权防护（app/share 口径）。
+	shareService := share.NewService(teamShares, teams, shareRunner{engine: teamEngine},
+		shareRuns{store: runs}, share.Config{})
 	routerDeps := apihttp.RouterDeps{
 		PushPath: cfgIR.PushPath,
+		Share:    apihttp.ShareRouter(&apihttp.ShareHandler{Service: shareService}),
 		Dynamic: &apihttp.DynamicHandler{
 			Service: dynamicService, MaxRequestBytes: int64(cfgPlatform.MaxRequestBodyBytes),
 		},
@@ -424,6 +433,19 @@ func buildRuntime(ctx context.Context) (*runtime, *config.Config, error) {
 	})
 	router.Get("/admin", console)
 	router.Get("/admin/*", console)
+
+	// 公开分享子页面 /share/{token}（轻量独立页，无会话）。
+	sharePage := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, err := web.Assets.ReadFile("share.html")
+		if err != nil {
+			http.Error(w, "share page unavailable", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(data)
+	})
+	router.Get("/share/{token}", sharePage)
 
 	// 14. 后台执行体（在 main 里随停机信号启动/收口）。
 	rt := &runtime{
@@ -624,6 +646,30 @@ func consoleContentType(name string) string {
 	default:
 		return "text/html; charset=utf-8"
 	}
+}
+
+// shareRunner 把 *teamrun.Engine 适配为 share.Runner（输入形态转换）。
+type shareRunner struct{ engine *teamrun.Engine }
+
+func (r shareRunner) Submit(ctx context.Context, s share.Submission) (*team.TeamRun, error) {
+	return r.engine.Submit(ctx, teamrun.Submission{
+		TeamID: s.TeamID, Input: s.Input, IdempotencyKey: s.IdempotencyKey, Actor: s.Actor,
+	})
+}
+
+func (r shareRunner) Get(ctx context.Context, id string) (*team.TeamRun, error) {
+	return r.engine.Get(ctx, id)
+}
+
+// shareRuns 把 *postgres.RunStore 适配为 share.ChildRunReader。
+type shareRuns struct{ store *postgres.RunStore }
+
+func (r shareRuns) Get(ctx context.Context, runID string) (*share.ChildRun, error) {
+	run, err := r.store.Get(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	return &share.ChildRun{RunID: run.RunID, Status: string(run.Status), Output: run.Output}, nil
 }
 
 // collectDomainMetrics 在每次 /metrics 抓取时经 const metric 推送域统计。

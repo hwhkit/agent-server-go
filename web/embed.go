@@ -7,5 +7,5 @@ import "embed"
 
 // Assets 是控制台全部静态文件（无构建步骤，源码即产物）。
 //
-//go:embed index.html app.css app.js i18n.js
+//go:embed index.html app.css app.js i18n.js share.html
 var Assets embed.FS

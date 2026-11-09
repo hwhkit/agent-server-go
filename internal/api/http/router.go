@@ -22,6 +22,8 @@ type RouterDeps struct {
 	A2A *A2ADeps
 	// Health 是就绪探针的必需项（数据库探活）。
 	Health dashboard.HealthSource
+	// Share 是团队分享公开端点（nil = 未启用分享）。
+	Share chi.Router
 	// Readiness 是就绪探针的补充检查项（B7：迁移标记/队列/注册表）。
 	Readiness []ReadinessCheck
 	// Metrics 非 nil 时挂 GET /metrics（Prometheus 文本格式）并为全部
@@ -57,6 +59,9 @@ func NewRouter(deps RouterDeps) chi.Router {
 	}
 	if deps.A2A != nil {
 		MountA2A(router, *deps.A2A)
+	}
+	if deps.Share != nil {
+		router.Mount("/api/share/v1", deps.Share)
 	}
 	if deps.Admin != nil {
 		router.Mount("/", deps.Admin)

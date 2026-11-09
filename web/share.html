@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>智能体团队 · 交易信号</title>
+  <style>
+    :root {
+      --bg: #14120e; --panel: #1e1a13; --border: #3a3220; --text: #f0e9d8;
+      --muted: #a89b7c; --accent: #d4af37; --accent-text: #1a1508;
+      --ok: #79b46a; --err: #d4694f; --info: #7fa8c9; --warn: #d9a441;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+      font: 14px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+      display: flex; justify-content: center; padding: 32px 16px;
+    }
+    .page { width: 100%; max-width: 760px; }
+    .card {
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 14px; padding: 22px; margin-bottom: 18px;
+    }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    .sub { color: var(--muted); font-size: 13px; margin: 0 0 14px; }
+    .pipeline { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    .step-chip {
+      background: #2c2618; border: 1px solid var(--border); border-radius: 999px;
+      padding: 4px 12px; font-size: 12.5px;
+    }
+    .arrow { color: var(--muted); }
+    label { display: block; font-size: 12.5px; color: var(--muted); margin: 10px 0 6px; }
+    textarea, input {
+      width: 100%; background: var(--bg); color: var(--text);
+      border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px;
+      font: 13px/1.5 ui-monospace, Menlo, monospace;
+    }
+    textarea:focus { outline: none; border-color: var(--accent); }
+    button.primary {
+      width: 100%; margin-top: 14px; padding: 12px; border: none; border-radius: 10px;
+      background: var(--accent); color: var(--accent-text); font-size: 15px;
+      font-weight: 700; cursor: pointer;
+    }
+    button.primary:hover { filter: brightness(1.06); }
+    button.primary:disabled { opacity: .5; cursor: wait; }
+    .status { font-size: 13px; margin-top: 10px; }
+    .status.running { color: var(--info); }
+    .status.done { color: var(--ok); }
+    .status.failed { color: var(--err); }
+    .signal {
+      border: 1px solid var(--border); border-left: 3px solid var(--ok);
+      border-radius: 10px; padding: 12px 14px; margin-top: 10px; background: var(--bg);
+    }
+    .signal.failed { border-left-color: var(--err); }
+    .signal h3 { margin: 0 0 6px; font-size: 13px; color: var(--muted); }
+    .signal pre {
+      margin: 0; white-space: pre-wrap; word-break: break-word; max-height: 340px;
+      overflow: auto; font-size: 12.5px; color: var(--text);
+    }
+    .error-box {
+      border: 1px solid var(--err); color: var(--err); border-radius: 10px;
+      padding: 12px; margin-top: 12px; font-size: 13px;
+    }
+    .foot { text-align: center; color: var(--muted); font-size: 12px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+<div class="page">
+  <div class="card" id="head">
+    <h1 id="name">加载中…</h1>
+    <p class="sub" id="desc"></p>
+    <div class="pipeline" id="pipeline"></div>
+  </div>
+
+  <div class="card">
+    <label>输入参数（JSON，可留空 {}）</label>
+    <textarea id="input" rows="4">{}</textarea>
+    <button class="primary" id="run">生成交易信号</button>
+    <div class="status" id="status"></div>
+    <div id="signals"></div>
+  </div>
+
+  <div class="foot">Powered by Intelligent Router</div>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const token = location.pathname.split("/").pop();
+  const $ = (id) => document.getElementById(id);
+  const api = async (path, opts) => {
+    const response = await fetch(`/api/share/v1/${encodeURIComponent(token)}${path}`, {
+      credentials: "omit", ...opts,
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw Object.assign(new Error(body.error?.message || response.statusText),
+      { status: response.status, code: body.error?.code });
+    return body.data;
+  };
+  const pretty = (value) => {
+    if (value == null) return "";
+    try { return JSON.stringify(typeof value === "string" ? JSON.parse(value) : value, null, 2); }
+    catch { return String(value); }
+  };
+
+  let runID = null, pollTimer = null;
+
+  const setStatus = (text, cls) => {
+    $("status").textContent = text;
+    $("status").className = "status " + (cls || "");
+  };
+  const renderSignals = (run) => {
+    const wrap = $("signals");
+    wrap.innerHTML = "";
+    const steps = [...(run.steps || [])].sort((a, b) => a.step_id.localeCompare(b.step_id));
+    for (const step of steps) {
+      const box = document.createElement("div");
+      box.className = "signal" + (step.state === "succeeded" ? "" : " failed");
+      const title = document.createElement("h3");
+      title.textContent = `${step.step_id} · ${step.state}` + (step.error ? ` · ${step.error}` : "");
+      box.appendChild(title);
+      if (step.output) {
+        const pre = document.createElement("pre");
+        pre.textContent = pretty(step.output);
+        box.appendChild(pre);
+      }
+      wrap.appendChild(box);
+    }
+  };
+
+  const poll = async () => {
+    try {
+      const run = await api(`/runs/${encodeURIComponent(runID)}`);
+      renderSignals(run);
+      if (run.status === "queued" || run.status === "running") return;
+      clearInterval(pollTimer);
+      if (run.status === "completed") setStatus("✓ 信号生成完成", "done");
+      else if (run.status === "failed") setStatus("✗ 生成失败", "failed");
+      else setStatus("已" + run.status, "");
+      $("run").disabled = false;
+    } catch (err) {
+      clearInterval(pollTimer);
+      setStatus("查询失败：" + err.message, "failed");
+      $("run").disabled = false;
+    }
+  };
+
+  $("run").addEventListener("click", async () => {
+    let input;
+    try { input = JSON.parse($("input").value || "{}"); }
+    catch (err) { setStatus("输入不是合法 JSON：" + err.message, "failed"); return; }
+    $("run").disabled = true;
+    $("signals").innerHTML = "";
+    setStatus("已触发，等待智能体团队…", "running");
+    try {
+      const run = await api("/runs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ input }),
+      });
+      runID = run.id;
+      clearInterval(pollTimer);
+      pollTimer = setInterval(poll, 1500);
+      poll();
+    } catch (err) {
+      setStatus(err.status === 429 ? "触发太频繁，请稍后再试" : "触发失败：" + err.message, "failed");
+      $("run").disabled = false;
+    }
+  });
+
+  api("").then((view) => {
+    $("name").textContent = view.name || "智能体团队";
+    $("desc").textContent = view.description || "";
+    const pipeline = $("pipeline");
+    pipeline.innerHTML = "";
+    (view.steps || []).forEach((step, index) => {
+      if (index > 0) {
+        const arrow = document.createElement("span");
+        arrow.className = "arrow"; arrow.textContent = "→";
+        pipeline.appendChild(arrow);
+      }
+      const chip = document.createElement("span");
+      chip.className = "step-chip";
+      chip.textContent = step.position;
+      pipeline.appendChild(chip);
+    });
+  }).catch((err) => {
+    $("name").textContent = "链接无效";
+    $("desc").textContent = "分享不存在、已撤销或团队已停用。";
+    $("run").disabled = true;
+  });
+})();
+</script>
+</body>
+</html>

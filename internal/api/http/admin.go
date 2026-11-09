@@ -53,6 +53,8 @@ type AdminDeps struct {
 	// CookieSecure 生产必须为 true（HTTPS only）。
 	CookieSecure bool
 	CookieTTL    time.Duration
+	// PublicBaseURL 用于拼接分享链接等对外 URL（来自 [platform].public_base_url）。
+	PublicBaseURL string
 }
 
 // AdminRouter 组装 /api/admin/v2 子路由与控制台页面挂载点。
@@ -98,6 +100,8 @@ func AdminRouter(deps AdminDeps) chi.Router {
 				r.Post("/teams", h.saveTeam)
 				r.Put("/teams/{id}", h.saveTeam)
 				r.Delete("/teams/{id}", h.deleteTeam)
+				r.Post("/teams/{id}/share", h.shareTeam)
+				r.Delete("/teams/{id}/share", h.revokeTeamShare)
 				r.Post("/team-runs", h.submitTeamRun)
 				r.Post("/team-runs/{id}/cancel", h.cancelTeamRun)
 				r.Post("/team-runs/{id}/retry", h.retryTeamRun)
@@ -757,6 +761,30 @@ func (h *adminHandler) saveTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeAdminData(w, http.StatusOK, map[string]any{"id": entity.ID, "revision": revision})
+}
+
+// shareTeam 签发（或轮换）团队公开分享链接；响应含拼接好的公开 URL。
+func (h *adminHandler) shareTeam(w http.ResponseWriter, r *http.Request) {
+	share, err := h.deps.Catalog.ShareTeam(r.Context(), chi.URLParam(r, "id"),
+		sessionUserFrom(r).Username)
+	if err != nil {
+		writeCatalogError(w, err, "share team failed")
+		return
+	}
+	writeAdminData(w, http.StatusCreated, map[string]any{
+		"token": share.Token, "team_id": share.TeamID,
+		"url": h.deps.PublicBaseURL + "/share/" + share.Token,
+	})
+}
+
+// revokeTeamShare 撤销团队公开分享链接（即时失效）。
+func (h *adminHandler) revokeTeamShare(w http.ResponseWriter, r *http.Request) {
+	if err := h.deps.Catalog.RevokeTeamShare(r.Context(), chi.URLParam(r, "id"),
+		sessionUserFrom(r).Username); err != nil {
+		writeCatalogError(w, err, "revoke share failed")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *adminHandler) deleteTeam(w http.ResponseWriter, r *http.Request) {

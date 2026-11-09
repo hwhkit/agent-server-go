@@ -37,7 +37,8 @@ type Service struct {
 	positions position.Repository
 	agents    agent.Repository
 	teams     team.Repository
-	audit     AuditRecorder // 可为 nil（嵌入/测试场景）
+	shares    team.ShareRepository // 可为 nil（分享未启用）
+	audit     AuditRecorder        // 可为 nil（嵌入/测试场景）
 }
 
 // Deps 是 Service 的依赖注入。
@@ -45,13 +46,14 @@ type Deps struct {
 	Positions position.Repository
 	Agents    agent.Repository
 	Teams     team.Repository
+	Shares    team.ShareRepository // 可 nil（未启用分享）
 	Audit     AuditRecorder
 }
 
 // NewService 组装目录服务。
 func NewService(deps Deps) *Service {
 	return &Service{positions: deps.Positions, agents: deps.Agents,
-		teams: deps.Teams, audit: deps.Audit}
+		teams: deps.Teams, shares: deps.Shares, audit: deps.Audit}
 }
 
 // record 追加审计事件（C2 收口：全服务唯一的审计出口）。审计失败绝不
@@ -375,9 +377,47 @@ func (s *Service) SaveTeam(ctx context.Context, t *team.Team, ifMatchRevision *i
 // DeleteTeam 删除团队定义。在途 TeamRun 持有定义快照，不受删除影响。
 func (s *Service) DeleteTeam(ctx context.Context, id string, actor string) error {
 	id = strings.TrimSpace(id)
+	// 删除团队时连带撤销分享（公开链接不得悬空指向已删团队）。
+	if s.shares != nil {
+		_ = s.shares.Revoke(ctx, id)
+	}
 	if err := s.teams.Delete(ctx, id); err != nil {
 		return wrapValidation(err)
 	}
 	_ = s.record(ctx, audit.Event{Actor: actor, Action: audit.ActionTeamDeleted, Target: id})
+	return nil
+}
+
+// ShareTeam 为团队签发（或轮换）公开分享链接。仅启用团队可分享——
+// 分享页是公开入口，停用团队不得继续被触发。
+func (s *Service) ShareTeam(ctx context.Context, id, actor string) (*team.TeamShare, error) {
+	if s.shares == nil {
+		return nil, errors.New("team sharing is not configured")
+	}
+	id = strings.TrimSpace(id)
+	definition, err := s.teams.Get(ctx, id)
+	if err != nil {
+		return nil, wrapValidation(err)
+	}
+	if !definition.Enabled {
+		return nil, fmt.Errorf("%w: an enabled team is required for sharing", ErrInvalidInput)
+	}
+	share, err := s.shares.Create(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	_ = s.record(ctx, audit.Event{Actor: actor, Action: "team.share", Target: id})
+	return share, nil
+}
+
+// RevokeTeamShare 撤销团队的公开分享链接（即时失效）。
+func (s *Service) RevokeTeamShare(ctx context.Context, id, actor string) error {
+	if s.shares == nil {
+		return errors.New("team sharing is not configured")
+	}
+	if err := s.shares.Revoke(ctx, strings.TrimSpace(id)); err != nil {
+		return err
+	}
+	_ = s.record(ctx, audit.Event{Actor: actor, Action: "team.share.revoked", Target: id})
 	return nil
 }

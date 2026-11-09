@@ -23,9 +23,11 @@ import (
 	"ir-agent-server/internal/app/agentapi"
 	"ir-agent-server/internal/app/catalog"
 	"ir-agent-server/internal/app/dashboard"
+	"ir-agent-server/internal/app/share"
 	"ir-agent-server/internal/app/teamrun"
 	"ir-agent-server/internal/domain/account"
 	"ir-agent-server/internal/domain/platform"
+	"ir-agent-server/internal/domain/team"
 	infrabackend "ir-agent-server/internal/infra/backend"
 	"ir-agent-server/internal/infra/config"
 	"ir-agent-server/internal/infra/crypto"
@@ -128,6 +130,7 @@ func setupAdmin(t *testing.T) *adminFixture {
 		Positions: postgres.NewPositionStore(db),
 		Agents:    agentStore,
 		Teams:     postgres.NewTeamStore(db),
+		Shares:    postgres.NewTeamShareStore(db),
 		Audit:     postgres.NewAuditStore(db),
 	})
 	teamRunStore := postgres.NewTeamRunStore(db)
@@ -158,14 +161,26 @@ func setupAdmin(t *testing.T) *adminFixture {
 	}
 	providers := infrabackend.NewManager(backendStore, providerConfig, providerRevision, nil)
 
-	router := apihttp.AdminRouter(apihttp.AdminDeps{
+	runs := postgres.NewRunStore(db)
+	// 完整路由（含公开分享路由）：admin 面挂 "/"，公开面挂 /api/share/v1——
+	// 端到端测试经同一服务覆盖两侧。
+	shareService := share.NewService(postgres.NewTeamShareStore(db),
+		postgres.NewTeamStore(db), shareRunnerAdapter{engine: engine},
+		shareRunAdapter{store: runs}, share.Config{})
+	adminRouter := apihttp.AdminRouter(apihttp.AdminDeps{
 		Auth: auth, Catalog: catalogService, Dashboard: dash, Engine: engine,
-		Connectors: connectors, Runs: postgres.NewRunStore(db),
+		Connectors: connectors, Runs: runs,
 		Audits: postgres.NewAuditStore(db), CookieTTL: time.Hour,
+		PublicBaseURL: "http://127.0.0.1:8080",
 		Accounts: admin.NewAccountService(accounts, crypto.HashPassword,
 			postgres.NewAuditStore(db)),
 		ChannelEvents: channelEvents,
 		Providers:     providers,
+	})
+	router := apihttp.NewRouter(apihttp.RouterDeps{
+		Admin:  adminRouter,
+		Health: db,
+		Share:  apihttp.ShareRouter(&apihttp.ShareHandler{Service: shareService}),
 	})
 	server := httptest.NewServer(router)
 	t.Cleanup(server.Close)
@@ -480,4 +495,28 @@ func TestAdminCatalogCRUD(t *testing.T) {
 	if status, _ := fixture.do(t, "DELETE", "/positions/"+code, nil, nil); status != 204 {
 		t.Errorf("delete position = %d", status)
 	}
+}
+
+// shareRunnerAdapter 把 teamrun.Engine 适配为 share.Runner（测试装配）。
+type shareRunnerAdapter struct{ engine *teamrun.Engine }
+
+func (a shareRunnerAdapter) Submit(ctx context.Context, s share.Submission) (*team.TeamRun, error) {
+	return a.engine.Submit(ctx, teamrun.Submission{
+		TeamID: s.TeamID, Input: s.Input, IdempotencyKey: s.IdempotencyKey, Actor: s.Actor,
+	})
+}
+
+func (a shareRunnerAdapter) Get(ctx context.Context, id string) (*team.TeamRun, error) {
+	return a.engine.Get(ctx, id)
+}
+
+// shareRunAdapter 把 RunStore 适配为 share.ChildRunReader（测试装配）。
+type shareRunAdapter struct{ store *postgres.RunStore }
+
+func (a shareRunAdapter) Get(ctx context.Context, runID string) (*share.ChildRun, error) {
+	run, err := a.store.Get(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	return &share.ChildRun{RunID: run.RunID, Status: string(run.Status), Output: run.Output}, nil
 }

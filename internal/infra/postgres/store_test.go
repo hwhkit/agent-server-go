@@ -893,3 +893,46 @@ func TestAgentImportExportRoundTrip(t *testing.T) {
 	}
 	_ = store.Delete(ctx, "it-migrate-blank")
 }
+
+// TestTeamShareStore 覆盖分享存储：Create 轮换（旧令牌即失效、每团队
+// 仅一个活跃）、Resolve 只认活跃、Revoke no-op 安全、token 前缀形态。
+func TestTeamShareStore(t *testing.T) {
+	db := setupDB(t)
+	ctx := context.Background()
+	store := postgres.NewTeamShareStore(db)
+
+	first, err := store.Create(ctx, "it-share-team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Revoke(context.Background(), "it-share-team") })
+	if !strings.HasPrefix(first.Token, "sh_") || len(first.Token) < 40 {
+		t.Errorf("token shape = %q", first.Token)
+	}
+	if _, err := store.Resolve(ctx, first.Token); err != nil {
+		t.Fatalf("resolve active: %v", err)
+	}
+
+	// 轮换：新令牌生效、旧令牌立即失效。
+	second, err := store.Create(ctx, "it-share-team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Token == first.Token {
+		t.Fatal("rotation must mint a new token")
+	}
+	if _, err := store.Resolve(ctx, first.Token); !errors.Is(err, team.ErrShareNotFound) {
+		t.Errorf("old token after rotation = %v, want ErrShareNotFound", err)
+	}
+
+	// 撤销与未知 token。
+	if err := store.Revoke(ctx, "it-share-team"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Resolve(ctx, second.Token); !errors.Is(err, team.ErrShareNotFound) {
+		t.Errorf("revoked token = %v, want ErrShareNotFound", err)
+	}
+	if err := store.Revoke(ctx, "it-share-team"); err != nil {
+		t.Errorf("revoke without active share must be a no-op: %v", err)
+	}
+}
