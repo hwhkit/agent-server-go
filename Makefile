@@ -4,7 +4,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help bootstrap-hwhkit build release dev run check test race test-pg \
+.PHONY: help bootstrap-hwhkit build release dev run start stop restart ps check test race test-pg \
         lint lint-shell fmt bench verify test-deploy-scripts ci clean \
         deploy-check deploy deploy-build deploy-upload deploy-restart deploy-pi deploy-full \
         logs logs-follow status health ssh db-shell
@@ -37,6 +37,11 @@ REMOTE_HOST    ?= ubuntu@mota-test
 REMOTE_ROOT    ?= /opt/ir-agent-server-go
 REMOTE_BIN     ?= $(REMOTE_ROOT)/bin/$(BINARY_NAME)
 REMOTE_SERVICE ?= ir-agent-server-go
+
+# ─── 本地服务（make start/stop/restart/ps 的后台运行约定）─────────────
+LOCAL_PID   ?= /tmp/ir-server.pid
+LOCAL_LOG   ?= /tmp/ir-server.log
+LOCAL_ADDR  ?= 127.0.0.1:8080
 REMOTE_ENV     ?= $(REMOTE_ROOT)/env.conf
 HEALTH_URL     ?= http://127.0.0.1:8080/health/ready
 REMOTE_HEALTH_URL      ?= http://127.0.0.1:8080/health/ready
@@ -61,7 +66,7 @@ help: ## 显示帮助信息
 	@echo ""
 	@echo "  开发:"
 	@echo "    make bootstrap-hwhkit 固定版本初始化/校验 hwhkit 源码"
-	@echo "    make dev          编译并运行（自动加载可选 .env.dev）"
+	@echo "    make dev          编译并前台运行（自动加载可选 .env.dev）"
 	@echo "    make build        编译本机二进制"
 	@echo "    make release      编译精简的本机 release 二进制"
 	@echo "    make test         运行全部测试"
@@ -74,6 +79,13 @@ help: ## 显示帮助信息
 	@echo "    make verify       校验 go.mod/go.sum 与模块整洁性"
 	@echo "    make ci           执行 lint + test + race + build + deploy-build + verify"
 	@echo "    make clean        清理构建产物和项目内 Go 缓存"
+	@echo ""
+	@echo "  本地服务:"
+	@echo "    make start        后台启动（.env.dev + PID 文件 + 就绪检查）"
+	@echo "    make stop         停止后台服务"
+	@echo "    make restart      重新编译并重启"
+	@echo "    make ps           查看进程与就绪状态"
+	@echo "    make run          前台运行（开发调试）"
 	@echo ""
 	@echo "  部署 (→ $(REMOTE_HOST)):"
 	@echo "    make deploy-build   交叉编译 Linux ARM64 静态二进制"
@@ -106,7 +118,42 @@ release: bootstrap-hwhkit ## 编译精简的本机 release 二进制
 dev: bootstrap-hwhkit ## 编译并运行（自动加载可选 .env.dev）
 	@[ -f $(ENV_DEV) ] && set -a && . ./$(ENV_DEV) && set +a; $(GO) run ./cmd/ir-agent-server
 
-run: dev ## dev 的别名
+run: dev ## dev 的别名（前台）
+
+# ─── 本地服务（后台）─────────────────────────────────────────────────
+start: build ## 后台启动本地服务（加载 .env.dev；PID=$(LOCAL_PID) 日志=$(LOCAL_LOG)）
+	@if [ -f $(LOCAL_PID) ] && kill -0 $$(cat $(LOCAL_PID)) 2>/dev/null; then \
+		echo "已在运行 (PID $$(cat $(LOCAL_PID)))；make restart 可重启"; exit 0; fi
+	@set -a; [ -f $(ENV_DEV) ] && . ./$(ENV_DEV) || true; set +a; \
+		nohup $(BUILD_ARTIFACT) >> $(LOCAL_LOG) 2>&1 & echo $$! > $(LOCAL_PID)
+	@for i in $$(seq 1 20); do \
+		curl -sf http://$(LOCAL_ADDR)/health >/dev/null 2>&1 && break; sleep 0.5; done
+	@if curl -sf http://$(LOCAL_ADDR)/health >/dev/null 2>&1; then \
+		echo "✓ 服务已启动 PID=$$(cat $(LOCAL_PID))"; \
+		echo "  控制台   http://$(LOCAL_ADDR)/admin/"; \
+		echo "  就绪检查 http://$(LOCAL_ADDR)/health/ready"; \
+		echo "  日志     tail -f $(LOCAL_LOG)"; \
+	else \
+		echo "✗ 启动后 10s 未就绪；查看日志: tail -50 $(LOCAL_LOG)"; \
+		exit 1; \
+	fi
+
+stop: ## 停止本地后台服务（SIGTERM，5s 后 SIGKILL 兜底）
+	@if [ -f $(LOCAL_PID) ] && kill -0 $$(cat $(LOCAL_PID)) 2>/dev/null; then \
+		pid=$$(cat $(LOCAL_PID)); kill $$pid 2>/dev/null; \
+		for i in 1 2 3 4 5; do kill -0 $$pid 2>/dev/null || break; sleep 1; done; \
+		kill -0 $$pid 2>/dev/null && kill -9 $$pid 2>/dev/null; \
+		echo "✓ 已停止 (PID $$pid)"; \
+	else echo "未在运行"; fi
+	@rm -f $(LOCAL_PID)
+
+restart: stop start ## 重启本地后台服务（先重新编译）
+
+ps: ## 本地服务进程与就绪状态
+	@if [ -f $(LOCAL_PID) ] && kill -0 $$(cat $(LOCAL_PID)) 2>/dev/null; then \
+		echo "运行中 PID=$$(cat $(LOCAL_PID)) 日志=$(LOCAL_LOG)"; \
+		curl -s http://$(LOCAL_ADDR)/health/ready || true; echo; \
+	else echo "未运行（make start 启动）"; fi
 
 check: bootstrap-hwhkit ## 编译全部包和测试，但不运行测试
 	$(GO) test -run '^$$' ./...
