@@ -307,6 +307,8 @@ label.check { display: inline-flex; align-items: center; gap: 6px; font-size: 13
 
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .form-grid .full { grid-column: 1 / -1; }
+.form-grid.triple { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+@media (max-width: 720px) { .form-grid.triple { grid-template-columns: 1fr; } }
 
 table.list { width: 100%; border-collapse: collapse; }
 table.list th {

@@ -655,13 +655,15 @@
     const name = textInput(existing ? existing.name : "");
     const positionCodes = new Set(existing ? existing.positions || [] : []);
     const positionBoxes = positions.map((p) => {
-      // 展示只用人读的名称；代码放 title 供悬停核对（同名自定义岗位靠它区分）。
-      const box = checkbox(positionCodes.has(p.code), p.name);
-      box.title = p.code;
+      // 标签 = 名称 + 代码（代码跟在名字后面，同名自定义岗位可直接区分）。
+      const box = h("input", { type: "checkbox" });
+      box.checked = positionCodes.has(p.code);
       box.addEventListener("change", () => {
         if (box.checked) positionCodes.add(p.code); else positionCodes.delete(p.code);
       });
-      return box;
+      return h("label", { class: "check" }, box,
+        h("span", {}, p.name),
+        h("span", { class: "muted small mono" }, p.code));
     });
     const secret = h("input", {
       type: "password",
@@ -716,12 +718,11 @@
           { full: true }),
         field(t("agent.secret"), secret, { full: true }),
         field(t("common.enabled"), enabled),
-        h("details", { class: "full" },
-          h("summary", { class: "muted clickable" }, t("agent.advanced")),
-          h("div", { class: "form-grid mt" },
-            field(t("agent.timeout"), timeout),
-            field(t("agent.maxConc"), maxConc),
-            field(t("agent.queueCap"), queueCap))),
+        // 调度约束三件套：单行三列，不再折叠。
+        h("div", { class: "form-grid triple full" },
+          field(t("agent.timeout"), timeout),
+          field(t("agent.maxConc"), maxConc),
+          field(t("agent.queueCap"), queueCap)),
       ),
       [
         { label: t("common.cancel"), onClick: (close) => close() },
@@ -1412,6 +1413,7 @@
 
   const pager = (total, page, pageSize, load) => {
     const pages = Math.max(1, Math.ceil(total / pageSize));
+    if (total <= 0) return null; // 空列表不渲染 total 0
     if (pages <= 1) return h("div", { class: "muted small mt" }, `total ${total}`);
     return h("div", { class: "row mt" },
       h("span", { class: "muted small" }, `total ${total} · ${page}/${pages}`),
