@@ -269,15 +269,14 @@
     { group: "business", route: "/dashboard", icon: "◈", key: "nav.dashboard" },
     { group: "business", route: "/agents", icon: "⬡", key: "nav.agents" },
     { group: "business", route: "/teams", icon: "⬢", key: "nav.teams", badge: (b) => b.activeTeamRuns },
-    { group: "business", route: "/runs", icon: "≣", key: "nav.runs", badge: (b) => b.runsToday },
-    { group: "system", route: "/audits", icon: "✎", key: "nav.audits", adminOnly: true },
+    { group: "business", route: "/logs", icon: "≣", key: "nav.logs", badge: (b) => b.runsToday },
     { group: "system", route: "/users", icon: "☖", key: "nav.users", adminOnly: true },
     { group: "system", route: "/settings", icon: "⚙", key: "nav.settings" },
   ];
 
   const MODULE_TITLES = {
     "/dashboard": "dash.title", "/positions": "pos.title", "/agents": "agent.title",
-    "/teams": "team.title", "/runs": "run.title", "/audits": "audit.title",
+    "/teams": "team.title", "/logs": "nav.logs",
     "/users": "user.title", "/settings": "set.title",
   };
 
@@ -1335,6 +1334,18 @@
   // -----------------------------------------------------------------------
   // 模块：运行日志（智能体运行 / 团队运行 / 通道事件）
   // -----------------------------------------------------------------------
+  // 日志 = 运行日志 + 审计日志（管理员）合并页，子 Tab 记忆上次选择。
+  const renderLogs = async (container) => {
+    const items = [
+      { key: "runs", label: t("nav.runs"), render: renderRuns },
+    ];
+    if (isAdmin()) items.push({ key: "audits", label: t("nav.audits"), render: renderAudits });
+    const tabs = tabsEl(items, container.dataset.logsTab || "runs");
+    container.append(tabs.el, tabs.body);
+    const wanted = container.dataset.logsTab || "runs";
+    tabs.activate(items.some((it) => it.key === wanted) ? wanted : "runs");
+  };
+
   const renderRuns = async (container) => {
     const tabs = tabsEl([
       { key: "agent", label: t("run.tab.agent"), render: agentRunsTab },
@@ -1462,6 +1473,42 @@
       h("span", { class: "muted small" }, `total ${total} · ${page}/${pages}`),
       h("button", { class: "btn sm", disabled: page <= 1, onclick: () => load(page - 1) }, "←"),
       h("button", { class: "btn sm", disabled: page >= pages, onclick: () => load(page + 1) }, "→"));
+  };
+
+  // makeList：通用列表组件（B5）——筛选行 + 分页 + 表格一体。
+  // 契约：fetch(params) 返回 {items, total}；controls[{el, param, value}]
+  // 的输入变化即触发刷新；extras 为附加控件（如导出按钮）。
+  const makeList = ({ columns, pageSize, controls = [], extras = [], fetch, renderRow }) => {
+    const root = h("div");
+    const controlsRow = h("div", { class: "row mb" });
+    for (const c of controls) {
+      if (c.el) {
+        c.el.addEventListener("change", () => load(1));
+        controlsRow.append(c.el);
+      }
+    }
+    for (const extra of extras) controlsRow.append(extra);
+    controlsRow.append(h("button", { class: "btn sm", onclick: () => load(1) }, t("common.filter")));
+    const listWrap = h("div");
+    root.append(controlsRow, listWrap);
+    const load = async (page = 1) => {
+      const params = new URLSearchParams();
+      params.set("page", String(page));
+      params.set("pageSize", String(pageSize));
+      for (const c of controls) {
+        const value = (c.value ? c.value() : "").trim();
+        if (value) params.set(c.param, value);
+      }
+      try {
+        const data = await fetch(params.toString());
+        const rows = (data.items || []).map(renderRow);
+        if (!rows.length) rows.push(emptyRow(columns.length));
+        listWrap.replaceChildren(table(columns, rows), pager(data.total || 0, page, pageSize, load) || h("div"));
+      } catch (err) {
+        reportError(err);
+      }
+    };
+    return { root, load };
   };
 
   const teamRunsTab = async (body) => {
@@ -1793,8 +1840,16 @@
     },
     "/agents": renderAgents,
     "/teams": renderTeams,
-    "/runs": renderRuns,
-    "/audits": renderAudits,
+    "/logs": renderLogs,
+    // 旧链接兼容：直开对应子 Tab。
+    "/runs": async (container) => {
+      container.dataset.logsTab = "runs";
+      await renderLogs(container);
+    },
+    "/audits": async (container) => {
+      container.dataset.logsTab = "audits";
+      await renderLogs(container);
+    },
     "/users": renderUsers,
     "/settings": renderSettings,
   };
