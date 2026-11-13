@@ -645,20 +645,14 @@
     await load(1);
   };
 
-  const EXECUTOR_KINDS = ["codex", "pi", "opencode", "qwen_code", "gemini_cli", "openhands",
-    "claude_code", "deepseek_harness", "openai_agent", "claude_managed_agent", "reasonix",
-    "goose", "rust"];
-  const EXECUTION_MODES = ["local", "gateway", "managed", "remote_pull"];
-
+  // 智能体编辑器（产品定位：调度 + 连接）。执行绑定固定 remote-pull/
+  // remote_pull（连接器拉取执行，不占全局执行闸）、签名编码固定 hex——
+  // 本地 CLI 执行配置（系统提示词/工作目录/模型/工具/权限模式）不再
+  // 属于智能体表单。
   const agentEditor = (existing, positions) => {
     const slug = textInput(existing ? existing.slug : "", { placeholder: "my-agent" });
     if (existing) slug.readOnly = true;
     const name = textInput(existing ? existing.name : "");
-    const description = textInput(existing ? existing.description : "");
-    const kind = selectInput(EXECUTOR_KINDS.map((k) => ({ value: k, label: k })),
-      existing ? existing.executor_kind : "pi");
-    const mode = selectInput(EXECUTION_MODES.map((m) => ({ value: m, label: m })),
-      existing ? existing.execution_mode : "local");
     const positionCodes = new Set(existing ? existing.positions || [] : []);
     const positionBoxes = positions.map((p) => {
       // 展示只用人读的名称；代码放 title 供悬停核对（同名自定义岗位靠它区分）。
@@ -674,14 +668,6 @@
       placeholder: existing ? t("agent.secret.placeholder.edit") : t("agent.secret.placeholder.new"),
       autocomplete: "new-password",
     });
-    const sigEncoding = selectInput([{ value: "hex" }, { value: "base64" }].map((o) => ({ value: o.value, label: o.value })),
-      existing ? existing.signature_encoding : "hex");
-    const systemPrompt = h("textarea", { rows: 3 });
-    if (existing) systemPrompt.value = existing.system_prompt || "";
-    const workspace = textInput(existing ? existing.workspace_path : "");
-    const model = textInput(existing && existing.claude_model ? existing.claude_model : "");
-    const allowedTools = textInput(existing ? (existing.allowed_tools || []).join(", ") : "");
-    const permissionMode = textInput(existing ? existing.permission_mode : "");
     const timeout = textInput(existing ? String(existing.timeout_secs ?? "") : "", { type: "number", min: "1" });
     const maxConc = textInput(existing ? String(existing.max_concurrency ?? "") : "", { type: "number", min: "0" });
     const queueCap = textInput(existing ? String(existing.queue_capacity ?? "") : "", { type: "number", min: "0" });
@@ -693,15 +679,18 @@
     };
 
     const save = async (close) => {
+      // 前端预校验（规则与后端一致）：启用态必须聘任至少一个岗位——
+      // 避免提交后才收到英文 422。
+      if (enabled.checked && positionCodes.size === 0) {
+        toast(t("agent.errors.noPositions"), "err", 6000);
+        return;
+      }
       const body = {
-        slug: slug.value.trim(), name: name.value.trim(), description: description.value.trim(),
-        executor_kind: kind.value, execution_mode: mode.value,
+        slug: slug.value.trim(), name: name.value.trim(),
+        // 调度 + 连接定位：执行绑定固定远端拉取，签名固定 hex。
+        executor_kind: "remote-pull", execution_mode: "remote_pull",
         positions: [...positionCodes],
-        signature_encoding: sigEncoding.value,
-        system_prompt: systemPrompt.value, workspace_path: workspace.value.trim(),
-        claude_model: model.value.trim() ? model.value.trim() : null,
-        allowed_tools: allowedTools.value.split(",").map((s) => s.trim()).filter(Boolean),
-        permission_mode: permissionMode.value.trim(),
+        signature_encoding: "hex",
         timeout_secs: numOrNull(timeout), max_concurrency: numOrNull(maxConc),
         queue_capacity: numOrNull(queueCap), enabled: enabled.checked,
       };
@@ -722,27 +711,18 @@
       h("div", { class: "form-grid" },
         field(t("agent.slug"), slug),
         field(t("agent.name"), name),
-        field(t("pos.description"), description, { full: true }),
-        field(t("agent.binding") + " · kind", kind),
-        field(t("agent.binding") + " · mode", mode),
         field(t("agent.positions"),
           h("div", { class: "check-grid3" }, ...positionBoxes),
           { full: true }),
         field(t("agent.secret"), secret, { full: true }),
+        field(t("common.enabled"), enabled),
         h("details", { class: "full" },
           h("summary", { class: "muted clickable" }, t("agent.advanced")),
           h("div", { class: "form-grid mt" },
-            field(t("agent.sigEncoding"), sigEncoding),
-            field(t("common.enabled"), enabled),
-            field(t("agent.systemPrompt"), systemPrompt, { full: true }),
-            field(t("agent.workspace"), workspace),
-            field(t("agent.model"), model),
-            field(t("agent.allowedTools"), allowedTools),
-            field(t("agent.permissionMode"), permissionMode),
             field(t("agent.timeout"), timeout),
             field(t("agent.maxConc"), maxConc),
             field(t("agent.queueCap"), queueCap))),
-        existing ? null : field(t("common.enabled"), enabled)),
+      ),
       [
         { label: t("common.cancel"), onClick: (close) => close() },
         { label: t("common.save"), kind: "primary", onClick: save },
@@ -750,7 +730,7 @@
       { wide: true });
   };
 
-  // ---- 执行后端（三列卡片） ----
+// ---- 执行后端（三列卡片） ----
   const providersTab = async (body) => {
     const views = await api.get("/providers");
     const canEdit = isAdmin();
