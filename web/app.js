@@ -444,17 +444,16 @@
   const renderPositions = async (container) => {
     const items = await api.get("/positions?include_disabled=true");
     const columns = [
-      { label: t("pos.code") }, { label: t("pos.name") }, { label: t("pos.description") },
-      { label: t("pos.contractRef") }, { label: t("common.enabled") },
-      { label: t("common.revision") }, { label: t("common.actions") },
+      { label: t("pos.name") }, { label: t("pos.description") },
+      { label: t("pos.code") }, { label: t("pos.contractRef") }, { label: t("common.enabled") },
+      { label: t("common.actions") },
     ];
     const rows = (items || []).map((p) => h("tr", {},
-      h("td", { class: "mono" }, p.code),
       h("td", {}, p.name),
       h("td", { class: "muted", style: { maxWidth: "320px" } }, p.description || "—"),
+      h("td", { class: "mono" }, p.code),
       h("td", { class: "mono muted small" }, p.contract_ref),
       h("td", {}, p.enabled ? h("span", { class: "dot on" }) : h("span", { class: "dot off" })),
-      h("td", { class: "muted" }, String(p.revision)),
       h("td", { class: "nowrap" },
         h("button", { class: "btn sm", onclick: () => positionEditor(p) }, t("common.edit")),
         " ",
