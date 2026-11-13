@@ -267,8 +267,8 @@
   // -----------------------------------------------------------------------
   const NAV = [
     { group: "business", route: "/dashboard", icon: "◈", key: "nav.dashboard" },
-    { group: "business", route: "/teams", icon: "⬢", key: "nav.teams", badge: (b) => b.activeTeamRuns },
     { group: "business", route: "/agents", icon: "⬡", key: "nav.agents" },
+    { group: "business", route: "/teams", icon: "⬢", key: "nav.teams", badge: (b) => b.activeTeamRuns },
     { group: "business", route: "/runs", icon: "≣", key: "nav.runs", badge: (b) => b.runsToday },
     { group: "system", route: "/audits", icon: "✎", key: "nav.audits", adminOnly: true },
     { group: "system", route: "/users", icon: "☖", key: "nav.users", adminOnly: true },
