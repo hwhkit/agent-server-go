@@ -687,6 +687,21 @@
         toggleSecret.textContent = reveal ? t("agent.secret.hide") : t("agent.secret.show");
       },
     }, t("agent.secret.show"));
+    const copySecret = h("button", {
+      class: "btn sm", type: "button",
+      onclick: async () => {
+        if (!secret.value.trim()) return;
+        try {
+          await navigator.clipboard.writeText(secret.value.trim());
+          toast(t("common.copied"), "ok");
+        } catch {
+          // 剪贴板不可用（非安全上下文等）：切明文让用户手选。
+          secret.type = "text";
+          toggleSecret.textContent = t("agent.secret.hide");
+          secret.select();
+        }
+      },
+    }, t("common.copy"));
     const timeout = textInput(existing ? String(existing.timeout_secs ?? "") : "", { type: "number", min: "1" });
     const maxConc = textInput(existing ? String(existing.max_concurrency ?? "") : "", { type: "number", min: "0" });
     const queueCap = textInput(existing ? String(existing.queue_capacity ?? "") : "", { type: "number", min: "0" });
@@ -734,7 +749,8 @@
           h("div", { class: "check-grid3" }, ...positionBoxes),
           { full: true }),
         field(t("agent.secret"),
-          h("div", { class: "row", style: { flexWrap: "nowrap" } }, secret, genSecret, toggleSecret),
+          h("div", { class: "row", style: { flexWrap: "nowrap" } },
+            secret, genSecret, toggleSecret, copySecret),
           { full: true }),
         field(t("common.enabled"), enabled),
         // 调度约束三件套：单行三列，不再折叠。
