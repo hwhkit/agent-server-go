@@ -302,6 +302,8 @@ func buildRuntime(ctx context.Context) (*runtime, *config.Config, error) {
 		Tokens:  tokens,
 		Workers: workers,
 		Remote:  agents,
+		Secrets: agentSecretAdapter{agents},
+		Denies:  postgres.NewClusterDenyStore(db),
 	})
 	if cfgAgentAPI.Enabled && cfgIR.PushMode == config.PushModeSync {
 		slugs, err := agents.RemotePullSlugs(ctx)
@@ -317,7 +319,7 @@ func buildRuntime(ctx context.Context) (*runtime, *config.Config, error) {
 	}
 	if cfgAgentAPI.Enabled {
 		slog.Info("agent pull connector API enabled",
-			"route", "/agent-api/v1/claim|renew|complete|heartbeat",
+			"route", "/agent-api/v1/claim|renew|complete|runs|heartbeat",
 			"lease_seconds", cfgAgentAPI.LeaseSeconds, "max_attempts", cfgAgentAPI.MaxAttempts)
 	}
 
@@ -840,4 +842,20 @@ func main() {
 		slog.Error("server failed", "err", err)
 		os.Exit(1)
 	}
+}
+
+// agentSecretAdapter 把 AgentStore 的解密密钥适配为 agentapi.AgentSecretSource。
+// prev 仅在轮换宽限窗口内有效（domain 层判定），窗外一律置空。
+type agentSecretAdapter struct{ agents *postgres.AgentStore }
+
+func (a agentSecretAdapter) SigningSecrets(ctx context.Context, slug string) ([]byte, []byte, error) {
+	record, err := a.agents.GetBySlug(ctx, slug)
+	if err != nil {
+		return nil, nil, err
+	}
+	prev := record.PrevSigningSecret
+	if !record.PrevSecretActive(time.Now()) {
+		prev = nil
+	}
+	return record.SigningSecret, prev, nil
 }

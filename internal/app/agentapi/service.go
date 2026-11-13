@@ -89,6 +89,8 @@ type Service struct {
 	tokens  domain.TokenRepository
 	workers domain.WorkerRegistry
 	remote  RemoteAgentLister
+	secrets AgentSecretSource
+	denies  domain.ClusterDenyRepository
 }
 
 // Deps 是 Service 的依赖注入。
@@ -98,12 +100,20 @@ type Deps struct {
 	Tokens  domain.TokenRepository
 	Workers domain.WorkerRegistry
 	Remote  RemoteAgentLister
+	// Secrets 支撑智能体密钥连接点（agent-key 鉴权）；nil 时仅 act_ 令牌可用。
+	Secrets AgentSecretSource
+	// Denies 是集群禁用名单仓储（方案 B 按集群吊销）；nil 时子密钥不可吊销。
+	Denies domain.ClusterDenyRepository
 }
+
+// errDeniesUnavailable 表示集群名单仓储未装配。
+var errDeniesUnavailable = fmt.Errorf("cluster deny list is not available")
 
 // NewService 组装 agent-api 用例服务。
 func NewService(deps Deps) *Service {
 	return &Service{cfg: deps.Config, queue: deps.Queue, tokens: deps.Tokens,
-		workers: deps.Workers, remote: deps.Remote}
+		workers: deps.Workers, remote: deps.Remote,
+		secrets: deps.Secrets, denies: deps.Denies}
 }
 
 // Sweeper 暴露队列给 reaper 与 dashboard 复用。
@@ -119,11 +129,21 @@ func (s *Service) ListOnlineWorkers(ctx context.Context) ([]domain.Worker, error
 // 令牌
 // ---------------------------------------------------------------------------
 
-// Authenticate 校验 Bearer 令牌；吊销即失效，轮换宽限期内仍有效（§9）。
-func (s *Service) Authenticate(ctx context.Context, bearer string) (*Principal, *Failure) {
+// Authenticate 校验 Bearer 凭据；两条路径按前缀分派：
+//   - act_ 前缀 → 管理台签发的连接器令牌（吊销即失效，轮换宽限内仍有效，§9）；
+//   - 其余 → 智能体密钥连接点（方案 B）：需要 X-Agent-Slug 头（可选
+//     X-Agent-Cluster 选派生子密钥），hints 由 HTTP 层从请求头提取。
+func (s *Service) Authenticate(ctx context.Context, bearer string, agentHints ...AgentKeyHint) (*Principal, *Failure) {
 	token := strings.TrimSpace(strings.TrimPrefix(bearer, "Bearer "))
-	if token == "" || !strings.HasPrefix(token, domain.TokenPrefix) {
+	if token == "" {
 		return nil, failure(401, "unauthorized", "missing connector token")
+	}
+	if !strings.HasPrefix(token, domain.TokenPrefix) {
+		hint := AgentKeyHint{}
+		if len(agentHints) > 0 {
+			hint = agentHints[0]
+		}
+		return s.AuthenticateAgentKey(ctx, token, hint.Slug, hint.Cluster)
 	}
 	stored, err := s.tokens.GetByHash(ctx, domain.HashToken(token))
 	if err != nil {

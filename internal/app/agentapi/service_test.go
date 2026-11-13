@@ -58,6 +58,9 @@ func (f *fakeQueue) QueueDepth(context.Context, []string) (int, error) { return 
 func (f *fakeQueue) Sweep(context.Context, domain.SweepPolicy) (domain.SweepStats, error) {
 	return domain.SweepStats{}, nil
 }
+func (f *fakeQueue) RecordDirectRun(context.Context, domain.DirectRun) (string, error) {
+	return "succeeded", nil
+}
 
 type fakeTokens struct {
 	byHash map[string]*domain.Token

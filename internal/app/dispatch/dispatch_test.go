@@ -94,6 +94,9 @@ func (f *fakeQueue) QueueDepth(context.Context, []string) (int, error) { return 
 func (f *fakeQueue) Sweep(context.Context, connector.SweepPolicy) (connector.SweepStats, error) {
 	return connector.SweepStats{}, nil
 }
+func (f *fakeQueue) RecordDirectRun(context.Context, connector.DirectRun) (string, error) {
+	return "succeeded", nil
+}
 
 // codedError 模拟引擎的 *ExecutionError（结构性 ErrorCode 探测）。
 type codedError struct{ code, msg string }

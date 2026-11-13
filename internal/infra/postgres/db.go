@@ -203,9 +203,15 @@ func schemaStatements() []string {
 		`CREATE INDEX IF NOT EXISTS idx_agent_pull_tasks_pop ON agent_pull_tasks(agent_slug, created_ns) WHERE state = 'queued'`,
 		`CREATE INDEX IF NOT EXISTS idx_agent_pull_tasks_lease_expiry ON agent_pull_tasks(lease_expires_ns) WHERE state = 'leased'`,
 		`CREATE INDEX IF NOT EXISTS idx_agent_pull_tasks_queue_expiry ON agent_pull_tasks(queue_expires_ns) WHERE state = 'queued'`,
+		`CREATE TABLE IF NOT EXISTS agent_pull_cluster_deny (
+			agent_slug TEXT NOT NULL,
+			cluster_id TEXT NOT NULL,
+			denied_at  TEXT NOT NULL,
+			PRIMARY KEY (agent_slug, cluster_id))`,
+		`ALTER TABLE agent_pull_workers ALTER COLUMN connector_id TYPE TEXT`,
 		`CREATE TABLE IF NOT EXISTS agent_pull_workers (
 			worker_id         TEXT NOT NULL,
-			connector_id      BIGINT NOT NULL,
+			connector_id      TEXT NOT NULL,
 			in_flight         INT NOT NULL DEFAULT 0,
 			capacity          INT NOT NULL DEFAULT 0,
 			capabilities      TEXT NOT NULL DEFAULT '',

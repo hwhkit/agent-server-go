@@ -71,6 +71,10 @@ func (stubQueue) Sweep(context.Context, domain.SweepPolicy) (domain.SweepStats, 
 	return domain.SweepStats{}, nil
 }
 
+func (stubQueue) RecordDirectRun(context.Context, domain.DirectRun) (string, error) {
+	return "succeeded", nil
+}
+
 type memTokens struct{ byHash map[string]*domain.Token }
 
 func (m *memTokens) Issue(_ context.Context, t *domain.Token) error {

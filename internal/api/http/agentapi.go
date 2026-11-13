@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -21,9 +22,13 @@ const (
 	claimBodyLimit     = 64 * 1024
 	completeBodyLimit  = 4 * 1024 * 1024
 	heartbeatBodyLimit = 64 * 1024
+	runsBodyLimit      = 4 * 1024 * 1024
+
+	agentSlugHeader    = "X-Agent-Slug"
+	agentClusterHeader = "X-Agent-Cluster"
 )
 
-// AgentAPIHandler 是 /agent-api/v1 四端点的 HTTP 适配。
+// AgentAPIHandler 是 /agent-api/v1 五端点的 HTTP 适配。
 type AgentAPIHandler struct {
 	Service *agentapi.Service
 }
@@ -35,6 +40,7 @@ func (h AgentAPIHandler) Router() chi.Router {
 	router.Post("/claim", h.handleClaim)
 	router.Post("/renew", h.handleRenew)
 	router.Post("/complete", h.handleComplete)
+	router.Post("/runs", h.handleSubmitRun)
 	router.Post("/heartbeat", h.handleHeartbeat)
 	return router
 }
@@ -43,7 +49,16 @@ type principalKey struct{}
 
 func (h AgentAPIHandler) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		principal, failure := h.Service.Authenticate(r.Context(), r.Header.Get("Authorization"))
+		var hints []agentapi.AgentKeyHint
+		bearer := r.Header.Get("Authorization")
+		if !strings.HasPrefix(strings.TrimSpace(strings.TrimPrefix(bearer, "Bearer ")), "act_") {
+			// 智能体密钥连接点：凭据指向哪个智能体由头声明，可选集群子密钥。
+			hints = []agentapi.AgentKeyHint{{
+				Slug:    r.Header.Get(agentSlugHeader),
+				Cluster: r.Header.Get(agentClusterHeader),
+			}}
+		}
+		principal, failure := h.Service.Authenticate(r.Context(), bearer, hints...)
 		if failure != nil {
 			writeAgentAPIError(w, failure)
 			return
@@ -207,6 +222,41 @@ func (h AgentAPIHandler) handleHeartbeat(w http.ResponseWriter, r *http.Request)
 		"renewIntervalSeconds":     result.RenewIntervalSeconds,
 		"serverTime":               result.ServerTime.UTC().Format(time.RFC3339),
 		"queueDepth":               result.QueueDepth,
+	})
+}
+
+// submitRunRequest 是 /runs 请求体（§4.5，机器侧直接提交）。
+type submitRunRequest struct {
+	Slug    string                    `json:"slug"`
+	Status  string                    `json:"status"`
+	RunID   string                    `json:"runId"`
+	Payload json.RawMessage           `json:"payload"`
+	Input   json.RawMessage           `json:"input"`
+	Error   *agentapi.CompleteError   `json:"error"`
+	Usage   *agentapi.CompleteUsage   `json:"usage"`
+	Metrics *agentapi.CompleteMetrics `json:"metrics"`
+}
+
+func (h AgentAPIHandler) handleSubmitRun(w http.ResponseWriter, r *http.Request) {
+	var request submitRunRequest
+	if err := decodeLimited(r.Body, runsBodyLimit, &request); err != nil {
+		writeAgentAPIError(w, &agentapi.Failure{Status: 400, Code: "invalid_request",
+			Message: "runs body must be valid JSON"})
+		return
+	}
+	result, failure := h.Service.SubmitRun(r.Context(), principalFrom(r), agentapi.SubmitRunInput{
+		Slug: request.Slug, Status: request.Status, RunID: request.RunID,
+		Payload: request.Payload, Input: request.Input,
+		Error: request.Error, Usage: request.Usage, Metrics: request.Metrics,
+	})
+	if failure != nil {
+		writeAgentAPIError(w, failure)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"accepted":  result.Accepted,
+		"runId":     result.RunID,
+		"runStatus": result.RunStatus,
 	})
 }
 

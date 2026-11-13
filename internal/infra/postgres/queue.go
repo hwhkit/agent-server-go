@@ -428,6 +428,47 @@ func (s *TaskQueueStore) Sweep(ctx context.Context, policy connector.SweepPolicy
 	return stats, nil
 }
 
+// RecordDirectRun 幂等登记机器侧直接提交的运行（POST /agent-api/v1/runs）：
+// 直接落 agent_runs 终态，不经 agent_pull_tasks 租约；同 (slug, runId)
+// 重放返回既有状态。slug 未注册返回 connector.ErrUnknownAgent。
+func (s *TaskQueueStore) RecordDirectRun(ctx context.Context, run connector.DirectRun) (string, error) {
+	var exists bool
+	err := s.db.Pool.QueryRow(ctx,
+		`SELECT true FROM agents WHERE slug = $1`, run.Slug).Scan(&exists)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", connector.ErrUnknownAgent
+	}
+	if err != nil {
+		return "", fmt.Errorf("check agent for direct run: %w", err)
+	}
+	var status string
+	err = s.db.Pool.QueryRow(ctx, `
+		INSERT INTO agent_runs
+		  (agent_slug, run_id, agent_revision, executor_kind, execution_mode,
+		   status, duration_ms, error_code, request_json, result_json,
+		   created_at, completed_at)
+		VALUES ($1,$2,(SELECT revision FROM agents WHERE slug=$1),'remote-pull','remote_pull',
+		        $3,$4,NULLIF($5,''),$6,$7,$8,$8)
+		ON CONFLICT (agent_slug, run_id) DO NOTHING
+		RETURNING status`,
+		run.Slug, run.RunID, run.Status, run.DurationMs, run.ErrorCode,
+		string(run.Input), string(run.Result), nowTS()).Scan(&status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// 重放：读既有终态。
+		err = s.db.Pool.QueryRow(ctx,
+			`SELECT status FROM agent_runs WHERE agent_slug = $1 AND run_id = $2`,
+			run.Slug, run.RunID).Scan(&status)
+		if err != nil {
+			return "", fmt.Errorf("load replayed direct run: %w", err)
+		}
+		return status, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("record direct run: %w", err)
+	}
+	return status, nil
+}
+
 // archiveSuperseded 把迟到结果归档进 agent_runs(status=superseded)。
 func archiveSuperseded(ctx context.Context, tx pgx.Tx, runID, resultJSON string) error {
 	if _, err := tx.Exec(ctx, `

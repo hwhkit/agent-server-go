@@ -14,8 +14,9 @@ NAT/容器/家用网络均可接入。
 |---|---|
 | Base URL | `{public_base_url}/agent-api/v1` |
 | 传输 | HTTPS(生产强制);`Content-Type: application/json; charset=utf-8` |
-| 鉴权 | 全部端点要求 `Authorization: Bearer <connector_token>` |
+| 鉴权 | 全部端点要求 `Authorization: Bearer <credential>`;两条路径按前缀分派(见下) |
 | 令牌 | 管理台"远端智能体"签发,前缀 `act_`,按连接器独立、可吊销,服务端只存哈希;令牌绑定允许认领的 slug 集合(scope)。轮换有宽限期(§9) |
+| 凭据② | **智能体密钥连接点(方案 B)**:`Authorization: Bearer <agent_key>` + `X-Agent-Slug: <slug>` 头;可选 `X-Agent-Cluster: <clusterID>` 走派生子密钥(base64url(HMAC-SHA256(agent_key, 'ir-cluster-v1' + NUL + clusterID)))。主密钥持有人不受集群名单影响;名单(Deny/Allow)只吊销派生子密钥;密钥轮换宽限内旧钥/旧派生钥仍可用。适用'一个智能体自带多个集群' |
 | workerId | 连接器自报的稳定标识(2–64 字符,`[a-z0-9-]`,建议 `hostname-pid`);同一令牌下必须唯一 |
 | 时间 | 全部 RFC3339 UTC;响应带 `serverTime` 供时钟漂移校正 |
 | 体积上限 | claim 响应与 complete 请求体 ≤ 4 MiB(解压后);其余请求/响应 ≤ 64 KiB;支持 `Content-Encoding: gzip` |
@@ -198,6 +199,31 @@ POST /agent-api/v1/heartbeat
 遵循(上限 3600s)。连接器超过 3 个心跳间隔未上报即标记离线:容量记账清零、
 管理台显示离线,在途任务等租约自然过期后重派(不主动抢,§6.3)。
 
+## 4.5 POST /runs — 机器侧直接提交(定时任务/本地触发)
+
+方向与 claim 相反的提交:触发源在机器侧(cron、本地事件),不经租约,直接落
+`agent_runs` 终态。鉴权与其它端点一致(agent-key 或 act_ 令牌,scope 必须覆盖
+slug)。幂等键为 (slug, runId):同键重放返回首次状态,不同 runId 各自成行。
+
+    POST /agent-api/v1/runs
+    Authorization: Bearer <agent_key>
+    X-Agent-Slug: my-agent
+    X-Agent-Cluster: alpha            # 可选;派生子密钥时必带
+
+    {
+      "slug": "my-agent",
+      "status": "succeeded",
+      "runId": "cron-2026-11-14-0130",
+      "payload": { "summary": "...", "score": 0.87 },
+      "input":  { "day": "tuesday" },
+      "usage":  { "inputTokens": 0, "outputTokens": 0, "totalTokens": 0 },
+      "metrics": { "durationMs": 812 }
+    }
+
+响应 200:{"accepted": true, "runId": "...", "runStatus": "succeeded"}。
+status=failed 时 error.code 必填。参考实现:ir-connector 的 submit 子命令
+(crontab 一行即可把定时任务包装成智能体)。
+
 ## 5. 双重执行与幂等契约
 
 ### 5.1 at-least-once 是契约,不是缺陷
@@ -342,7 +368,7 @@ PostgreSQL 新表 `agent_pull_tasks`:
 | `AGENT_API__WORKER_OFFLINE_AFTER_MISSES` | `3` | 心跳缺失多少次判离线 |
 | `AGENT_API__TOKEN_ROTATION_GRACE` | `86400` | 令牌轮换宽限(秒) |
 
-## 12. 连接器实现要点(任意语言,~150 行)
+## 12. 连接器实现要点(参考实现 `cmd/ir-connector`,任意语言可仿写)
 
 1. 两条独立循环:claim(串行认领,一次一个任务)+ heartbeat。
 2. 收到任务后:`执行前先续一次租`,处理期间按 `renewAfterSeconds` 续租;

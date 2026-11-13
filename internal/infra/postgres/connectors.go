@@ -176,10 +176,9 @@ var _ connector.WorkerRegistry = (*WorkerStore)(nil)
 
 // Beat 上报心跳：按 (worker_id, connector_id) upsert 并置为在线。
 func (s *WorkerStore) Beat(ctx context.Context, w connector.Worker) error {
-	connectorID, err := strconv.ParseInt(w.TokenID, 10, 64)
-	if err != nil {
-		return fmt.Errorf("worker %s: invalid token id", w.WorkerID)
-	}
+	// TokenID 直接存字符串：act_ 令牌 ID 与 agent-key 主体（"agent:<slug>"）
+	// 共用一列（connector_id 已迁移为 TEXT）。
+	connectorID := w.TokenID
 	// capabilities 列沿用旧栈编码 "slug1,slug2|version"（新旧双栈共表期间的
 	// 数据格式契约；P6 删除旧栈后可迁移为 JSON）。
 	capabilities := strings.Join(w.Slugs, ",") + "|" + w.Version
@@ -187,7 +186,7 @@ func (s *WorkerStore) Beat(ctx context.Context, w connector.Worker) error {
 	if interval <= 0 {
 		interval = connector.DefaultHeartbeatSeconds
 	}
-	_, err = s.db.Pool.Exec(ctx,
+	_, err := s.db.Pool.Exec(ctx,
 		`INSERT INTO agent_pull_workers (worker_id, connector_id, in_flight, capacity, capabilities, last_heartbeat_ns, online)
 		 VALUES ($1, $2, $3, $4, $5, $6, true)
 		 ON CONFLICT (worker_id, connector_id) DO UPDATE SET
@@ -212,14 +211,14 @@ func (s *WorkerStore) ListOnline(ctx context.Context) ([]connector.Worker, error
 	for rows.Next() {
 		var (
 			w           connector.Worker
-			connectorID int64
+			connectorID string
 			caps        string
 			lastBeat    int64
 		)
 		if err := rows.Scan(&w.WorkerID, &connectorID, &w.InFlight, &w.Capacity, &caps, &lastBeat); err != nil {
 			return nil, err
 		}
-		w.TokenID = strconv.FormatInt(connectorID, 10)
+		w.TokenID = connectorID
 		w.LastBeatAt = time.Unix(0, lastBeat).UTC()
 		if caps != "" {
 			slugsPart, version, _ := strings.Cut(caps, "|")

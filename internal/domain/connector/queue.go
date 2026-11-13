@@ -180,6 +180,25 @@ type TaskQueue interface {
 	QueueDepth(ctx context.Context, slugs []string) (int, error)
 	// Sweep 执行后台清扫：过期租约重派/落终态、队列 TTL、worker 离线判定。
 	Sweep(ctx context.Context, policy SweepPolicy) (SweepStats, error)
+	// RecordDirectRun 幂等登记一次机器侧直接提交的运行（定时任务/本地触发，
+	// 不经租约）：直接落 agent_runs 终态；同 (slug, runId) 重放返回既有状态。
+	// slug 必须对应已注册智能体（ErrUnknownAgent）。
+	RecordDirectRun(ctx context.Context, run DirectRun) (string, error)
+}
+
+// ErrUnknownAgent 表示直接运行提交指向未注册的智能体。
+var ErrUnknownAgent = errors.New("unknown agent")
+
+// DirectRun 是一次机器侧直接提交的运行（POST /agent-api/v1/runs）。
+// Result 是与 complete 同构的规范化结果文档。
+type DirectRun struct {
+	Slug       string
+	RunID      string // 空 = 由服务层生成
+	Status     string // succeeded | failed
+	Input      []byte // 调用输入（cron 参数等），可空
+	Result     []byte
+	ErrorCode  string
+	DurationMs int64
 }
 
 // QueueTotals 是队列的在途统计（仪表盘用）。
