@@ -655,15 +655,14 @@
     const name = textInput(existing ? existing.name : "");
     const positionCodes = new Set(existing ? existing.positions || [] : []);
     const positionBoxes = positions.map((p) => {
-      // 标签 = 名称 + 代码（代码跟在名字后面，同名自定义岗位可直接区分）。
+      // 标签只显示名称；代码放 title 悬停核对（同名自定义岗位靠它区分）。
       const box = h("input", { type: "checkbox" });
       box.checked = positionCodes.has(p.code);
       box.addEventListener("change", () => {
         if (box.checked) positionCodes.add(p.code); else positionCodes.delete(p.code);
       });
-      return h("label", { class: "check" }, box,
-        h("span", {}, p.name),
-        h("span", { class: "muted small mono" }, p.code));
+      return h("label", { class: "check", title: p.code }, box,
+        h("span", {}, p.name));
     });
     const secret = h("input", {
       type: "password",
