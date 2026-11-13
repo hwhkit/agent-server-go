@@ -293,11 +293,11 @@
   // irLogoSVG 是品牌 logo：六边形路由网络（中心路由节点 + 三颗卫星智能体
   // 节点 + 电路走线端口），金色渐变描边，卫星节点脉冲动画。静态常量标记
   // （无用户数据），innerHTML 注入安全。
-  const irLogoSVG = () => {
+  const irLogoSVG = (size = 52) => {
     const wrap = document.createElement("div");
     wrap.className = "ir-logo";
     wrap.innerHTML = `
-<svg viewBox="0 0 96 96" width="52" height="52" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+<svg viewBox="0 0 96 96" width="${size}" height="${size}" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
   <defs>
     <linearGradient id="irg" x1="14" y1="10" x2="82" y2="88" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#f4dd7a"/>
@@ -372,14 +372,18 @@
     };
     root.append(h("div", { class: "login-wrap" },
       h("div", { class: "login-card" },
-        h("div", { class: "login-logo" }, irLogoSVG(),
-          h("div", {}, h("div", { class: "login-title" }, t("login.title")),
-            h("div", { class: "login-sub" }, t("login.sub")))),
-        h("form", { onsubmit: submit },
-          h("label", { class: "field" }, h("span", {}, t("login.username")), username),
-          h("label", { class: "field" }, h("span", {}, t("login.password")), password),
-          errorEl,
-          h("button", { class: "btn primary", type: "submit" }, t("login.submit"))))));
+        // 黄金分割双栏：左侧品牌区（正方形 ≈ 整卡高的 1.618 内切），
+        // 右侧表单区（余量 0.618）。
+        h("div", { class: "login-brand" },
+          h("div", { class: "login-logo" }, irLogoSVG(96)),
+          h("div", { class: "login-title" }, t("login.title")),
+          h("div", { class: "login-sub" }, t("login.sub"))),
+        h("div", { class: "login-form" },
+          h("form", { onsubmit: submit },
+            h("label", { class: "field" }, h("span", {}, t("login.username")), username),
+            h("label", { class: "field" }, h("span", {}, t("login.password")), password),
+            errorEl,
+            h("button", { class: "btn primary", type: "submit" }, t("login.submit")))))));
     username.focus();
   };
 

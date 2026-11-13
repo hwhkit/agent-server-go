@@ -462,6 +462,8 @@ table.list tr.detail-row td { background: var(--bg); padding: 14px 16px; }
 .dep-chip.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
 
 /* ---------- 登录 ---------- */
+/* 黄金分割登录卡：基准高 = 原高的 1.5 倍（≈500px），宽 = 高 × 1.618
+ * （≈808px）。左栏品牌区取内切正方形（≈500px），右栏表单区占余量。 */
 .login-wrap {
   min-height: 100vh;
   display: flex;
@@ -470,20 +472,54 @@ table.list tr.detail-row td { background: var(--bg); padding: 14px 16px; }
   padding: 20px;
 }
 .login-card {
-  width: 360px;
+  width: 808px;
+  max-width: 100%;
+  min-height: 500px;
+  display: flex;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 30px 28px;
+  border-radius: 18px;
+  overflow: hidden;
   box-shadow: var(--shadow);
 }
-.login-logo { display: flex; align-items: center; gap: 14px; margin-bottom: 6px; }
-.ir-logo { flex: 0 0 52px; filter: drop-shadow(0 0 10px rgba(212, 175, 55, 0.35)); }
+.login-brand {
+  flex: 0 0 500px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 40px;
+  background: linear-gradient(160deg, rgba(212, 175, 55, 0.07), transparent 55%),
+    var(--panel-2);
+  border-right: 1px solid var(--border);
+  text-align: center;
+}
+.login-form {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  padding: 44px 42px;
+}
+.login-logo { display: flex; align-items: center; }
+.ir-logo { filter: drop-shadow(0 0 14px rgba(212, 175, 55, 0.4)); }
 .ir-logo svg { display: block; }
-.login-title { font-size: 19px; font-weight: 700; letter-spacing: 0.4px; }
-.login-sub { color: var(--muted); font-size: 12.5px; margin-bottom: 20px; }
-.login-card form { display: flex; flex-direction: column; gap: 13px; }
-.login-card input { width: 100%; padding: 9px 11px; }
+.login-title { font-size: 26px; font-weight: 800; letter-spacing: 0.6px; }
+.login-sub { color: var(--muted); font-size: 13.5px; letter-spacing: 2px; }
+.login-form form { display: flex; flex-direction: column; gap: 16px; width: 100%; }
+.login-form label.field > span { font-size: 13px; }
+.login-form input { width: 100%; padding: 12px 13px; font-size: 14px; }
+.login-form .btn.primary { padding: 13px; font-size: 15px; margin-top: 6px; }
+.login-form .err-text { font-size: 13px; }
+
+@media (max-width: 880px) {
+  .login-card { flex-direction: column; min-height: 0; width: 420px; }
+  .login-brand { flex: none; border-right: none; border-bottom: 1px solid var(--border); padding: 30px 24px 22px; gap: 10px; }
+  .login-brand .ir-logo svg { width: 64px; height: 64px; }
+  .login-title { font-size: 20px; }
+  .login-sub { margin-bottom: 0; }
+  .login-form { padding: 28px 26px; }
+}
 
 /* ---------- 模态 ---------- */
 .modal-backdrop {

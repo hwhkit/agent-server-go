@@ -18,7 +18,7 @@ import (
 // ErrInvalidUsername / ErrInvalidPassword / ErrUsernameExists 是用例级校验哨兵。
 var (
 	ErrInvalidUsername = errors.New("username must be 2-64 chars of letters, digits, dot, underscore or hyphen")
-	ErrInvalidPassword = errors.New("password must be 12-512 characters and not a known-insecure default")
+	ErrInvalidPassword = errors.New("password must be 8-512 characters and not a known-insecure default")
 	ErrUsernameExists  = errors.New("username already exists")
 )
 
@@ -193,14 +193,16 @@ func (s *AccountService) record(ctx context.Context, actor, action, target strin
 	}
 }
 
-// ValidUsername 校验用户名：2–64 位字母、数字、点、下划线或连字符。
+// ValidUsername 校验用户名：2–64 位字母、数字、点、下划线、连字符或 @
+// （支持以邮箱作登录账号；字符集仍封闭，无空白与符号注入面）。
 func ValidUsername(username string) bool {
 	if len(username) < 2 || len(username) > 64 {
 		return false
 	}
 	for _, value := range []byte(username) {
 		if (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') ||
-			(value >= '0' && value <= '9') || value == '.' || value == '_' || value == '-' {
+			(value >= '0' && value <= '9') || value == '.' || value == '_' ||
+			value == '-' || value == '@' {
 			continue
 		}
 		return false
@@ -210,8 +212,8 @@ func ValidUsername(username string) bool {
 
 // ValidatePassword 校验口令强度；返回空串表示通过。
 func ValidatePassword(password string) string {
-	if len(password) < 12 || len(password) > 512 {
-		return "密码长度需为 12–512 个字符"
+	if len(password) < 8 || len(password) > 512 {
+		return "密码长度需为 8–512 个字符"
 	}
 	switch password {
 	case "admin", "password", "change-me":

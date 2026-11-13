@@ -243,9 +243,9 @@ func TestPlatformAdminCredentialRules(t *testing.T) {
 			r.Admin.Password = &value
 		}, "unsafe placeholder"},
 		{"password shorter than account policy", func(r *PlatformRootFile) {
-			value := "too-short"
+			value := "short7!"
 			r.Admin.Password = &value
-		}, "password must contain 12-512 bytes"},
+		}, "password must contain 8-512 bytes"},
 		{"short session secret", func(r *PlatformRootFile) {
 			value := strings.Repeat("s", 31)
 			r.Admin.SessionSecret = &value

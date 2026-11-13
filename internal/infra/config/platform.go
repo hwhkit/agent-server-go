@@ -880,8 +880,8 @@ func (c *PlatformConfig) Validate() error {
 	case "admin", "password", "change-me", exampleAdminPassword:
 		return errors.New("[admin].password is an unsafe placeholder; configure a strong password")
 	}
-	if c.AdminPassword != "" && (len(c.AdminPassword) < 12 || len(c.AdminPassword) > 512) {
-		return errors.New("[admin].password must contain 12-512 bytes")
+	if c.AdminPassword != "" && (len(c.AdminPassword) < 8 || len(c.AdminPassword) > 512) {
+		return errors.New("[admin].password must contain 8-512 bytes")
 	}
 	if len(c.AdminSessionSecret) < 32 {
 		return errors.New("[admin].session_secret must contain at least 32 bytes; set ADMIN__SESSION_SECRET")
