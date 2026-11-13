@@ -268,7 +268,6 @@
   const NAV = [
     { group: "business", route: "/dashboard", icon: "◈", key: "nav.dashboard" },
     { group: "business", route: "/teams", icon: "⬢", key: "nav.teams", badge: (b) => b.activeTeamRuns },
-    { group: "business", route: "/positions", icon: "◇", key: "nav.positions" },
     { group: "business", route: "/agents", icon: "⬡", key: "nav.agents" },
     { group: "business", route: "/runs", icon: "≣", key: "nav.runs", badge: (b) => b.runsToday },
     { group: "system", route: "/audits", icon: "✎", key: "nav.audits", adminOnly: true },
@@ -528,8 +527,10 @@
   // 模块：智能体（子页签：智能体 / 执行后端 / 连接器）
   // -----------------------------------------------------------------------
   const renderAgents = async (container) => {
+    // 岗位融合为智能体模块的子页签（侧栏不再单列）。
     const tabs = tabsEl([
       { key: "agents", label: t("agent.tab.agents"), render: agentsTab },
+      { key: "positions", label: t("pos.title"), render: renderPositions },
       { key: "providers", label: t("agent.tab.providers"), render: providersTab },
       { key: "connectors", label: t("agent.tab.connectors"), render: connectorsTab },
     ], container.dataset.agentsTab || "agents");
@@ -1760,7 +1761,11 @@
   // -----------------------------------------------------------------------
   const ROUTES = {
     "/dashboard": renderDashboard,
-    "/positions": renderPositions,
+    // 岗位已并入智能体模块：直链回落到智能体页并预选岗位子页签。
+    "/positions": async (container) => {
+      container.dataset.agentsTab = "positions";
+      await renderAgents(container);
+    },
     "/agents": renderAgents,
     "/teams": renderTeams,
     "/runs": renderRuns,
