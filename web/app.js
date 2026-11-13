@@ -567,18 +567,27 @@
   // ---- 智能体列表 ----
   const agentsTab = async (body) => {
     const { positions } = await loadCatalog();
+    // 连接状态数据源：该 slug 名下是否有活跃 worker 心跳（remote_pull
+    // 智能体由连接器认领执行——有心跳=连接器在线）。
+    // 连接状态数据源：在线 worker 的能力域（slugs）覆盖到的智能体即已连接。
+    let workerSlugs = new Set();
+    try {
+      const workers = await api.get("/agent-connectors/workers");
+      for (const worker of workers || []) {
+        for (const slug of worker.slugs || []) workerSlugs.add(slug);
+      }
+    } catch { /* 探测失败降级为全部未连接 */ }
     const columns = [
-      { label: t("agent.slug") }, { label: t("agent.name") }, { label: t("agent.binding") },
-      { label: t("agent.positions") }, { label: t("agent.secret") },
+      { label: t("agent.slug") }, { label: t("agent.name") }, { label: t("agent.status") },
+      { label: t("agent.secret") },
       { label: t("common.enabled") }, { label: t("common.revision") }, { label: t("common.actions") },
     ];
     const renderAgentRow = (a) => h("tr", {},
       h("td", { class: "mono" }, a.slug),
       h("td", {}, a.name, a.description ? h("div", { class: "muted small" }, a.description) : null),
-      h("td", {}, h("span", { class: "chip accent" }, a.executor_kind), h("span", { class: "chip" }, a.execution_mode)),
-      h("td", {}, (a.positions || []).length
-        ? (a.positions || []).map((code) => h("span", { class: "chip" }, code))
-        : h("span", { class: "muted" }, "—")),
+      h("td", {}, workerSlugs.has(a.slug)
+        ? h("span", { class: "status completed" }, t("agent.status.online"))
+        : h("span", { class: "status offline" }, t("agent.status.offline"))),
       h("td", {}, a.signing_secret_configured
         ? h("span", { class: "ok-text small" }, `🔒 ${t("agent.secret.configured")}`)
         : h("span", { class: "muted small" }, "—")),

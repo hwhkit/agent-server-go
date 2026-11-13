@@ -81,6 +81,7 @@ func AdminRouter(deps AdminDeps) chi.Router {
 			r.Get("/runs", h.listRuns)
 			r.Get("/runs/{run_id}", h.getRun)
 			r.Get("/agent-connectors", h.listConnectors)
+			r.Get("/agent-connectors/workers", h.listWorkers)
 			r.Get("/providers", h.listProviders)
 			r.Get("/agents/export", h.exportAgents)
 			r.Get("/audits", h.listAudits)
@@ -924,6 +925,33 @@ func (h *adminHandler) listConnectors(w http.ResponseWriter, r *http.Request) {
 			view["grace_until"] = *token.GraceUntil
 		}
 		views = append(views, view)
+	}
+	writeAdminData(w, http.StatusOK, views)
+}
+
+// listWorkers 返回在线连接器 worker（智能体列表「连接状态」的数据源；
+// 远端拉取型智能体由连接器认领执行——名下有活跃心跳即已连接）。
+func (h *adminHandler) listWorkers(w http.ResponseWriter, r *http.Request) {
+	workers, err := h.deps.Connectors.ListOnlineWorkers(r.Context())
+	if err != nil {
+		writeAdminError(w, http.StatusInternalServerError, "storage_error", "list workers failed")
+		return
+	}
+	type workerView struct {
+		WorkerID string   `json:"worker_id"`
+		Slugs    []string `json:"slugs"`
+		Version  string   `json:"version,omitempty"`
+		InFlight int      `json:"in_flight"`
+		Capacity int      `json:"capacity"`
+		LastBeat string   `json:"last_beat_at"`
+	}
+	views := make([]workerView, 0, len(workers))
+	for _, worker := range workers {
+		views = append(views, workerView{
+			WorkerID: worker.WorkerID, Slugs: worker.Slugs, Version: worker.Version,
+			InFlight: worker.InFlight, Capacity: worker.Capacity,
+			LastBeat: worker.LastBeatAt.UTC().Format(time.RFC3339),
+		})
 	}
 	writeAdminData(w, http.StatusOK, views)
 }

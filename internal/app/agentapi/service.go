@@ -107,7 +107,13 @@ func NewService(deps Deps) *Service {
 }
 
 // Sweeper 暴露队列给 reaper 与 dashboard 复用。
+// Queue 暴露队列给 reaper 与 dashboard 复用。
 func (s *Service) Queue() domain.TaskQueue { return s.queue }
+
+// ListOnlineWorkers 返回活跃心跳的连接器 worker（管理台连接状态数据源）。
+func (s *Service) ListOnlineWorkers(ctx context.Context) ([]domain.Worker, error) {
+	return s.workers.ListOnline(ctx)
+}
 
 // ---------------------------------------------------------------------------
 // 令牌
