@@ -668,7 +668,25 @@
       type: "password",
       placeholder: existing ? t("agent.secret.placeholder.edit") : t("agent.secret.placeholder.new"),
       autocomplete: "new-password",
+      style: { flex: "1", minWidth: "0" },
     });
+    // 密钥工具行：生成（32 字节随机 hex，即点即填）/ 显示-隐藏（生成的
+    // 密钥需要明文交给动态入口调用方去签名）。
+    const genSecret = h("button", {
+      class: "btn sm", type: "button",
+      onclick: () => {
+        const bytes = crypto.getRandomValues(new Uint8Array(32));
+        secret.value = [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+      },
+    }, t("agent.secret.generate"));
+    const toggleSecret = h("button", {
+      class: "btn sm", type: "button",
+      onclick: () => {
+        const reveal = secret.type === "password";
+        secret.type = reveal ? "text" : "password";
+        toggleSecret.textContent = reveal ? t("agent.secret.hide") : t("agent.secret.show");
+      },
+    }, t("agent.secret.show"));
     const timeout = textInput(existing ? String(existing.timeout_secs ?? "") : "", { type: "number", min: "1" });
     const maxConc = textInput(existing ? String(existing.max_concurrency ?? "") : "", { type: "number", min: "0" });
     const queueCap = textInput(existing ? String(existing.queue_capacity ?? "") : "", { type: "number", min: "0" });
@@ -715,7 +733,9 @@
         field(t("agent.positions"),
           h("div", { class: "check-grid3" }, ...positionBoxes),
           { full: true }),
-        field(t("agent.secret"), secret, { full: true }),
+        field(t("agent.secret"),
+          h("div", { class: "row", style: { flexWrap: "nowrap" } }, secret, genSecret, toggleSecret),
+          { full: true }),
         field(t("common.enabled"), enabled),
         // 调度约束三件套：单行三列，不再折叠。
         h("div", { class: "form-grid triple full" },
