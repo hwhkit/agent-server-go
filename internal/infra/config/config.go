@@ -239,7 +239,7 @@ func configFromFile(f *irFile) (*Config, error) {
 		signatureEncoding = parsed
 	}
 
-	pushMode := PushModeSync
+	pushMode := PushModeAsync
 	if f.PushMode != nil {
 		parsed, ok := ParsePushMode(*f.PushMode)
 		if !ok {
@@ -289,7 +289,7 @@ func (c *Config) Validate() error {
 				"set IR__SIGNATURE_ENCODING", c.SignatureEncoding)
 	}
 	if c.PushMode == "" {
-		c.PushMode = PushModeSync
+		c.PushMode = PushModeAsync
 	}
 	if _, ok := ParsePushMode(string(c.PushMode)); !ok {
 		return fmt.Errorf(

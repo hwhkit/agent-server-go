@@ -15,7 +15,7 @@ func baseConfig() *Config {
 		PushPath:          "/ir/push",
 		SigningSecret:     "a-real-secret-0123456789",
 		SignatureEncoding: SignatureEncodingHex,
-		PushMode:          PushModeSync,
+		PushMode:          PushModeAsync,
 		ClaimTimeout:      60 * time.Second,
 		HeartbeatInterval: 60 * time.Second,
 		RenewInterval:     30 * time.Second,
@@ -55,7 +55,7 @@ func TestConfigFromFileDefaults(t *testing.T) {
 	if cfg.SignatureEncoding != SignatureEncodingHex {
 		t.Errorf("signature_encoding = %q, want hex", cfg.SignatureEncoding)
 	}
-	if cfg.PushMode != PushModeSync {
+	if cfg.PushMode != PushModeAsync {
 		t.Errorf("push_mode = %q, want sync", cfg.PushMode)
 	}
 	for _, item := range []struct {

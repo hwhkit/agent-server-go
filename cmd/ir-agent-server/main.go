@@ -10,6 +10,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -412,6 +413,8 @@ func buildRuntime(ctx context.Context) (*runtime, *config.Config, error) {
 	// 控制台（八模块 SPA，web/ 静态文件经 embed.FS 内嵌）。
 	// /admin 与未知子路径都回落 index.html（hash 路由无需深链）；
 	// /admin/ 前缀保证页面内相对资源路径（app.css 等）解析正确。
+	// index.html 内的资源引用带构建版本戳（?v=…）：发版后 URL 变化，
+	// 浏览器必然重新拉取——根治「页面还跑旧 JS」的缓存问题。
 	console := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/admin" {
 			http.Redirect(w, r, "/admin/", http.StatusFound)
@@ -426,10 +429,17 @@ func buildRuntime(ctx context.Context) (*runtime, *config.Config, error) {
 			}
 			name = "index.html"
 		}
+		body := data
+		if name == "index.html" {
+			for _, asset := range []string{"app.css", "app.js", "i18n.js"} {
+				body = bytes.ReplaceAll(body,
+					[]byte(asset+"\""), []byte(asset+"?v="+version+"\""))
+			}
+		}
 		w.Header().Set("Content-Type", consoleContentType(name))
 		w.Header().Set("Cache-Control", "no-cache")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(data)
+		_, _ = w.Write(body)
 	})
 	router.Get("/admin", console)
 	router.Get("/admin/*", console)

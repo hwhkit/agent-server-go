@@ -53,7 +53,7 @@ task_timeout_secs = 600
 
 # --- 新协议(ir-agent-bound-task v1) ---
 # Push 响应形态:"sync" = 200 + 结果信封(默认);"async" = 202 + callback 回传。
-# push_mode = "sync"
+# push_mode = "async"
 # Push 形态心跳地址(平台绑定信息下发);留空则 Push 心跳禁用。
 # heartbeat_url = "https://..."
 # agentCode 未匹配本地 slug 时使用的默认 Agent;留空表示必须精确匹配。
