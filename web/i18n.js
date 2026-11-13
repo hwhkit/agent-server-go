@@ -15,8 +15,8 @@ window.I18N = {
     "nav.collapse": "折叠侧栏",
     "nav.expand": "展开侧栏",
 
-    "login.title": "登录控制台",
-    "login.sub": "Intelligent Router 多智能体管理平台",
+    "login.title": "Intelligent Router",
+    "login.sub": "登录控制台",
     "login.username": "用户名",
     "login.password": "密码",
     "login.submit": "登录",
@@ -252,8 +252,8 @@ window.I18N = {
     "nav.collapse": "Collapse sidebar",
     "nav.expand": "Expand sidebar",
 
-    "login.title": "Sign in to console",
-    "login.sub": "Intelligent Router multi-agent platform",
+    "login.title": "Intelligent Router",
+    "login.sub": "Sign in to console",
     "login.username": "Username",
     "login.password": "Password",
     "login.submit": "Sign in",

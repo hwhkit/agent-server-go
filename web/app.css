@@ -477,8 +477,10 @@ table.list tr.detail-row td { background: var(--bg); padding: 14px 16px; }
   padding: 30px 28px;
   box-shadow: var(--shadow);
 }
-.login-logo { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
-.login-title { font-size: 18px; font-weight: 700; }
+.login-logo { display: flex; align-items: center; gap: 14px; margin-bottom: 6px; }
+.ir-logo { flex: 0 0 52px; filter: drop-shadow(0 0 10px rgba(212, 175, 55, 0.35)); }
+.ir-logo svg { display: block; }
+.login-title { font-size: 19px; font-weight: 700; letter-spacing: 0.4px; }
 .login-sub { color: var(--muted); font-size: 12.5px; margin-bottom: 20px; }
 .login-card form { display: flex; flex-direction: column; gap: 13px; }
 .login-card input { width: 100%; padding: 9px 11px; }

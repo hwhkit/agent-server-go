@@ -289,6 +289,69 @@
   // -----------------------------------------------------------------------
   // 模块：登录
   // -----------------------------------------------------------------------
+
+  // irLogoSVG 是品牌 logo：六边形路由网络（中心路由节点 + 三颗卫星智能体
+  // 节点 + 电路走线端口），金色渐变描边，卫星节点脉冲动画。静态常量标记
+  // （无用户数据），innerHTML 注入安全。
+  const irLogoSVG = () => {
+    const wrap = document.createElement("div");
+    wrap.className = "ir-logo";
+    wrap.innerHTML = `
+<svg viewBox="0 0 96 96" width="52" height="52" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <defs>
+    <linearGradient id="irg" x1="14" y1="10" x2="82" y2="88" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f4dd7a"/>
+      <stop offset=".55" stop-color="#d4af37"/>
+      <stop offset="1" stop-color="#8a6d1f"/>
+    </linearGradient>
+    <radialGradient id="irp" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse"
+      gradientTransform="translate(48 48) scale(10)">
+      <stop offset="0" stop-color="#f8e9b0"/>
+      <stop offset="1" stop-color="#d4af37" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <path d="M48 8 82 27.5v39L48 86 14 66.5v-39L48 8Z"
+    stroke="url(#irg)" stroke-width="3" stroke-linejoin="round" opacity=".95"/>
+  <path d="M48 17 74 32v32L48 79 22 64V32L48 17Z"
+    stroke="url(#irg)" stroke-width="1" opacity=".35"/>
+  <circle cx="48" cy="48" r="10" fill="url(#irp)"/>
+  <circle cx="48" cy="48" r="4.2" fill="#f4dd7a"/>
+  <circle cx="48" cy="48" r="6.5" stroke="url(#irg)" stroke-width="1.6"/>
+  <g stroke="url(#irg)" stroke-width="1.6" opacity=".9">
+    <path d="M48 41.5 33 26"/>
+    <path d="M57 52l17 6"/>
+    <path d="M52 56l-4 15"/>
+  </g>
+  <g fill="#f4dd7a">
+    <circle cx="33" cy="26" r="3">
+      <animate attributeName="r" values="3;4.2;3" dur="2.4s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="1;.5;1" dur="2.4s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="74" cy="58" r="3">
+      <animate attributeName="r" values="3;4.2;3" dur="2.4s" begin=".8s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="1;.5;1" dur="2.4s" begin=".8s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="48" cy="71" r="3">
+      <animate attributeName="r" values="3;4.2;3" dur="2.4s" begin="1.6s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="1;.5;1" dur="2.4s" begin="1.6s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+  <g stroke="url(#irg)" stroke-width="1.4" opacity=".8">
+    <path d="M14 40H6"/><path d="M14 54H6"/>
+    <path d="M82 40h8"/><path d="M82 54h8"/>
+    <path d="M40 86v8"/><path d="M56 86v8"/>
+  </g>
+  <g fill="#d4af37">
+    <rect x="4" y="38.2" width="4" height="3.6" rx=".8"/>
+    <rect x="4" y="52.2" width="4" height="3.6" rx=".8"/>
+    <rect x="88" y="38.2" width="4" height="3.6" rx=".8"/>
+    <rect x="88" y="52.2" width="4" height="3.6" rx=".8"/>
+    <rect x="38.2" y="88" width="3.6" height="4" rx=".8"/>
+    <rect x="54.2" y="88" width="3.6" height="4" rx=".8"/>
+  </g>
+</svg>`;
+    return wrap;
+  };
   const renderLogin = (root) => {
     const username = textInput("", { placeholder: t("login.username"), autocomplete: "username" });
     const password = h("input", { type: "password", placeholder: t("login.password"), autocomplete: "current-password" });
@@ -309,7 +372,7 @@
     };
     root.append(h("div", { class: "login-wrap" },
       h("div", { class: "login-card" },
-        h("div", { class: "login-logo" }, h("div", { class: "brand-mark" }),
+        h("div", { class: "login-logo" }, irLogoSVG(),
           h("div", {}, h("div", { class: "login-title" }, t("login.title")),
             h("div", { class: "login-sub" }, t("login.sub")))),
         h("form", { onsubmit: submit },
