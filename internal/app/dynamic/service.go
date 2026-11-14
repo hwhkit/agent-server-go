@@ -9,11 +9,10 @@ package dynamic
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	domaintoken "ir-agent-server/internal/domain/token"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -424,7 +423,7 @@ func (s *Service) parseEnvelope(req Request, resolved *agent.ResolvedConfig,
 		return nil, s.apiError(422, "invalid_run_id",
 			"Run ID must contain 1-160 printable ASCII characters without outer whitespace"), false
 	default:
-		runID = "run_" + randomToken(12)
+		runID = "run_" + domaintoken.Random(12)
 	}
 	if callbackURL := gatewayCallbackURL(&task); callbackURL != "" {
 		if err := callback.ValidateInputs(callbackURL, runID, resolved.SigningSecret); err != nil {
@@ -998,10 +997,3 @@ func deref(value *string) string {
 }
 
 // randomToken 返回 bytes 字节密码学随机数据的 URL-safe base64(无填充)编码。
-func randomToken(bytes int) string {
-	raw := make([]byte, bytes)
-	if _, err := rand.Read(raw); err != nil {
-		panic("crypto/rand failed: " + err.Error())
-	}
-	return base64.RawURLEncoding.EncodeToString(raw)
-}

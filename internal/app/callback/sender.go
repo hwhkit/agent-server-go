@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"ir-agent-server/internal/domain/retry"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -27,6 +28,15 @@ import (
 const (
 	Attempts = 6
 )
+
+// retryErr 是 errRetryableDelivery 的载体类型（errors.Is 可比较）。
+type retryErr struct{}
+
+func (retryErr) Error() string { return "retryable delivery failure" }
+
+// errRetryableDelivery 标记一次值得重试的投递失败（仅驱动 retry 循环，
+// 不直接面向调用方）。
+var errRetryableDelivery = retryErr{}
 
 // DefaultRetryDelays 是第 1..5 次失败后的退避时长；最后一次之后不再等待。
 var DefaultRetryDelays = [Attempts - 1]time.Duration{
@@ -135,14 +145,19 @@ func (s *Sender) SendAs(ctx context.Context, callbackURL, runID, signingSecret s
 	}
 	logTarget := platform.CallbackOrigin(target)
 
-	for attempt := 0; attempt < Attempts; attempt++ {
-		// 最后一次尝试没有后续退避；retryDelay 为 0 表示「不再重试」。
-		var retryDelay time.Duration
-		if attempt < len(s.retryDelays) {
-			retryDelay = s.retryDelays[attempt]
-		}
-		lastAttempt := attempt == Attempts-1
-
+	// 投递循环由通用 retry 模块驱动（hwhkit-go/retry）：固定次数 + 可注入
+	// 退避表；op 内完成投递与回执判定，返回 errRetryableDelivery 表示值得
+	// 重试，其余错误为终态（terminal）；成功时回执存 delivered。
+	var terminal error
+	var delivered *platform.CallbackReceipt
+	r := retry.Do(ctx, retry.Config{
+		Attempts: Attempts,
+		Classifier: retry.ClassifierFunc(func(err error) bool {
+			return errors.Is(err, errRetryableDelivery)
+		}),
+		Delays: s.retryDelays,
+	}, func(attempt int) error {
+		terminal = nil
 		timestamp := time.Now().Unix()
 		signature := platform.CallbackSignatureV2(signingSecret, runID, body, timestamp)
 		attemptsMade = attempt + 1
@@ -162,32 +177,31 @@ func (s *Sender) SendAs(ctx context.Context, callbackURL, runID, signingSecret s
 			// 已接受的结果，带观测到的状态码交调用方处理。
 			if status != 0 && status < 500 && status != http.StatusRequestTimeout &&
 				status != http.StatusTooManyRequests {
-				return nil, unconfirmedError(status, attemptsMade, requestErr)
-			}
-			if lastAttempt {
-				return nil, unconfirmedError(status, attemptsMade,
-					fmt.Errorf("callback request failed after %d attempts: %w",
-						Attempts, requestErr))
+				terminal = unconfirmedError(status, attemptsMade, requestErr)
+				return terminal
 			}
 			slog.Warn("callback request failed; retrying",
 				"run_id", runID, "attempt", attempt+1,
 				"status", status, "error_kind", requestErrorKind(requestErr))
+			return errRetryableDelivery
 
 		case status == http.StatusOK:
 			receipt, parseErr := platform.ParseCallbackReceipt(responseText)
 			if parseErr != nil {
 				slog.Warn("callback returned an unparsable receipt",
 					"run_id", runID, "status", status, "response_bytes", len(responseText))
-				return nil, unconfirmedError(status, attemptsMade,
+				terminal = unconfirmedError(status, attemptsMade,
 					fmt.Errorf("callback returned an invalid receipt: %w", parseErr))
+				return terminal
 			}
 			slog.Info("callback response received",
 				"run_id", runID, "status", status, "code", receipt.Code,
 				"accepted", receipt.Accepted, "run_status", deref(receipt.RunStatus),
 				"response_bytes", len(responseText))
 			if receipt.Code != "OK" {
-				return nil, unconfirmedError(status, attemptsMade,
+				terminal = unconfirmedError(status, attemptsMade,
 					fmt.Errorf("callback transport code was %s", receipt.Code))
+				return terminal
 			}
 			if receipt.Accepted {
 				slog.Info("callback result accepted",
@@ -196,7 +210,8 @@ func (s *Sender) SendAs(ctx context.Context, callbackURL, runID, signingSecret s
 				slog.Warn("callback delivered but result was not accepted; not retrying",
 					"run_id", runID, "run_status", deref(receipt.RunStatus))
 			}
-			return receipt, nil
+			delivered = receipt
+			return nil
 
 		default:
 			retryable := status == http.StatusRequestTimeout ||
@@ -205,33 +220,32 @@ func (s *Sender) SendAs(ctx context.Context, callbackURL, runID, signingSecret s
 			slog.Warn("callback rejected",
 				"run_id", runID, "status", status, "attempt", attempt+1,
 				"response_code", responseCode, "response_bytes", len(responseText))
-			if !retryable || lastAttempt {
-				build := deliveryError
-				if retryable {
-					build = unconfirmedError
-				}
-				return nil, build(status, attemptsMade,
+			if !retryable {
+				terminal = deliveryError(status, attemptsMade,
 					fmt.Errorf("callback rejected with %s (%s)",
 						httpStatusText(status), responseCode))
+				return terminal
 			}
 			slog.Warn("transient callback rejection; retrying",
 				"run_id", runID, "status", status, "attempt", attempt+1,
 				"response_code", responseCode)
+			return errRetryableDelivery
 		}
-
-		if retryDelay > 0 {
-			timer := time.NewTimer(retryDelay)
-			select {
-			case <-timer.C:
-			case <-ctx.Done():
-				timer.Stop()
-				return nil, unconfirmedError(lastStatus, attemptsMade,
-					fmt.Errorf("callback retry aborted: %w", ctx.Err()))
-			}
-		}
+	})
+	if r.Err == nil {
+		return delivered, nil
 	}
-	return nil, unconfirmedError(lastStatus, attemptsMade,
-		errors.New("callback retry loop exhausted"))
+	if terminal != nil {
+		return nil, terminal
+	}
+	// 退避中 ctx 取消：保持旧语义（retry aborted → unconfirmed）。
+	if errors.Is(r.Err, context.Canceled) || errors.Is(r.Err, context.DeadlineExceeded) {
+		return nil, unconfirmedError(lastStatus, r.Attempts,
+			fmt.Errorf("callback retry aborted: %w", r.Err))
+	}
+	// 可重试错误耗尽次数：按旧语义 unconfirmed。
+	return nil, unconfirmedError(lastStatus, r.Attempts,
+		fmt.Errorf("callback request failed after %d attempts: %w", r.Attempts, r.Err))
 }
 
 func parseAbsoluteURL(raw string) (*url.URL, error) {

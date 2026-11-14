@@ -9,8 +9,6 @@ package a2a
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"time"
 
@@ -103,13 +101,5 @@ func (c CardConfig) AgentPath(slug string) string { return c.BasePath + "/" + sl
 
 // randomToken 返回 bytes 字节密码学随机数据的 URL-safe base64(无填充)编码。
 // task id / context id 沿用平台既有的随机令牌生成，不额外引入 uuid 依赖。
-func randomToken(bytes int) string {
-	raw := make([]byte, bytes)
-	if _, err := rand.Read(raw); err != nil {
-		panic("crypto/rand failed: " + err.Error())
-	}
-	return base64.RawURLEncoding.EncodeToString(raw)
-}
-
 // ResolvedAgent 是卡片/认证/映射消费的智能体运行配置快照别名（可读性）。
 type ResolvedAgent = agent.ResolvedConfig

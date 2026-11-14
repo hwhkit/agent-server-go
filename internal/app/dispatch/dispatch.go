@@ -9,11 +9,10 @@ package dispatch
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	domaintoken "ir-agent-server/internal/domain/token"
 	"strings"
 	"time"
 
@@ -222,7 +221,7 @@ func (s *Service) executeRemote(
 	task *platform.TaskContext,
 	timeout time.Duration,
 ) (*platform.ProcessedOutput, error) {
-	runID := "run_" + randomToken(12)
+	runID := "run_" + domaintoken.Random(12)
 	if task.RunID != nil && strings.TrimSpace(*task.RunID) != "" {
 		runID = strings.TrimSpace(*task.RunID)
 	}
@@ -323,10 +322,3 @@ func remoteResultToOutput(state connector.TaskState, resultJSON []byte) (*platfo
 }
 
 // randomToken 返回 bytes 字节密码学随机数据的 URL-safe base64(无填充)编码。
-func randomToken(bytes int) string {
-	raw := make([]byte, bytes)
-	if _, err := rand.Read(raw); err != nil {
-		panic("crypto/rand failed: " + err.Error())
-	}
-	return base64.RawURLEncoding.EncodeToString(raw)
-}

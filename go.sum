@@ -46,6 +46,14 @@ github.com/hwhkit/hwhkit-go/hwhkit v0.2.0 h1:MoyNxgzg9guG4+soy56oUmOlQzbMu5l2wUL
 github.com/hwhkit/hwhkit-go/hwhkit v0.2.0/go.mod h1:63k0rUBzNTOiIMXbiS2L4Je7qldOU05LJNJiQoQetww=
 github.com/hwhkit/hwhkit-go/observability v0.2.0 h1:EB9iqufkKg22M0DnpSsePIZX6hX5zJ4V+NNEkOrywiI=
 github.com/hwhkit/hwhkit-go/observability v0.2.0/go.mod h1:OJAoNXWzpkARn9hBuRK03+ovvwjumtDwrUVvHwjZ60A=
+github.com/hwhkit/hwhkit-go/retry v0.3.0 h1:VlvlqDt+CO7fsJqWHyc+9sdEM0172svGCv94bANBCAg=
+github.com/hwhkit/hwhkit-go/retry v0.3.0/go.mod h1:J9heCYMu0NiHBeg8UUUkFyh5RYYKVeytPlXs1u+WQog=
+github.com/hwhkit/hwhkit-go/retry v0.3.1 h1:Ficq2OdhGEUJnFrKVqln0161cDrrT2TC9q3eRi3mkBY=
+github.com/hwhkit/hwhkit-go/retry v0.3.1/go.mod h1:J9heCYMu0NiHBeg8UUUkFyh5RYYKVeytPlXs1u+WQog=
+github.com/hwhkit/hwhkit-go/secrets v0.3.0 h1:A/rFmS1Ihkd2nrrh1ZuNXkaHOnwUP1VVCMaYZERz/7s=
+github.com/hwhkit/hwhkit-go/secrets v0.3.0/go.mod h1:Vv19D8yX+9yhyjjrlF30CWxfzDLk3xQmZXUzUoR0IZA=
+github.com/hwhkit/hwhkit-go/tokengen v0.3.0 h1:xYeHIBcyTp+fEiV3LvgXY84cuv+2TJhkjpSS2hRZWZY=
+github.com/hwhkit/hwhkit-go/tokengen v0.3.0/go.mod h1:LuUIvVzf3pOJobxARwK2vS8lLAMNt++DFaGVopnVxwc=
 github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=
 github.com/jackc/pgpassfile v1.0.0/go.mod h1:CEx0iS5ambNFdcRtxPj5JhEz+xB6uRky5eyVu/W2HEg=
 github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 h1:iCEnooe7UlwOQYpKFhBabPMi4aNAfoODPEFNiAnClxo=

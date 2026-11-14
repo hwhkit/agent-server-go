@@ -7,6 +7,7 @@ package agentapi
 import (
 	"context"
 	"encoding/json"
+	domaintoken "ir-agent-server/internal/domain/token"
 	"strings"
 
 	domain "ir-agent-server/internal/domain/connector"
@@ -81,7 +82,7 @@ func (s *Service) SubmitRun(ctx context.Context, principal *Principal, in Submit
 	}
 	runID := strings.TrimSpace(in.RunID)
 	if runID == "" {
-		runID = "run_" + randomToken(12)
+		runID = "run_" + domaintoken.Random(12)
 	}
 	errorCode := ""
 	if in.Error != nil {

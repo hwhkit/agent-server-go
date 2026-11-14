@@ -9,10 +9,9 @@ package agentapi
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	domaintoken "ir-agent-server/internal/domain/token"
 	"log/slog"
 	"strings"
 	"time"
@@ -166,7 +165,7 @@ func (s *Service) IssueToken(ctx context.Context, name string, scopes []string) 
 	if name == "" {
 		return "", fmt.Errorf("connector name must not be empty")
 	}
-	plaintext := domain.TokenPrefix + randomToken(32)
+	plaintext := domain.TokenPrefix + domaintoken.Random(32)
 	record := &domain.Token{
 		Name:   name,
 		Hash:   domain.HashToken(plaintext),
@@ -585,10 +584,3 @@ func RunReaper(ctx context.Context, service *Service) {
 }
 
 // randomToken 返回 bytes 字节密码学随机数据的 URL-safe base64(无填充)编码。
-func randomToken(bytes int) string {
-	raw := make([]byte, bytes)
-	if _, err := rand.Read(raw); err != nil {
-		panic("crypto/rand failed: " + err.Error())
-	}
-	return base64.RawURLEncoding.EncodeToString(raw)
-}

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	domaintoken "ir-agent-server/internal/domain/token"
 	"log/slog"
 	"strings"
 	"time"
@@ -110,13 +111,13 @@ func (s *Service) sendMessage(
 
 	agent := config
 	// task id / context id 沿用平台既有的随机令牌生成,不额外引入 uuid 依赖。
-	taskID := "task-" + randomToken(16)
+	taskID := "task-" + domaintoken.Random(16)
 	// 多轮会话:调用方带了 contextId 就沿用,否则新建。
 	contextID := ""
 	if message.ContextID != nil && trimSpaceNonEmpty(*message.ContextID) {
 		contextID = *message.ContextID
 	} else {
-		contextID = "ctx-" + randomToken(16)
+		contextID = "ctx-" + domaintoken.Random(16)
 	}
 
 	mapped := A2AMapRequest(message, agent, taskID)
@@ -157,7 +158,7 @@ func (s *Service) sendMessage(
 	var executorOutput *string
 
 	if execErr == nil {
-		artifactID := "artifact-" + randomToken(12)
+		artifactID := "artifact-" + domaintoken.Random(12)
 		artifact := A2AArtifactFromOutput(artifactID, agent, output)
 		task = A2ATask{
 			ID: taskID, ContextID: contextID,
@@ -301,7 +302,7 @@ func a2aFailureMessage(err error) A2AMessage {
 		}
 	}
 	return A2AMessage{
-		MessageID: "msg-" + randomToken(12),
+		MessageID: "msg-" + domaintoken.Random(12),
 		Role:      A2ARoleAgent,
 		Parts:     []A2APart{A2APartText(text)},
 	}
