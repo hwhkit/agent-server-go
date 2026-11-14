@@ -582,11 +582,19 @@
           onclick: async () => { await copyText(value); toast(t("common.copied"), "ok"); },
         }, t("common.copy")));
     };
+    // 先取解密密钥，接口文档里的示例直接填入真实值（解密失败回退占位符）。
+    let secret = "";
+    try {
+      const data = await api.get(`/agents/${encodeURIComponent(agent.slug)}/secret`);
+      secret = data.signing_secret || "";
+    } catch { /* 解密失败等：留空并提示 */ }
+    const shownSecret = secret || "<签名密钥>";
+
     const docText = [
       `base = ${base}`,
       "",
       "鉴权（二选一）:",
-      "  智能体密钥  Authorization: Bearer <签名密钥>",
+      `  智能体密钥  Authorization: Bearer ${shownSecret}`,
       "              X-Agent-Slug: <slug>  （集群子密钥再加 X-Agent-Cluster: <cluster>）",
       "  连接器令牌  Authorization: Bearer act_…  （「连接器」页签签发，可服务多智能体）",
       "",
@@ -606,15 +614,10 @@
       "",
       "curl 示例:",
       `curl -sS ${base}/claim \\`,
-      `  -H "Authorization: Bearer <签名密钥>" -H "X-Agent-Slug: ${agent.slug}" \\`,
+      `  -H "Authorization: Bearer ${shownSecret}" -H "X-Agent-Slug: ${agent.slug}" \\`,
       `  -H "Content-Type: application/json" \\`,
       `  -d '{"workerId":"w1","maxWaitSeconds":25,"capacity":4,"preferredSlugs":["${agent.slug}"]}'`,
     ].join("\n");
-    let secret = "";
-    try {
-      const data = await api.get(`/agents/${encodeURIComponent(agent.slug)}/secret`);
-      secret = data.signing_secret || "";
-    } catch { /* 解密失败等：留空并提示 */ }
     openModal(`${t("agent.connect")} · ${agent.slug}`,
       h("div", { class: "form-grid" },
         field(t("agent.slug"), copyRow(agent.slug)),
