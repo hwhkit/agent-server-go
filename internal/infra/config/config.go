@@ -1,3 +1,5 @@
+// Package config 加载平台接入配置（config/default.toml + 环境 overlay），
+// 并提供旧栈环境变量的兼容映射。
 package config
 
 // Intelligent Router 接入配置。加载层级为

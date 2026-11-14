@@ -1,3 +1,10 @@
+// Package dispatch 提供运行分发用例：准入阶梯（准入闸 → Agent 执行闸 →
+// 全局执行闸）、本机/托管执行引擎调用、远端连接器队列路由，以及统一的
+// 分发错误分类。
+//
+// 本包只依赖 domain（端口与值对象）与标准库；执行引擎经 Engine 端口注入
+// （infra/execengine 的 AgentExecutor 结构上满足），队列经 connector.TaskQueue
+// 端口注入（infra/postgres 实现）。容量闸原语与 dynamic 共用 app/gate。
 package dispatch
 
 import (
@@ -8,9 +15,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
+	"ir-agent-server/internal/app/gate"
 	"ir-agent-server/internal/domain/agent"
 	"ir-agent-server/internal/domain/connector"
 	"ir-agent-server/internal/domain/exec"
@@ -67,8 +74,8 @@ type Service struct {
 	queue       connector.TaskQueue
 	defaultSlug string
 	remote      RemotePolicy
-	globalSlots *semaphore
-	slots       slotRegistry
+	globalSlots *gate.Semaphore
+	slots       gate.Registry
 }
 
 // NewService 组装分发服务。
@@ -79,49 +86,26 @@ func NewService(cfg Config) *Service {
 		queue:       cfg.Queue,
 		defaultSlug: strings.TrimSpace(strings.ToLower(cfg.DefaultSlug)),
 		remote:      cfg.Remote,
-		globalSlots: newSemaphore(cfg.GlobalMaxConcurrency),
+		globalSlots: gate.NewSemaphore(cfg.GlobalMaxConcurrency),
 	}
 }
 
-// slotEntry 是一个智能体的双闸（准入 + 执行）。配置容量变化时整组重建，
-// 在途任务继续持有旧闸（与旧栈注册表收敛语义一致：释放归还到获取时的闸）。
-type slotEntry struct {
-	admission *semaphore
-	execution *semaphore
-	maxConc   int
-	queueCap  int
+// acquireSlot 在剩余预算内取一个许可；失败一律判 execution_timeout。
+func acquireSlot(ctx context.Context, slots *gate.Semaphore, budget time.Duration, label string) *Error {
+	if !slots.AcquireTimeout(ctx, budget) {
+		return NewError("execution_timeout",
+			fmt.Sprintf("deadline elapsed waiting for %s", label))
+	}
+	return nil
 }
 
-type slotRegistry struct {
-	mu      sync.Mutex
-	entries map[string]*slotEntry
-}
-
-func (r *slotRegistry) get(slug string, maxConc, queueCap int) *slotEntry {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.entries == nil {
-		r.entries = map[string]*slotEntry{}
+// remainingBudget 返回 timeout 扣掉已耗时后的剩余量（不会为负）。
+func remainingBudget(started time.Time, timeout time.Duration) time.Duration {
+	remaining := timeout - time.Since(started)
+	if remaining < 0 {
+		return 0
 	}
-	if entry, ok := r.entries[slug]; ok && entry.maxConc == maxConc && entry.queueCap == queueCap {
-		return entry
-	}
-	executionCapacity := maxConc
-	if executionCapacity < 1 {
-		executionCapacity = 1
-	}
-	admissionCapacity := executionCapacity + queueCap
-	if admissionCapacity < 1 {
-		admissionCapacity = 1
-	}
-	entry := &slotEntry{
-		admission: newSemaphore(admissionCapacity),
-		execution: newSemaphore(executionCapacity),
-		maxConc:   maxConc,
-		queueCap:  queueCap,
-	}
-	r.entries[slug] = entry
-	return entry
+	return remaining
 }
 
 // Execute 分发并执行一次任务。失败时返回的 error 一定是 *Error。
@@ -159,17 +143,17 @@ func (s *Service) Execute(
 		return s.executeRemote(ctx, config, task, timeout)
 	}
 
-	entry := s.slots.get(config.Slug, config.MaxConcurrency, config.QueueCapacity)
-	if !entry.admission.TryAcquire() {
+	entry := s.slots.Get(config.Slug, config.MaxConcurrency, config.QueueCapacity)
+	if !entry.Admission.TryAcquire() {
 		return nil, NewError("agent_overloaded", "Agent queue is full")
 	}
-	defer entry.admission.Release()
+	defer entry.Admission.Release()
 
-	if dispatchErr := acquireSlot(ctx, entry.execution,
+	if dispatchErr := acquireSlot(ctx, entry.Execution,
 		remainingBudget(started, timeout), "Agent execution slot"); dispatchErr != nil {
 		return nil, dispatchErr
 	}
-	defer entry.execution.Release()
+	defer entry.Execution.Release()
 
 	if dispatchErr := acquireSlot(ctx, s.globalSlots,
 		remainingBudget(started, timeout), "global execution slot"); dispatchErr != nil {

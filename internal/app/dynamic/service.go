@@ -9,6 +9,8 @@ package dynamic
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +21,7 @@ import (
 	"time"
 
 	"ir-agent-server/internal/app/callback"
+	"ir-agent-server/internal/app/gate"
 	"ir-agent-server/internal/domain/agent"
 	"ir-agent-server/internal/domain/audit"
 	"ir-agent-server/internal/domain/exec"
@@ -114,8 +117,8 @@ type Service struct {
 	callback CallbackSender
 	events   EventRecorder
 
-	globalSlots *semaphore
-	agentSlots  slotRegistry
+	globalSlots *gate.Semaphore
+	agentSlots  gate.Registry
 
 	background sync.WaitGroup
 	now        func() time.Time
@@ -136,7 +139,7 @@ func NewService(deps Deps) *Service {
 	return &Service{
 		config: deps.Config, store: deps.Store, agents: deps.Agents,
 		engine: deps.Engine, callback: deps.Callback, events: deps.Events,
-		globalSlots: newSemaphore(deps.Config.GlobalMaxConcurrency),
+		globalSlots: gate.NewSemaphore(deps.Config.GlobalMaxConcurrency),
 		now:         time.Now,
 	}
 }
@@ -162,7 +165,7 @@ type gatewayRequest struct {
 	lease     string
 	context   *platform.TaskContext
 	// slots 是本次请求获取到的容量闸（释放必须归还到同一组）。
-	slots *slotEntry
+	slots *gate.Entry
 }
 
 // Handle 处理一次动态入口请求。
@@ -237,8 +240,8 @@ func (s *Service) Handle(ctx context.Context, req Request) Response {
 	releaseSlots := func() {
 		releaseOnce.Do(func() {
 			s.globalSlots.Release()
-			request.slots.execution.Release()
-			request.slots.admission.Release()
+			request.slots.Execution.Release()
+			request.slots.Admission.Release()
 		})
 	}
 	handOff := false
@@ -535,24 +538,24 @@ func (s *Service) releaseIdempotency(ctx context.Context, request *gatewayReques
 // 队列里干等的同时把全局槽位全占走。任何一步失败都要 release 幂等租约。
 func (s *Service) acquireCapacity(ctx context.Context, started time.Time,
 	request *gatewayRequest, release func()) (bool, Response) {
-	entry := s.agentSlots.get(request.slug, request.resolved.MaxConcurrency, request.resolved.QueueCapacity)
+	entry := s.agentSlots.Get(request.slug, request.resolved.MaxConcurrency, request.resolved.QueueCapacity)
 	request.slots = entry
-	if !entry.admission.TryAcquire() {
+	if !entry.Admission.TryAcquire() {
 		release()
 		resp := s.apiError(429, "agent_overloaded", "Agent queue is full")
 		resp.RetryAfter = "1"
 		return false, resp
 	}
 	total := request.resolved.Timeout()
-	if !entry.execution.AcquireTimeout(ctx, remainingBudget(started, total, s.now)) {
-		entry.admission.Release()
+	if !entry.Execution.AcquireTimeout(ctx, remainingBudget(started, total, s.now)) {
+		entry.Admission.Release()
 		release()
 		return false, s.apiError(504, "queue_timeout",
 			"Agent did not become available before the deadline")
 	}
 	if !s.globalSlots.AcquireTimeout(ctx, remainingBudget(started, total, s.now)) {
-		entry.execution.Release()
-		entry.admission.Release()
+		entry.Execution.Release()
+		entry.Admission.Release()
 		release()
 		return false, s.apiError(504, "queue_timeout",
 			"Global execution capacity did not become available before the deadline")
@@ -992,4 +995,13 @@ func deref(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+// randomToken 返回 bytes 字节密码学随机数据的 URL-safe base64(无填充)编码。
+func randomToken(bytes int) string {
+	raw := make([]byte, bytes)
+	if _, err := rand.Read(raw); err != nil {
+		panic("crypto/rand failed: " + err.Error())
+	}
+	return base64.RawURLEncoding.EncodeToString(raw)
 }

@@ -1,3 +1,5 @@
+// Package execprocess 管理本机 Agent 子进程生命周期：限时、限流读取、
+// 进程组清理。
 package execprocess
 
 // 本机 Agent 子进程生命周期:限时、限流读取、进程组清理。

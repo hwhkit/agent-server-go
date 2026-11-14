@@ -1,3 +1,5 @@
+// Package execengine 实现执行引擎：按智能体绑定的 kind/mode 把任务派发到
+// 本机 CLI、托管 API 或远端 Pull 队列，并归一化输出与 token usage。
 package execengine
 
 // 本文件对应 rs `src/platform/executor/mod.rs` 的执行主体:

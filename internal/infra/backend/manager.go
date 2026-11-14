@@ -1,3 +1,5 @@
+// Package backend 实现 app/backend 管理端口的 PostgreSQL 持久化与热更新
+// Manager：providers 配置的加密存储、revision 校验与多副本收敛轮询。
 package backend
 
 // Manager 是 app/backend.Manager 端口的实现：互斥守护的当前配置指针 +

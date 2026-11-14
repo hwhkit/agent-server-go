@@ -92,6 +92,9 @@ func TestPushIdempotencyConcurrentBeginGrantsSingleLease(t *testing.T) {
 	}
 	key := fmt.Sprintf("it-idem-conc-%d", time.Now().UnixNano())
 	runID := key + "-run"
+	t.Cleanup(func() {
+		_, _ = db.Pool.Exec(ctx, `DELETE FROM push_idempotency WHERE key = $1`, key)
+	})
 
 	var wg sync.WaitGroup
 	newCount := 0
@@ -128,6 +131,12 @@ func TestPushIdempotencyStaleTakeoverAndRelease(t *testing.T) {
 	key := fmt.Sprintf("it-idem-stale-%d", time.Now().UnixNano())
 	runID := key + "-run"
 	hash := "h"
+	// 收尾的 Begin 会留下一行 fresh processing 租约；不清理的话每次运行
+	// 都会向共享测试库泄漏一行，直到被 SweepStaleProcessing 当作陈旧
+	// 租约收走（会让 TestSweepStaleProcessing 的计数断言翻车）。
+	t.Cleanup(func() {
+		_, _ = db.Pool.Exec(ctx, `DELETE FROM push_idempotency WHERE key = $1`, key)
+	})
 
 	if _, err := store.Begin(ctx, key, runID, hash); err != nil {
 		t.Fatalf("begin: %v", err)
@@ -172,6 +181,13 @@ func TestSweepStaleProcessing(t *testing.T) {
 	store, err := postgres.NewPushIdempotencyStore(ctx, db)
 	if err != nil {
 		t.Fatalf("store: %v", err)
+	}
+
+	// 共享测试库可能残留此前运行遗留的陈旧 processing 行（本包其它用例
+	// 各留一行且从不清理）。先清扫一次，把 removed 计数断言隔离到本用例
+	// 种下的行上；断言语义不变——本次清扫删掉且仅删掉本用例的陈旧行。
+	if _, err := store.SweepStaleProcessing(ctx); err != nil {
+		t.Fatalf("pre-clean sweep: %v", err)
 	}
 
 	old := time.Now().Add(-2 * time.Hour).Unix()
