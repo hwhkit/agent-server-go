@@ -622,7 +622,13 @@
       h("div", { class: "form-grid" },
         field(t("agent.slug"), copyRow(agent.slug)),
         field(t("agent.connect.base"), copyRow(base)),
-        field(t("agent.secret"), copyRow(secret)),
+        // 签名密钥：接口文档已含可整段复制的真实密钥，独立复制按钮取消。
+        field(t("agent.secret"), (() => {
+          const input = h("input", { class: "mono", type: "text", readonly: true,
+            style: { flex: "1", minWidth: "0" } });
+          input.value = secret;
+          return input;
+        })()),
         field(t("agent.connect.doc"),
           h("div", { class: "row", style: { gap: "8px", alignItems: "flex-start" } },
             h("pre", { class: "api-doc" }, docText),
