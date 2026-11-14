@@ -469,7 +469,7 @@
           }),
         }, t("common.delete")))));
     if (!rows.length) rows.push(emptyRow(columns.length));
-    container.append(panel(t("pos.title"), null,
+    container.append(panel(null, null,
       h("div", { class: "row mb" },
         h("button", { class: "btn primary", onclick: () => positionEditor(null) }, `+ ${t("pos.new")}`)),
       table(columns, rows)));
@@ -635,7 +635,7 @@
       onclick: () => importAgentsModal(),
     }, `⬆ ${t("agent.import")}`);
     body.append(panel(null, null,
-      h("div", { class: "row mb" }, newBtn, queryInput, showDisabled, apply,
+      h("div", { class: "row mb" }, queryInput, showDisabled, apply, newBtn,
         h("div", { class: "spacer" }), exportBtn("json"), exportBtn("csv"), importBtn),
       listWrap));
 
@@ -799,7 +799,7 @@
             h("div", { class: "muted small mb" }, t("prov.assignments")), assignmentChips)
           : null);
     });
-    body.append(panel(t("agent.tab.providers"),
+    body.append(panel(null,
       canEdit ? t("prov.sub") : `${t("prov.sub")} ${t("prov.readonly")}`,
       cards.length ? h("div", { class: "grid3" }, cards) : h("div", { class: "empty" }, t("common.empty"))));
   };
@@ -891,7 +891,7 @@
         }),
       }, t("conn.revoke")))));
     if (!rows.length) rows.push(emptyRow(columns.length));
-    body.append(panel(t("agent.tab.connectors"), t("conn.sub"),
+    body.append(panel(null, t("conn.sub"),
       h("div", { class: "row mb" },
         h("button", { class: "btn primary", onclick: issueConnectorModal }, `+ ${t("conn.issue")}`)),
       table(columns, rows)));
@@ -1468,7 +1468,7 @@
   const pager = (total, page, pageSize, load) => {
     const pages = Math.max(1, Math.ceil(total / pageSize));
     if (total <= 0) return null; // 空列表不渲染 total 0
-    if (pages <= 1) return h("div", { class: "muted small mt" }, `total ${total}`);
+    if (pages <= 1) return null; // 单页无翻页价值，total 不显示
     return h("div", { class: "row mt" },
       h("span", { class: "muted small" }, `total ${total} · ${page}/${pages}`),
       h("button", { class: "btn sm", disabled: page <= 1, onclick: () => load(page - 1) }, "←"),
