@@ -6,10 +6,10 @@ toolchain go1.26.8
 
 require (
 	github.com/go-chi/chi/v5 v5.3.0
-	github.com/hwhkit/hwhkit-go/config v0.0.0
-	github.com/hwhkit/hwhkit-go/core v0.0.0
-	github.com/hwhkit/hwhkit-go/hwhkit v0.0.0
-	github.com/hwhkit/hwhkit-go/observability v0.0.0
+	github.com/hwhkit/hwhkit-go/config v0.2.0
+	github.com/hwhkit/hwhkit-go/core v0.2.0
+	github.com/hwhkit/hwhkit-go/hwhkit v0.2.0
+	github.com/hwhkit/hwhkit-go/observability v0.2.0
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/pelletier/go-toml/v2 v2.2.2
 	github.com/prometheus/client_golang v1.20.5
@@ -30,7 +30,7 @@ require (
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
-	github.com/hwhkit/hwhkit-go/buildinfo v0.0.0 // indirect
+	github.com/hwhkit/hwhkit-go/buildinfo v0.2.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
@@ -65,12 +65,4 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260803160001-6ac0973c030d // indirect
 	google.golang.org/grpc v1.83.2 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
-)
-
-replace (
-	github.com/hwhkit/hwhkit-go/buildinfo => ../.hwhkit-go-src/buildinfo
-	github.com/hwhkit/hwhkit-go/config => ../.hwhkit-go-src/config
-	github.com/hwhkit/hwhkit-go/core => ../.hwhkit-go-src/core
-	github.com/hwhkit/hwhkit-go/hwhkit => ../.hwhkit-go-src/hwhkit
-	github.com/hwhkit/hwhkit-go/observability => ../.hwhkit-go-src/observability
 )

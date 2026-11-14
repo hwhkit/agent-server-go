@@ -4,7 +4,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help bootstrap-hwhkit build release dev run start stop restart ps check test race test-pg \
+.PHONY: help build release dev run start stop restart ps check test race test-pg \
         lint lint-shell fmt bench verify test-deploy-scripts ci clean \
         deploy-check deploy deploy-build deploy-upload deploy-restart deploy-pi deploy-full \
         logs logs-follow status health ssh db-shell
@@ -20,9 +20,6 @@ ENV_DEV         ?= .env.dev
 
 # go.mod intentionally resolves the unpublished hwhkit modules from this sibling
 # checkout.  Keep the exact commit here so local and CI builds use identical code.
-HWHKIT_ROOT       := $(abspath ../.hwhkit-go-src)
-HWHKIT_REPOSITORY ?= https://github.com/hwhkit/hwhkit-go
-HWHKIT_REF        ?= 5e35b70bd062c600f265758955beff8b3d27299a
 
 VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || printf 'dev')
 GIT_SHA    ?= $(shell git rev-parse HEAD 2>/dev/null || printf 'unknown')
@@ -50,7 +47,6 @@ REMOTE_HEALTH_INTERVAL ?= 2
 PI_NPM_PACKAGE ?=
 DEPLOY_DRY_RUN ?= 0
 
-BOOTSTRAP_SCRIPT      := scripts/bootstrap-hwhkit.sh
 DEPLOY_UPLOAD_SCRIPT  := scripts/deploy-upload.sh
 DEPLOY_RESTART_SCRIPT := scripts/deploy-restart.sh
 DEPLOY_PI_SCRIPT      := scripts/deploy-pi.sh
@@ -65,7 +61,6 @@ help: ## 显示帮助信息
 	@echo "ir-agent-server-go 常用命令"
 	@echo ""
 	@echo "  开发:"
-	@echo "    make bootstrap-hwhkit 固定版本初始化/校验 hwhkit 源码"
 	@echo "    make dev          编译并前台运行（自动加载可选 .env.dev）"
 	@echo "    make build        编译本机二进制"
 	@echo "    make release      编译精简的本机 release 二进制"
@@ -104,18 +99,16 @@ help: ## 显示帮助信息
 	@echo "    make db-shell     进入 PostgreSQL shell"
 
 # ─── 开发 ────────────────────────────────────────────────────────────
-bootstrap-hwhkit: ## 初始化/校验固定版本 hwhkit sibling checkout
-	sh $(BOOTSTRAP_SCRIPT) $(call shell_quote,$(HWHKIT_ROOT)) $(call shell_quote,$(HWHKIT_REPOSITORY)) $(call shell_quote,$(HWHKIT_REF))
 
-build: bootstrap-hwhkit ## 编译本机二进制
+build: ## 编译本机二进制
 	@mkdir -p $(BUILD_DIR)
 	$(GO) build -trimpath -ldflags "$(BUILD_LDFLAGS)" -o $(BUILD_ARTIFACT) ./cmd/ir-agent-server
 
-release: bootstrap-hwhkit ## 编译精简的本机 release 二进制
+release: ## 编译精简的本机 release 二进制
 	@mkdir -p $(BUILD_DIR)
 	$(GO) build -trimpath -ldflags "$(RELEASE_LDFLAGS)" -o $(BUILD_ARTIFACT) ./cmd/ir-agent-server
 
-dev: bootstrap-hwhkit ## 编译并运行（自动加载可选 .env.dev）
+dev: ## 编译并运行（自动加载可选 .env.dev）
 	@[ -f $(ENV_DEV) ] && set -a && . ./$(ENV_DEV) && set +a; $(GO) run ./cmd/ir-agent-server
 
 run: dev ## dev 的别名（前台）
@@ -155,20 +148,20 @@ ps: ## 本地服务进程与就绪状态
 		curl -s http://$(LOCAL_ADDR)/health/ready || true; echo; \
 	else echo "未运行（make start 启动）"; fi
 
-check: bootstrap-hwhkit ## 编译全部包和测试，但不运行测试
+check: ## 编译全部包和测试，但不运行测试
 	$(GO) test -run '^$$' ./...
 
-test: bootstrap-hwhkit ## 运行全部测试
+test: ## 运行全部测试
 	$(GO) test -count=1 ./...
 
-race: bootstrap-hwhkit ## 使用 race detector 运行全部测试
+race: ## 使用 race detector 运行全部测试
 	CGO_ENABLED=1 $(GO) test -race -count=1 ./...
 
-test-pg: bootstrap-hwhkit ## 使用隔离 PostgreSQL 测试库运行测试
+test-pg: ## 使用隔离 PostgreSQL 测试库运行测试
 	@test -n "$(TEST_DATABASE_URL)" || { echo "错误: 请设置 TEST_DATABASE_URL"; exit 1; }
 	TEST_DATABASE_URL=$(call shell_quote,$(TEST_DATABASE_URL)) $(GO) test -count=1 ./...
 
-lint: bootstrap-hwhkit lint-shell ## gofmt 检查 + go vet + ShellCheck
+lint: lint-shell ## gofmt 检查 + go vet + ShellCheck
 	@files="$$(gofmt -l $$(git ls-files '*.go'))"; test -z "$$files" || { echo "以下文件需要 gofmt:"; echo "$$files"; exit 1; }
 	$(GO) vet ./...
 
@@ -178,10 +171,10 @@ lint-shell: ## 静态检查部署脚本（需 ShellCheck）
 fmt: ## 格式化全部已跟踪 Go 文件
 	gofmt -w $$(git ls-files '*.go')
 
-bench: bootstrap-hwhkit ## 运行 Go benchmark
+bench: ## 运行 Go benchmark
 	$(GO) test -run '^$$' -bench . ./internal/...
 
-verify: bootstrap-hwhkit ## 校验模块下载内容与 go.mod/go.sum 整洁性
+verify: ## 校验模块下载内容与 go.mod/go.sum 整洁性
 	$(GO) mod verify
 	$(GO) mod tidy -diff
 
@@ -201,7 +194,7 @@ clean: ## 清理构建产物和项目内 Go 缓存
 	rm -rf $(BUILD_DIR) .gocache
 
 # ─── 部署 ────────────────────────────────────────────────────────────
-deploy-build: bootstrap-hwhkit ## 交叉编译 Linux ARM64 静态二进制
+deploy-build: ## 交叉编译 Linux ARM64 静态二进制
 	@mkdir -p $(BUILD_DIR)
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build -trimpath -ldflags "$(RELEASE_LDFLAGS)" -o $(DEPLOY_ARTIFACT) ./cmd/ir-agent-server
 	@sha="$$(sh scripts/file-sha256.sh $(call shell_quote,$(DEPLOY_ARTIFACT)))"; \
