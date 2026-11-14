@@ -208,7 +208,6 @@ func schemaStatements() []string {
 			cluster_id TEXT NOT NULL,
 			denied_at  TEXT NOT NULL,
 			PRIMARY KEY (agent_slug, cluster_id))`,
-		`ALTER TABLE agent_pull_workers ALTER COLUMN connector_id TYPE TEXT`,
 		`CREATE TABLE IF NOT EXISTS agent_pull_workers (
 			worker_id         TEXT NOT NULL,
 			connector_id      TEXT NOT NULL,
@@ -218,6 +217,7 @@ func schemaStatements() []string {
 			last_heartbeat_ns BIGINT NOT NULL,
 			online            BOOLEAN NOT NULL DEFAULT true,
 			PRIMARY KEY(worker_id, connector_id))`,
+		`ALTER TABLE agent_pull_workers ALTER COLUMN connector_id TYPE TEXT`,
 		`CREATE TABLE IF NOT EXISTS agent_pull_connectors (
 			id             BIGSERIAL PRIMARY KEY,
 			name           TEXT NOT NULL UNIQUE,
