@@ -709,7 +709,6 @@
       { value: "online", label: t("agent.status.online") },
       { value: "offline", label: t("agent.status.offline") },
     ], "");
-    const apply = h("button", { class: "btn", onclick: () => load(1) }, t("common.filter"));
     const newBtn = h("button", { class: "btn primary", onclick: () => agentEditor(null, positions) },
       `+ ${t("agent.new")}`);
     // 批量迁移入口（B1）：导出 JSON（迁移，含密文）/CSV（观察），导入粘贴 JSON。
@@ -733,7 +732,7 @@
       onclick: () => importAgentsModal(),
     }, `⬆ ${t("agent.import")}`);
     body.append(panel(null, null,
-      h("div", { class: "row mb" }, queryInput, connSelect, apply, newBtn,
+      h("div", { class: "row mb" }, queryInput, connSelect, newBtn,
         h("div", { class: "spacer" }), exportBtn("json"), importBtn),
       listWrap));
 
@@ -752,6 +751,15 @@
       listWrap.append(...[table(columns, rows), pager(data.total || 0, page, pageSize, load)].filter(Boolean));
     };
     connSelect.addEventListener("change", () => load(1));
+    // 标识/名称搜索：输入防抖 300ms 自动触发服务端查询——无需筛选按钮。
+    let searchTimer = null;
+    queryInput.addEventListener("input", () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => load(1), 300);
+    });
+    queryInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") { clearTimeout(searchTimer); load(1); }
+    });
     await load(1);
   };
 
@@ -1108,7 +1116,6 @@
       { value: "single", label: t("team.filter.single") },
       { value: "multi", label: t("team.filter.multi") },
     ], "");
-    const apply = h("button", { class: "btn", onclick: () => renderFiltered() }, t("common.filter"));
     const renderRows = (list) => {
     const rows = list.map((team) => h("tr", {},
       h("td", { class: "mono" }, team.id),
@@ -1153,12 +1160,14 @@
     };
     const renderFiltered = () => renderRows(filtered());
     const listWrap = h("div");
+    // 文本即时过滤；下拉 change 即刷——无需筛选按钮。
     for (const el of [queryInput, statusSelect, stepsSelect]) {
+      el.addEventListener("input", () => renderFiltered());
       el.addEventListener("change", () => renderFiltered());
     }
     container.append(panel(null, null,
       h("div", { class: "row mb" },
-        queryInput, statusSelect, stepsSelect, apply,
+        queryInput, statusSelect, stepsSelect,
         h("button", { class: "btn primary", onclick: () => teamEditor(null) }, `+ ${t("team.new")}`)),
       listWrap));
     renderFiltered();
