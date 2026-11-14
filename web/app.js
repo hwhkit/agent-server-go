@@ -281,7 +281,7 @@
     { group: "business", route: "/dashboard", icon: "◈", key: "nav.dashboard" },
     { group: "business", route: "/agents", icon: "⬡", key: "nav.agents" },
     { group: "business", route: "/teams", icon: "⬢", key: "nav.teams", badge: (b) => b.activeTeamRuns },
-    { group: "business", route: "/logs", icon: "≣", key: "nav.logs", badge: (b) => b.runsToday },
+    { group: "business", route: "/logs", icon: "≣", key: "nav.logs" },
     { group: "system", route: "/users", icon: "☖", key: "nav.users", adminOnly: true },
     { group: "system", route: "/settings", icon: "⚙", key: "nav.settings" },
   ];
