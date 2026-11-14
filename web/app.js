@@ -152,8 +152,20 @@
     if (Number.isNaN(date.getTime())) return String(value);
     return date.toLocaleString(prefs.lang === "zh" ? "zh-CN" : "en-US", { hour12: false });
   };
-  const fmtDuration = (ms) => {
-    if (ms === null || ms === undefined) return "—";
+  // copyText 写剪贴板；非安全上下文（http 远程部署）退回 execCommand。
+  const copyText = async (text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const ta = h("textarea", { style: { position: "fixed", opacity: "0" } });
+      ta.value = text;
+      document.body.append(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+    }
+  };
+  const fmtDuration = (ms) => {    if (ms === null || ms === undefined) return "—";
     if (ms < 1000) return `${ms}ms`;
     return `${(ms / 1000).toFixed(1)}s`;
   };
@@ -396,27 +408,26 @@
       onlineWorkers: snap.onlineWorkers || 0,
     };
     const totals = snap.runsToday || {};
-    const stat = (label, value, sub, cls) =>
+    const stat = (label, value, sub, cls, labelExtra) =>
       h("div", { class: "stat-card" },
-        h("div", { class: "label" }, label),
-        h("div", { class: `value ${cls || ""}` }, String(value)),
-        sub ? h("div", { class: "sub" }, sub) : null);
+        h("div", { class: "label" }, label, labelExtra || null),
+        h("div", { class: `value ${cls || ""}`, title: String(value) }, String(value)),
+        sub ? h("div", { class: "sub", title: sub }, sub) : null);
+    // 版本串拆两行展示：`v0.1-34` / `gaa7b9f8-dirty`，避免长串截断。
+    const [versionMain, versionRest] =
+      (/^(v?\d+(?:\.\d+)*(?:-\d+)?)-(.+)$/.exec(snap.version || "") || [null, snap.version || "—", null]).slice(1);
     container.append(
       h("div", { class: "stat-grid mb" },
-        stat(t("dash.version"), snap.version || "—"),
-        stat(t("dash.database"), snap.databaseOk ? "✓" : "✗",
-          snap.databaseOk ? t("dash.dbOk") : t("dash.dbDown"), snap.databaseOk ? "ok" : "err"),
-        stat(t("dash.onlineWorkers"), snap.onlineWorkers ?? 0),
+        stat(t("dash.version"), versionMain, versionRest, "mono"),
+        stat(t("dash.onlineWorkers"), snap.onlineWorkers ?? 0,
+          `${t("dash.workersTotal")} ${snap.workersTotal ?? 0}`),
         stat(t("dash.queue"), `${(snap.queue && snap.queue.Queued) || 0} / ${(snap.queue && snap.queue.Leased) || 0}`,
           `${t("dash.queue.queued")} / ${t("dash.queue.leased")}`),
-        stat(t("dash.activeTeamRuns"), snap.activeTeamRuns ?? 0),
+        stat(t("dash.activeTeamRuns"), snap.activeTeamRuns ?? 0,
+          `${t("status.running")} ${snap.teamRunsRunning ?? 0} · ${t("status.queued")} ${snap.teamRunsQueued ?? 0}`),
         stat(t("dash.runsToday"), sumTotals(totals),
-          `${t("dash.completed")} ${totals.Completed || 0} · ${t("dash.failed")} ${totals.Failed || 0}`),
-        stat(t("dash.tokens"), formatTokens(totals.TotalTokens),
-          `in ${formatTokens(totals.InputTokens)} / out ${formatTokens(totals.OutputTokens)}`)),
-      panel(t("dash.serverTime"), null,
-        h("div", { class: "kv" },
-          h("span", { class: "k" }, t("dash.serverTime")), h("span", { class: "v mono" }, fmtTime(snap.serverTime)))));
+          `${t("dash.completed")} ${totals.Completed || 0} · ${t("dash.failed")} ${totals.Failed || 0}`,
+          null, h("span", { class: "label-time mono", title: fmtTime(snap.serverTime) }, fmtTime(snap.serverTime)))));
     updateBadges();
   };
 
@@ -424,12 +435,6 @@
     if (!totals) return 0;
     return (totals.Completed || 0) + (totals.Failed || 0) + (totals.Canceled || 0) +
       (totals.InProgress || 0) + (totals.Queued || 0);
-  };
-  const formatTokens = (value) => {
-    const n = Number(value || 0);
-    if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
-    if (n >= 1e3) return `${(n / 1e3).toFixed(1)}k`;
-    return String(n);
   };
 
   // -----------------------------------------------------------------------
@@ -563,6 +568,70 @@
   };
 
   // ---- 智能体列表 ----
+  // 接入弹窗：把智能体绑定到执行节点要复制/核对的三样东西——
+  // 接入地址、签名密钥、接口契约（内容与 /agent-api/v1 实现对齐）。
+  const connectModal = async (agent) => {
+    const base = `${location.origin}/agent-api/v1`;
+    const copyRow = (value) => {
+      const input = h("input", { class: "mono", type: "text", readonly: true,
+        style: { flex: "1", minWidth: "0" } });
+      input.value = value;
+      return h("div", { class: "row", style: { gap: "8px" } }, input,
+        h("button", {
+          class: "btn sm", type: "button",
+          onclick: async () => { await copyText(value); toast(t("common.copied"), "ok"); },
+        }, t("common.copy")));
+    };
+    const docText = [
+      `base = ${base}`,
+      "",
+      "鉴权（二选一）:",
+      "  智能体密钥  Authorization: Bearer <签名密钥>",
+      "              X-Agent-Slug: <slug>  （集群子密钥再加 X-Agent-Cluster: <cluster>）",
+      "  连接器令牌  Authorization: Bearer act_…  （「连接器」页签签发，可服务多智能体）",
+      "",
+      "POST /claim  长轮询认领任务",
+      `  {"workerId":"w1","maxWaitSeconds":25,"inFlight":0,"capacity":4,"preferredSlugs":["${agent.slug}"]}`,
+      '  200 → {"schemaVersion":"agent-api.claim.v1","runId":"…","agentSlug":"…","input":{…},',
+      '         "leaseExpireAt":"…","renewAfterSeconds":…}',
+      "  204 → 暂无任务（X-Empty-Reason 头说明原因）",
+      "POST /renew  续租（headers: X-Agent-Run-ID / X-Agent-Worker-ID）",
+      "POST /complete  回传结果（headers 同上）",
+      '  {"status":"succeeded|failed","payload":{…},"error":{"code":"…","message":"…"},',
+      '   "usage":{"inputTokens":0,"outputTokens":0,"totalTokens":0},"metrics":{"durationMs":0}}',
+      "POST /runs  机器侧直接提交运行结果（幂等）",
+      `  {"slug":"${agent.slug}","status":"succeeded|failed","runId":"可选","payload":{…},"input":{…}}`,
+      "POST /heartbeat  worker 心跳（维持连接状态，上报能力域）",
+      `  {"workerId":"w1","inFlight":0,"capacity":4,"capabilities":{"slugs":["${agent.slug}"],"version":"…"}}`,
+      "",
+      "curl 示例:",
+      `curl -sS ${base}/claim \\`,
+      `  -H "Authorization: Bearer <签名密钥>" -H "X-Agent-Slug: ${agent.slug}" \\`,
+      `  -H "Content-Type: application/json" \\`,
+      `  -d '{"workerId":"w1","maxWaitSeconds":25,"capacity":4,"preferredSlugs":["${agent.slug}"]}'`,
+    ].join("\n");
+    let secret = "";
+    try {
+      const data = await api.get(`/agents/${encodeURIComponent(agent.slug)}/secret`);
+      secret = data.signing_secret || "";
+    } catch { /* 解密失败等：留空并提示 */ }
+    openModal(`${t("agent.connect")} · ${agent.slug}`,
+      h("div", { class: "form-grid" },
+        field(t("agent.slug"), copyRow(agent.slug)),
+        field(t("agent.connect.base"), copyRow(base)),
+        field(t("agent.secret"), copyRow(secret)),
+        field(t("agent.connect.doc"),
+          h("div", { class: "row", style: { gap: "8px", alignItems: "flex-start" } },
+            h("pre", { class: "api-doc" }, docText),
+            h("button", {
+              class: "btn sm", type: "button",
+              onclick: async () => { await copyText(docText); toast(t("common.copied"), "ok"); },
+            }, t("agent.connect.copyDoc"))),
+          { full: true })),
+      [{ label: t("common.close"), onClick: (close) => close() }],
+      { wide: true });
+  };
+
   const agentsTab = async (body) => {
     const { positions } = await loadCatalog();
     // 连接状态数据源：该 slug 名下是否有活跃 worker 心跳（remote_pull
@@ -578,20 +647,35 @@
     const columns = [
       { label: t("agent.slug") }, { label: t("agent.name") }, { label: t("agent.status") },
       { label: t("agent.secret") },
-      { label: t("common.enabled") }, { label: t("common.revision") }, { label: t("common.actions") },
+      { label: t("common.enabled") }, { label: t("common.actions") },
     ];
     const renderAgentRow = (a) => h("tr", {},
-      h("td", { class: "mono" }, a.slug),
+      h("td", {}, h("button", {
+        class: "slug-btn mono", type: "button", title: t("agent.connect"),
+        onclick: () => connectModal(a),
+      }, a.slug)),
       h("td", {}, a.name, a.description ? h("div", { class: "muted small" }, a.description) : null),
       h("td", {}, workerSlugs.has(a.slug)
         ? h("span", { class: "status completed" }, t("agent.status.online"))
         : h("span", { class: "status offline" }, t("agent.status.offline"))),
-      h("td", {}, a.signing_secret_configured
-        ? h("span", { class: "ok-text small" }, `🔒 ${t("agent.secret.configured")}`)
+      h("td", { class: "nowrap" }, a.signing_secret_configured
+        ? [h("span", { class: "ok-text small" }, `🔒 ${t("agent.secret.configured")}`), " ",
+          h("button", {
+            class: "btn sm", type: "button",
+            // 从 /agents/{slug}/secret 取解密后的签名密钥并写入剪贴板。
+            onclick: async () => {
+              try {
+                const data = await api.get(`/agents/${encodeURIComponent(a.slug)}/secret`);
+                await copyText(data.signing_secret);
+                toast(t("common.copied"), "ok");
+              } catch (err) { reportError(err); }
+            },
+          }, t("common.copy"))]
         : h("span", { class: "muted small" }, "—")),
       h("td", {}, a.enabled ? h("span", { class: "dot on" }) : h("span", { class: "dot off" })),
-      h("td", { class: "muted" }, String(a.revision)),
       h("td", { class: "nowrap" },
+        h("button", { class: "btn sm", onclick: () => connectModal(a) }, t("agent.connect")),
+        " ",
         h("button", { class: "btn sm", onclick: () => agentEditor(a, positions) }, t("common.edit")),
         " ",
         h("button", {
@@ -610,7 +694,6 @@
     const listWrap = h("div");
     const queryInput = textInput("", { placeholder: `${t("agent.slug")} / ${t("agent.name")}`,
       style: { width: "180px" } });
-    const showDisabled = checkbox(false, t("common.disabled"));
     const apply = h("button", { class: "btn", onclick: () => load(1) }, t("common.filter"));
     const newBtn = h("button", { class: "btn primary", onclick: () => agentEditor(null, positions) },
       `+ ${t("agent.new")}`);
@@ -635,19 +718,20 @@
       onclick: () => importAgentsModal(),
     }, `⬆ ${t("agent.import")}`);
     body.append(panel(null, null,
-      h("div", { class: "row mb" }, queryInput, showDisabled, apply, newBtn,
-        h("div", { class: "spacer" }), exportBtn("json"), exportBtn("csv"), importBtn),
+      h("div", { class: "row mb" }, queryInput, apply, newBtn,
+        h("div", { class: "spacer" }), exportBtn("json"), importBtn),
       listWrap));
 
     const load = async (page) => {
       const params = new URLSearchParams({ limit: String(pageSize), offset: String((page - 1) * pageSize) });
       if (queryInput.value.trim()) params.set("query", queryInput.value.trim());
-      if (showDisabled.checked) params.set("include_disabled", "true");
+      // 始终包含停用智能体：启用列圆点已区分状态，停用项保持可编辑可恢复。
+      params.set("include_disabled", "true");
       const data = await api.get(`/agents?${params}`);
       clear(listWrap);
       const rows = (data.items || []).map(renderAgentRow);
       if (!rows.length) rows.push(emptyRow(columns.length));
-      listWrap.append(table(columns, rows), pager(data.total || 0, page, pageSize, load));
+      listWrap.append(...[table(columns, rows), pager(data.total || 0, page, pageSize, load)].filter(Boolean));
     };
     await load(1);
   };
@@ -1401,7 +1485,16 @@
           h("td", { class: "muted" }, "▸"),
           h("td", { class: "mono small" }, run.RunID,
             run.TeamRunID ? h("span", { class: "chip accent", title: run.TeamRunID }, "team") : null),
-          h("td", { class: "mono" }, run.AgentSlug),
+          h("td", {}, run.AgentSlug
+            ? h("button", {
+              class: "slug-btn mono", type: "button", title: t("agent.connect"),
+              // 行本身可点击展开详情；标识按钮只负责弹接入框。
+              onclick: (event) => {
+                event.stopPropagation();
+                connectModal({ slug: run.AgentSlug });
+              },
+            }, run.AgentSlug)
+            : "—"),
           h("td", {}, run.PositionCode ? h("span", { class: "chip" }, run.PositionCode) : "—"),
           h("td", {}, statusChip(String(run.Status))),
           h("td", { class: "muted" }, String(run.Attempt ?? 1)),
@@ -1410,8 +1503,7 @@
         rows.push(row);
       }
       if (!rows.length) rows.push(emptyRow(columns.length));
-      listWrap.append(table(columns, rows),
-        pager(data.total || 0, page, 30, load));
+      listWrap.append(...[table(columns, rows), pager(data.total || 0, page, 30, load)].filter(Boolean));
     };
     await load(1);
   };
@@ -1566,7 +1658,7 @@
         rows.push(row);
       }
       if (!rows.length) rows.push(emptyRow(columns.length));
-      listWrap.append(table(columns, rows), pager(data.total || 0, page, 30, load));
+      listWrap.append(...[table(columns, rows), pager(data.total || 0, page, 30, load)].filter(Boolean));
     };
     await load(1);
   };
@@ -1950,13 +2042,13 @@
       h("div", { class: "brand" },
         h("div", { class: "brand-name" }, t("app.short"))),
       nav,
-      h("div", { class: "sidebar-footer" }, collapseBtn));
-
-    const topbar = h("header", { class: "topbar" },
-      h("div", { class: "topbar-title", id: "topbar-title" }, ""),
-      h("div", { class: "topbar-user" },
+      // 当前用户固定在侧栏左下角（折叠时隐藏文本块）。
+      h("div", { class: "sidebar-user" },
         h("span", { class: "chip accent" }, t(`user.role.${state.session.role}`)),
-        h("span", { class: "mono" }, state.session.username),
+        h("span", { class: "mono sidebar-user-name", title: state.session.username }, state.session.username)),
+      h("div", { class: "sidebar-footer" },
+        collapseBtn,
+        h("div", { class: "spacer" }),
         h("button", {
           class: "btn sm",
           onclick: async () => {
@@ -1967,6 +2059,9 @@
             renderApp();
           },
         }, t("user.logout"))));
+
+    const topbar = h("header", { class: "topbar" },
+      h("div", { class: "topbar-title", id: "topbar-title" }, ""));
 
     const content = h("main", { class: "content", id: "content" });
     root.append(h("div", { class: "shell" }, sidebar,

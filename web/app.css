@@ -152,7 +152,7 @@ code, pre, .mono {
 .brand-mark::before { left: 4px; right: 4px; top: 50%; height: 2px; transform: translateY(-50%); }
 .brand-mark::after { top: 4px; bottom: 4px; left: 50%; width: 2px; transform: translateX(-50%); }
 
-.brand-name { font-weight: 700; letter-spacing: 0.4px; white-space: nowrap; }
+.brand-name { font-weight: 800; letter-spacing: 0.4px; white-space: nowrap; }
 .brand-sub { display: block; font-size: 11px; color: var(--muted); font-weight: 400; }
 .sidebar.collapsed .brand-name { display: none; }
 
@@ -239,7 +239,18 @@ code, pre, .mono {
 }
 
 .topbar-title { font-size: 17px; font-weight: 700; flex: 1; }
-.topbar-user { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 8px; }
+
+.sidebar-user {
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  display: flex; flex-direction: column; align-items: flex-start; gap: 5px;
+  min-width: 0; overflow: hidden;
+}
+.sidebar-user .sidebar-user-name {
+  font-size: 11.5px; min-width: 0; max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sidebar.collapsed .sidebar-user { display: none; }
 
 .content { padding: 22px; flex: 1; min-width: 0; }
 
@@ -408,12 +419,53 @@ table.list tr.detail-row td { background: var(--bg); padding: 14px 16px; }
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 16px;
+  min-width: 0;
 }
-.stat-card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.8px; }
-.stat-card .value { font-size: 27px; font-weight: 700; margin-top: 6px; }
-.stat-card .sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.stat-card .label {
+  color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.8px;
+  display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+}
+.stat-card .label .label-time {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 12px; letter-spacing: normal; text-transform: none;
+}
+.stat-card .value {
+  font-size: 27px; font-weight: 700; margin-top: 6px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.stat-card .sub {
+  color: var(--muted); font-size: 12px; margin-top: 4px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .stat-card .value.ok { color: var(--ok); }
 .stat-card .value.err { color: var(--err); }
+
+/* 接入弹窗：接口契约文档块 */
+.slug-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 1px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.slug-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+.api-doc {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre;
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
 
 /* ---------- 三列卡片栅格（执行后端） ---------- */
 .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
