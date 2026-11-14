@@ -1095,7 +1095,22 @@
       { label: t("team.maxRuns") }, { label: t("common.enabled") },
       { label: t("common.revision") }, { label: t("common.actions") },
     ];
-    const rows = (items || []).map((team) => h("tr", {},
+    // 多字段筛选（客户端）：名称/ID 文本 + 状态 + 步骤数；change 即刷。
+    const queryInput = textInput("", { placeholder: `${t("team.id")} / ${t("team.name")}`,
+      style: { width: "160px" } });
+    const statusSelect = selectInput([
+      { value: "", label: t("common.all") },
+      { value: "enabled", label: t("common.enabled") },
+      { value: "disabled", label: t("common.disabled") },
+    ], "");
+    const stepsSelect = selectInput([
+      { value: "", label: t("common.all") },
+      { value: "single", label: t("team.filter.single") },
+      { value: "multi", label: t("team.filter.multi") },
+    ], "");
+    const apply = h("button", { class: "btn", onclick: () => renderFiltered() }, t("common.filter"));
+    const renderRows = (list) => {
+    const rows = list.map((team) => h("tr", {},
       h("td", { class: "mono" }, team.id),
       h("td", {}, team.name, team.description ? h("div", { class: "muted small" }, team.description) : null),
       h("td", {}, dagPreview(team.steps || [])),
@@ -1120,10 +1135,33 @@
           }),
         }, t("common.delete")))));
     if (!rows.length) rows.push(emptyRow(columns.length));
+    listWrap.replaceChildren(table(columns, rows));
+    };
+    const filtered = () => {
+      let list = items || [];
+      const q = queryInput.value.trim().toLowerCase();
+      if (q) list = list.filter((team) =>
+        String(team.id).toLowerCase().includes(q) ||
+        String(team.name || "").toLowerCase().includes(q) ||
+        String(team.description || "").toLowerCase().includes(q));
+      if (statusSelect.value === "enabled") list = list.filter((team) => team.enabled);
+      else if (statusSelect.value === "disabled") list = list.filter((team) => !team.enabled);
+      const stepCount = (team) => (team.steps || []).length;
+      if (stepsSelect.value === "single") list = list.filter((team) => stepCount(team) === 1);
+      else if (stepsSelect.value === "multi") list = list.filter((team) => stepCount(team) >= 2);
+      return list;
+    };
+    const renderFiltered = () => renderRows(filtered());
+    const listWrap = h("div");
+    for (const el of [queryInput, statusSelect, stepsSelect]) {
+      el.addEventListener("change", () => renderFiltered());
+    }
     container.append(panel(null, null,
       h("div", { class: "row mb" },
+        queryInput, statusSelect, stepsSelect, apply,
         h("button", { class: "btn primary", onclick: () => teamEditor(null) }, `+ ${t("team.new")}`)),
-      table(columns, rows)));
+      listWrap));
+    renderFiltered();
   };
 
   // 拓扑分层预览（v1：Kahn 分层，列间箭头；环则平铺展示）。
