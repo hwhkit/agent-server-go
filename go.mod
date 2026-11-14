@@ -10,7 +10,6 @@ require (
 	github.com/hwhkit/hwhkit-go/core v0.2.0
 	github.com/hwhkit/hwhkit-go/hwhkit v0.2.0
 	github.com/hwhkit/hwhkit-go/observability v0.2.0
-	github.com/hwhkit/hwhkit-go/retry v0.3.1
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/pelletier/go-toml/v2 v2.2.2
 	github.com/prometheus/client_golang v1.20.5

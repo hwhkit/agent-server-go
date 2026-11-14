@@ -221,7 +221,7 @@ slug)。幂等键为 (slug, runId):同键重放返回首次状态,不同 runId �
     }
 
 响应 200:{"accepted": true, "runId": "...", "runStatus": "succeeded"}。
-status=failed 时 error.code 必填。参考实现:ir-connector 的 submit 子命令
+status=failed 时 error.code 必填。参考实现:edge 仓库 scripts/agent-pool/submit.sh（及规划中的 ir submit 子命令）
 (crontab 一行即可把定时任务包装成智能体)。
 
 ## 5. 双重执行与幂等契约
@@ -368,7 +368,7 @@ PostgreSQL 新表 `agent_pull_tasks`:
 | `AGENT_API__WORKER_OFFLINE_AFTER_MISSES` | `3` | 心跳缺失多少次判离线 |
 | `AGENT_API__TOKEN_ROTATION_GRACE` | `86400` | 令牌轮换宽限(秒) |
 
-## 12. 连接器实现要点(参考实现 `cmd/ir-connector`,任意语言可仿写)
+## 12. 连接器实现要点(参考实现:edge 仓库 `scripts/agent-pool/pool.sh`,任意语言可仿写)
 
 1. 两条独立循环:claim(串行认领,一次一个任务)+ heartbeat。
 2. 收到任务后:`执行前先续一次租`,处理期间按 `renewAfterSeconds` 续租;

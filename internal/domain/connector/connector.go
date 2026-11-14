@@ -23,10 +23,7 @@ const (
 	DefaultLeaseSeconds      = 90
 	DefaultRenewAfterSeconds = 30 // = lease/3
 	DefaultHeartbeatSeconds  = 60
-	MaxHeartbeatSeconds      = 3600
 	DefaultClaimWaitSeconds  = 30
-	MinClaimWaitSeconds      = 1
-	MaxClaimWaitSeconds      = 35
 	OfflineAfterMissedBeats  = 3 // 超过 3 个心跳间隔未上报即离线
 )
 
@@ -124,8 +121,6 @@ type Lease struct {
 // Errors.
 var (
 	ErrTokenNotFound = errors.New("connector token not found")
-	ErrLeaseLost     = errors.New("lease lost")
-	ErrDeadline      = errors.New("task deadline exceeded")
 )
 
 // TokenRepository 是令牌仓储端口。Token.Hash 由调用方预先填充

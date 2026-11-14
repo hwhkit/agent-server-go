@@ -1,7 +1,7 @@
 package agentapi
 
 // 机器侧直接提交（POST /agent-api/v1/runs）：定时任务/本地触发的运行
-// 不经租约，连接器（或 cron 调 ir-connector submit）直接回传结果。
+// 不经租约，连接器（或 cron 调 edge 的 submit.sh / ir submit）直接回传结果。
 // 幂等键为 (slug, runId)；重放返回首次状态。
 
 import (

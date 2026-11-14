@@ -31,13 +31,6 @@ func providerKnown(id string) bool {
 	return false
 }
 
-func LoadSavedProviders(ctx context.Context, store *Store, config *PlatformConfig) error {
-	if err := applySavedProviders(ctx, store, config); err != nil {
-		return err
-	}
-	return config.Validate()
-}
-
 func applySavedProviders(ctx context.Context, store *Store, config *PlatformConfig) error {
 	for _, id := range providerIDs {
 		value, err := store.GetExecutorProvider(ctx, id)
@@ -175,41 +168,6 @@ func clonePlatformConfig(current *PlatformConfig) *PlatformConfig {
 		next.ClaudeManaged.MaxListCostCents = &value
 	}
 	return &next
-}
-
-func IsAssignmentConfigured(config *PlatformConfig, kind ExecutorKind, mode ExecutionMode) bool {
-	// Go 版保留历史进程内 Processor API 兼容，但不在智能体中心展示新建入口。
-	if kind == ExecutorKindRust {
-		return true
-	}
-	id := ""
-	switch {
-	case kind == ExecutorKindCodex && mode == ExecutionModeLocal:
-		id = "codex_local"
-	case kind == ExecutorKindPi && mode == ExecutionModeLocal:
-		id = "pi_local"
-	case kind == ExecutorKindOpenCode && mode == ExecutionModeLocal:
-		id = "opencode_local"
-	case kind == ExecutorKindQwenCode && mode == ExecutionModeLocal:
-		id = "qwen_code_local"
-	case kind == ExecutorKindGeminiCLI && mode == ExecutionModeLocal:
-		id = "gemini_cli_local"
-	case kind == ExecutorKindOpenHands && mode == ExecutionModeLocal:
-		id = "openhands_local"
-	case kind == ExecutorKindClaudeCode && mode == ExecutionModeLocal:
-		id = "claude_code_local"
-	case kind == ExecutorKindDeepseekHarness && mode == ExecutionModeLocal:
-		id = "deepseek_harness"
-	case kind == ExecutorKindOpenAIAgent && mode == ExecutionModeManaged:
-		id = "openai_agent"
-	case kind == ExecutorKindClaudeManaged && mode == ExecutionModeManaged:
-		id = "claude_managed_agent"
-	case mode == ExecutionModeGateway && kind.SupportsGateway():
-		id = "gateway"
-	default:
-		return false
-	}
-	return providerConfigured(config, id)
 }
 
 func providerView(config *PlatformConfig, id string) ProviderView {
