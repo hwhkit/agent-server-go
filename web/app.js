@@ -703,6 +703,12 @@
     const listWrap = h("div");
     const queryInput = textInput("", { placeholder: `${t("agent.slug")} / ${t("agent.name")}`,
       style: { width: "180px" } });
+    // 连接状态筛选：客户端过滤（数据源是 worker 心跳的能力域覆盖）。
+    const connSelect = selectInput([
+      { value: "", label: t("common.all") },
+      { value: "online", label: t("agent.status.online") },
+      { value: "offline", label: t("agent.status.offline") },
+    ], "");
     const apply = h("button", { class: "btn", onclick: () => load(1) }, t("common.filter"));
     const newBtn = h("button", { class: "btn primary", onclick: () => agentEditor(null, positions) },
       `+ ${t("agent.new")}`);
@@ -727,7 +733,7 @@
       onclick: () => importAgentsModal(),
     }, `⬆ ${t("agent.import")}`);
     body.append(panel(null, null,
-      h("div", { class: "row mb" }, queryInput, apply, newBtn,
+      h("div", { class: "row mb" }, queryInput, connSelect, apply, newBtn,
         h("div", { class: "spacer" }), exportBtn("json"), importBtn),
       listWrap));
 
@@ -738,10 +744,14 @@
       params.set("include_disabled", "true");
       const data = await api.get(`/agents?${params}`);
       clear(listWrap);
-      const rows = (data.items || []).map(renderAgentRow);
+      let items = data.items || [];
+      if (connSelect.value === "online") items = items.filter((a) => workerSlugs.has(a.slug));
+      else if (connSelect.value === "offline") items = items.filter((a) => !workerSlugs.has(a.slug));
+      const rows = items.map(renderAgentRow);
       if (!rows.length) rows.push(emptyRow(columns.length));
       listWrap.append(...[table(columns, rows), pager(data.total || 0, page, pageSize, load)].filter(Boolean));
     };
+    connSelect.addEventListener("change", () => load(1));
     await load(1);
   };
 
