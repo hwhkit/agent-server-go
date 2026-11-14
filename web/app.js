@@ -1370,7 +1370,7 @@
     filterBar.append(agentInput, positionInput, statusSelect, errorCodeInput, sinceInput, singleOnly, apply);
 
     const listWrap = h("div");
-    body.append(panel(t("run.tab.agent"), null, filterBar, listWrap));
+    body.append(panel(null, null, filterBar, listWrap));
 
     const columns = [
       { label: "" }, { label: t("run.runId") }, { label: t("run.agent") },
@@ -1513,7 +1513,7 @@
 
   const teamRunsTab = async (body) => {
     const listWrap = h("div");
-    body.append(panel(t("run.tab.team"), null, listWrap));
+    body.append(panel(null, null, listWrap));
     const columns = [
       { label: "" }, { label: t("run.runId") }, { label: t("run.team") },
       { label: t("run.status") }, { label: t("run.created") },
@@ -1605,7 +1605,7 @@
     const typeInput = textInput("", { placeholder: t("run.channel.type"), style: { width: "130px" } });
     const listWrap = h("div");
     const apply = h("button", { class: "btn", onclick: () => load() }, t("common.filter"));
-    body.append(panel(t("run.tab.channel"), null,
+    body.append(panel(null, null,
       h("div", { class: "row mb" }, typeInput, slugInput, apply), listWrap));
     const columns = [
       { label: t("run.channel.type") }, { label: t("run.agent") }, { label: t("run.runId") },
@@ -1690,7 +1690,7 @@
         h("td", { class: "mono small muted", style: { maxWidth: "380px", wordBreak: "break-all" } },
           e.Detail ? prettyJSON(e.Detail) : "—")),
     });
-    container.append(panel(t("audit.title"), null, list.root));
+    container.append(panel(null, null, list.root));
     await list.load(1);
   };
 
