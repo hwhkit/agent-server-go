@@ -36,8 +36,12 @@ type Snapshot struct {
 	ServerTime time.Time `json:"serverTime"`
 
 	OnlineWorkers  int                   `json:"onlineWorkers"`
+	WorkersTotal   int                   `json:"workersTotal"`
 	Queue          connector.QueueTotals `json:"queue"`
 	ActiveTeamRuns int                   `json:"activeTeamRuns"`
+	// 活跃团队运行按状态细分；列表已在手，顺手统计，不额外查询。
+	TeamRunsRunning int `json:"teamRunsRunning"`
+	TeamRunsQueued  int `json:"teamRunsQueued"`
 
 	RunsToday run.Totals `json:"runsToday"`
 }
@@ -149,6 +153,7 @@ func (s *Service) uncachedSnapshot(ctx context.Context) Snapshot {
 				}
 			}
 			snapshot.OnlineWorkers = online
+			snapshot.WorkersTotal = len(workers)
 		}
 	}
 	if s.teamRuns != nil {
@@ -157,6 +162,14 @@ func (s *Service) uncachedSnapshot(ctx context.Context) Snapshot {
 			slog.Warn("dashboard: list active team runs failed", "err", err)
 		} else {
 			snapshot.ActiveTeamRuns = len(active)
+			for _, teamRun := range active {
+				switch teamRun.Status {
+				case team.TeamRunRunning:
+					snapshot.TeamRunsRunning++
+				case team.TeamRunQueued:
+					snapshot.TeamRunsQueued++
+				}
+			}
 		}
 	}
 	return snapshot

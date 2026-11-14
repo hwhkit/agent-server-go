@@ -267,6 +267,20 @@ func (s *Service) GetAgent(ctx context.Context, slug string) (*agent.Agent, erro
 	return s.agents.GetBySlug(ctx, strings.ToLower(strings.TrimSpace(slug)))
 }
 
+// RevealAgentSecret 返回签名密钥明文（管理台「复制」场景；GetBySlug 返回
+// 已解密密钥）。读取即审计：agent.secret_revealed 落 audit 日志。
+func (s *Service) RevealAgentSecret(ctx context.Context, slug, actor string) (string, error) {
+	a, err := s.agents.GetBySlug(ctx, strings.ToLower(strings.TrimSpace(slug)))
+	if err != nil {
+		return "", err
+	}
+	if len(a.SigningSecret) == 0 {
+		return "", fmt.Errorf("%w: agent %s has no signing secret", ErrInvalidInput, a.Slug)
+	}
+	_ = s.record(ctx, audit.Event{Actor: actor, Action: "agent.secret_revealed", Target: a.Slug})
+	return string(a.SigningSecret), nil
+}
+
 func (s *Service) SaveAgent(ctx context.Context, a *agent.Agent, ifMatchRevision *int64, actor string) (int64, error) {
 	creating := ifMatchRevision == nil
 	if err := a.Validate(creating); err != nil {

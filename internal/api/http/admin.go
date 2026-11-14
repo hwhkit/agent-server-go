@@ -74,6 +74,7 @@ func AdminRouter(deps AdminDeps) chi.Router {
 			r.Get("/positions/{code}", h.getPosition)
 			r.Get("/agents", h.listAgents)
 			r.Get("/agents/{slug}", h.getAgent)
+			r.Get("/agents/{slug}/secret", h.revealAgentSecret)
 			r.Get("/teams", h.listTeams)
 			r.Get("/teams/{id}", h.getTeam)
 			r.Get("/team-runs", h.listTeamRuns)
@@ -655,6 +656,18 @@ func (h *adminHandler) getAgent(w http.ResponseWriter, r *http.Request) {
 	configured := len(a.SigningSecret) > 0
 	a.SigningSecret = nil
 	writeAdminData(w, http.StatusOK, agentView(a, configured))
+}
+
+// revealAgentSecret 返回智能体签名密钥明文（管理台「复制」按钮的数据源；
+// 仅此端点回显密钥，读取动作在 catalog 层审计留痕）。
+func (h *adminHandler) revealAgentSecret(w http.ResponseWriter, r *http.Request) {
+	slug := chi.URLParam(r, "slug")
+	secret, err := h.deps.Catalog.RevealAgentSecret(r.Context(), slug, sessionUserFrom(r).Username)
+	if err != nil {
+		writeCatalogError(w, err, "reveal agent secret failed")
+		return
+	}
+	writeAdminData(w, http.StatusOK, map[string]any{"slug": slug, "signing_secret": secret})
 }
 
 func (h *adminHandler) saveAgent(w http.ResponseWriter, r *http.Request) {
