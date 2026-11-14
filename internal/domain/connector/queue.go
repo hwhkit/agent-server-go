@@ -180,6 +180,10 @@ type TaskQueue interface {
 	QueueDepth(ctx context.Context, slugs []string) (int, error)
 	// Sweep 执行后台清扫：过期租约重派/落终态、队列 TTL、worker 离线判定。
 	Sweep(ctx context.Context, policy SweepPolicy) (SweepStats, error)
+	// WaitWake 等待任意任务事件通知（PostgreSQL LISTEN/NOTIFY），timeout 内
+	// 收到返回 true；通知丢失/不支持时退化为 sleep(timeout) 后返回 false。
+	// 供 claim 长轮询窗口与同步等待替代固定间隔盲等。
+	WaitWake(ctx context.Context, timeout time.Duration) bool
 	// RecordDirectRun 幂等登记一次机器侧直接提交的运行（定时任务/本地触发，
 	// 不经租约）：直接落 agent_runs 终态；同 (slug, runId) 重放返回既有状态。
 	// slug 必须对应已注册智能体（ErrUnknownAgent）。

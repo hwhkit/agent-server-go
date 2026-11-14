@@ -270,7 +270,10 @@ func (s *Service) Claim(ctx context.Context, principal *Principal, in ClaimInput
 		case <-ctx.Done():
 			return nil, failure(499, "client_gone", "claim wait canceled")
 		case <-time.After(250 * time.Millisecond):
+			// LISTEN/NOTIFY 不可用时退化为 250ms 轮询（WaitWake 内部同样兜底）。
 		}
+		// 事件驱动：新任务入队（NOTIFY ir_pull_events）立即唤醒重试 claim。
+		_ = s.queue.WaitWake(ctx, 20*time.Millisecond)
 	}
 }
 

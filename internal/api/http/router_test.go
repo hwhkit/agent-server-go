@@ -74,6 +74,7 @@ func (stubQueue) Sweep(context.Context, domain.SweepPolicy) (domain.SweepStats, 
 func (stubQueue) RecordDirectRun(context.Context, domain.DirectRun) (string, error) {
 	return "succeeded", nil
 }
+func (stubQueue) WaitWake(context.Context, time.Duration) bool { return false }
 
 type memTokens struct{ byHash map[string]*domain.Token }
 

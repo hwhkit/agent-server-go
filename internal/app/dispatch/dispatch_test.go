@@ -97,6 +97,7 @@ func (f *fakeQueue) Sweep(context.Context, connector.SweepPolicy) (connector.Swe
 func (f *fakeQueue) RecordDirectRun(context.Context, connector.DirectRun) (string, error) {
 	return "succeeded", nil
 }
+func (f *fakeQueue) WaitWake(context.Context, time.Duration) bool { return false }
 
 // codedError 模拟引擎的 *ExecutionError（结构性 ErrorCode 探测）。
 type codedError struct{ code, msg string }

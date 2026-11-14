@@ -6,9 +6,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"ir-agent-server/internal/domain/connector"
 )
@@ -16,7 +18,15 @@ import (
 // TaskQueueStore 实现 connector.TaskQueue（agent_pull_tasks 表）。
 // SQL 语义自旧栈 agent_pull_store.go 逐字移植：SKIP LOCKED 认领、
 // 租约续期五分支、幂等 complete（重放/冲突/superseded 归档）、五步清扫。
-type TaskQueueStore struct{ db *DB }
+type TaskQueueStore struct {
+	db *DB
+	// LISTEN 单例：ir_pull_events 通知 → 广播唤醒全部等待者（claim 窗口/同步等待）。
+	listenMu   sync.Mutex
+	listenConn *pgxpool.Conn
+	listenDead chan struct{}
+	wakeMu     sync.Mutex
+	wakeCh     chan struct{}
+}
 
 // NewTaskQueueStore 构建队列仓储。
 func NewTaskQueueStore(db *DB) *TaskQueueStore { return &TaskQueueStore{db: db} }
@@ -128,10 +138,78 @@ func (s *TaskQueueStore) Get(ctx context.Context, runID string) (*connector.Task
 	return task, nil
 }
 
-// WaitTerminal 250ms 轮询直至终态（与旧栈节奏一致）。
+// WaitWake 等待任务事件通知（任意 agent_pull_tasks 变更），timeout 内收到
+// 通知返回 true。实现：store 级单例 LISTEN 连接（惰性建立，断线重连），
+// 通知以 close+重建 的广播语义唤醒全部等待者——claim 长轮询窗口与
+// WaitTerminal 的同步等待由此从固定间隔轮询变为事件驱动。
+// 通知不可靠时退化为 timeout 后返回 false（调用方仍会重试查询，语义不变）。
+// WaitWake 等待任务事件通知，timeout 内收到返回 true。LISTEN 连接不可用
+// （或通知丢失）时退化为 sleep(timeout) 后返回 false——调用方仍会重试查询，
+// 语义不变。通知经 close+重建 广播给全部等待者。
+func (s *TaskQueueStore) WaitWake(ctx context.Context, timeout time.Duration) bool {
+	conn, wake, err := s.wakeListener(ctx)
+	if err != nil {
+		time.Sleep(timeout)
+		return false
+	}
+	select {
+	case <-wake:
+		_ = conn // 持有引用直到唤醒返回，连接生命周期由 goroutine 管理
+		return true
+	case <-ctx.Done():
+		return false
+	case <-time.After(timeout):
+		return false
+	}
+}
+
+func (s *TaskQueueStore) notifyWake(ctx context.Context) {
+	_, _ = s.db.Pool.Exec(ctx, `NOTIFY ir_pull_events`)
+}
+
+// wakeListener 惰性建立 LISTEN 专用连接；通知到达时广播唤醒全部等待者。
+func (s *TaskQueueStore) wakeListener(ctx context.Context) (*pgxpool.Conn, <-chan struct{}, error) {
+	s.listenMu.Lock()
+	defer s.listenMu.Unlock()
+	if s.listenConn != nil {
+		select {
+		case <-s.listenDead:
+			s.listenConn = nil // 连接已断，重建
+		default:
+			return s.listenConn, s.wakeCh, nil
+		}
+	}
+	conn, err := s.db.Pool.Acquire(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if _, err := conn.Exec(ctx, `LISTEN ir_pull_events`); err != nil {
+		conn.Release()
+		return nil, nil, err
+	}
+	wake := make(chan struct{})
+	s.listenConn = conn
+	s.wakeCh = wake
+	s.listenDead = make(chan struct{})
+	go func() {
+		for {
+			if _, err := conn.Conn().WaitForNotification(context.Background()); err != nil {
+				close(s.listenDead)
+				conn.Release()
+				return
+			}
+			s.wakeMu.Lock()
+			close(s.wakeCh)
+			s.wakeCh = make(chan struct{})
+			s.wakeMu.Unlock()
+		}
+	}()
+	return conn, wake, nil
+}
+
+// WaitTerminal 事件驱动直至终态：每次查询后以 LISTEN 唤醒替代固定间隔
+// 轮询（通知即醒），1s 兜底保证通知丢失时语义仍正确。
 func (s *TaskQueueStore) WaitTerminal(ctx context.Context, runID string) (connector.TaskState, []byte, error) {
-	ticker := time.NewTicker(250 * time.Millisecond)
-	defer ticker.Stop()
 	for {
 		task, err := s.Get(ctx, runID)
 		if err != nil {
@@ -143,8 +221,9 @@ func (s *TaskQueueStore) WaitTerminal(ctx context.Context, runID string) (connec
 		select {
 		case <-ctx.Done():
 			return "", nil, ctx.Err()
-		case <-ticker.C:
+		default:
 		}
+		s.WaitWake(ctx, time.Second)
 	}
 }
 
@@ -260,6 +339,7 @@ func (s *TaskQueueStore) RequestAbort(ctx context.Context, runID string) error {
 		`UPDATE agent_pull_tasks SET abort_requested = true WHERE run_id = $1`, runID); err != nil {
 		return fmt.Errorf("request abort: %w", err)
 	}
+	s.notifyWake(context.Background())
 	return nil
 }
 
@@ -344,6 +424,7 @@ func (s *TaskQueueStore) Complete(ctx context.Context, req connector.CompleteReq
 	if err := tx.Commit(ctx); err != nil {
 		return connector.CompleteOutcome{}, err
 	}
+	s.notifyWake(context.Background())
 	return connector.CompleteOutcome{Accepted: true, RunStatus: string(finalState)}, nil
 }
 
@@ -425,6 +506,7 @@ func (s *TaskQueueStore) Sweep(ctx context.Context, policy connector.SweepPolicy
 		return stats, fmt.Errorf("mark workers offline: %w", err)
 	}
 	stats.WorkersOffline = tag.RowsAffected()
+	s.notifyWake(context.Background())
 	return stats, nil
 }
 

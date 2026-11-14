@@ -9,6 +9,8 @@ package agentapi
 import (
 	"context"
 	"strings"
+	"sync"
+	"time"
 
 	domain "ir-agent-server/internal/domain/connector"
 )
@@ -24,6 +26,56 @@ type AgentSecretSource interface {
 type AgentKeyHint struct {
 	Slug    string
 	Cluster string
+}
+
+// CachedSecretSource 是认证热路径的缓存包装：claim/complete/heartbeat 的
+// 高频窗口内（长轮询每 250ms 一次）每请求都要解析密钥——直连适配层意味着
+// 每请求一次 DB 查询 + AES-GCM 解密。TTL 缓存把命中降到内存读；密钥轮换
+// 经 TTL 兜底传播（默认 2s，远小于 24h 轮换宽限窗口，不影响任何语义）。
+type CachedSecretSource struct {
+	inner AgentSecretSource
+	ttl   time.Duration
+	mu    sync.Mutex
+	cache map[string]cachedSecret
+}
+
+type cachedSecret struct {
+	current, prev []byte
+	expires       time.Time
+}
+
+// NewCachedSecretSource 包装密钥源；ttl <= 0 时取默认 2s。
+func NewCachedSecretSource(inner AgentSecretSource, ttl time.Duration) *CachedSecretSource {
+	if ttl <= 0 {
+		ttl = 2 * time.Second
+	}
+	return &CachedSecretSource{inner: inner, ttl: ttl, cache: map[string]cachedSecret{}}
+}
+
+// SigningSecrets 实现 AgentSecretSource：缓存命中免 DB + 解密。
+func (c *CachedSecretSource) SigningSecrets(ctx context.Context, slug string) ([]byte, []byte, error) {
+	slug = strings.ToLower(strings.TrimSpace(slug))
+	c.mu.Lock()
+	hit, ok := c.cache[slug]
+	c.mu.Unlock()
+	if ok && time.Now().Before(hit.expires) {
+		return hit.current, hit.prev, nil
+	}
+	current, prev, err := c.inner.SigningSecrets(ctx, slug)
+	if err != nil {
+		return nil, nil, err
+	}
+	c.mu.Lock()
+	c.cache[slug] = cachedSecret{current: current, prev: prev, expires: time.Now().Add(c.ttl)}
+	c.mu.Unlock()
+	return current, prev, nil
+}
+
+// Invalidate 使单个 slug 的缓存失效（密钥轮换/吊销场景主动调用）。
+func (c *CachedSecretSource) Invalidate(slug string) {
+	c.mu.Lock()
+	delete(c.cache, strings.ToLower(strings.TrimSpace(slug)))
+	c.mu.Unlock()
 }
 
 // AuthenticateAgentKey 以智能体主密钥或集群派生子密钥鉴权。

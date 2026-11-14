@@ -61,6 +61,7 @@ func (f *fakeQueue) Sweep(context.Context, domain.SweepPolicy) (domain.SweepStat
 func (f *fakeQueue) RecordDirectRun(context.Context, domain.DirectRun) (string, error) {
 	return "succeeded", nil
 }
+func (f *fakeQueue) WaitWake(context.Context, time.Duration) bool { return false }
 
 type fakeTokens struct {
 	byHash map[string]*domain.Token

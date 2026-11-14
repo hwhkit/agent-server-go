@@ -302,7 +302,7 @@ func buildRuntime(ctx context.Context) (*runtime, *config.Config, error) {
 		Tokens:  tokens,
 		Workers: workers,
 		Remote:  agents,
-		Secrets: agentSecretAdapter{agents},
+		Secrets: agentapi.NewCachedSecretSource(agentSecretAdapter{agents}, 2*time.Second),
 		Denies:  postgres.NewClusterDenyStore(db),
 	})
 	if cfgAgentAPI.Enabled && cfgIR.PushMode == config.PushModeSync {
