@@ -312,8 +312,8 @@ func TestPlatformRetentionDays(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if cfg.RetentionDays != 0 {
-		t.Errorf("retention days default = %d, want 0 (disabled)", cfg.RetentionDays)
+	if cfg.RetentionDays != 90 {
+		t.Errorf("retention days default = %d, want 90 (production default)", cfg.RetentionDays)
 	}
 	t.Setenv("PLATFORM__RETENTION_DAYS", "45")
 	root := validPlatformRoot()
