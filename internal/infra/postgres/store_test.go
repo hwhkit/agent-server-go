@@ -545,104 +545,32 @@ func TestAuditStoreAppendListAuthorize(t *testing.T) {
 	}
 }
 
-func TestConnectorTokensAndWorkers(t *testing.T) {
+func TestWorkerHeartbeatUpsert(t *testing.T) {
 	db := setupDB(t)
-	ctx := context.Background()
-	tokens := postgres.NewTokenStore(db)
 	workers := postgres.NewWorkerStore(db)
+	ctx := context.Background()
 
-	suffix := strconv.FormatInt(time.Now().UnixNano(), 36)
-	plain := "act_" + crypto.RandomToken(24)
-	token := &connector.Token{
-		Name:   "it-connector-" + suffix,
-		Hash:   crypto.TokenHash(plain),
-		Scopes: []string{"it-agent-a", "it-agent-b"},
-	}
-	if err := tokens.Issue(ctx, token); err != nil {
-		t.Fatalf("issue token: %v", err)
-	}
-	got, err := tokens.GetByHash(ctx, crypto.TokenHash(plain))
-	if err != nil {
-		t.Fatalf("get by hash: %v", err)
-	}
-	if !got.Active(time.Now()) || len(got.Scopes) != 2 || !got.InScope("it-agent-a") || got.InScope("it-agent-z") {
-		t.Errorf("token = %+v", got)
-	}
-	// 同名再签发 = 轮换：旧哈希立即失效。
-	rotated := &connector.Token{Name: token.Name, Hash: crypto.TokenHash(plain + "rotated"), Scopes: []string{"it-agent-a"}}
-	if err := tokens.Issue(ctx, rotated); err != nil {
-		t.Fatalf("rotate token: %v", err)
-	}
-	if _, err := tokens.GetByHash(ctx, crypto.TokenHash(plain)); !errors.Is(err, connector.ErrTokenNotFound) {
-		t.Errorf("old hash after rotation = %v, want ErrTokenNotFound", err)
-	}
-	// 吊销后立即失效（无宽限期）。轮换已把行哈希换成新值，按新哈希回查。
-	if err := tokens.Revoke(ctx, got.ID, nil); err != nil {
-		t.Fatalf("revoke: %v", err)
-	}
-	revoked, err := tokens.GetByHash(ctx, crypto.TokenHash(plain+"rotated"))
-	if err != nil {
-		t.Fatalf("get rotated hash after revoke: %v", err)
-	}
-	if revoked.Active(time.Now()) {
-		t.Error("revoked token must be inactive")
-	}
-	// 宽限期内仍有效。
-	grace := time.Now().Add(time.Hour)
-	token2 := &connector.Token{Name: "it-connector2-" + suffix, Hash: crypto.TokenHash("act_second_" + suffix)}
-	if err := tokens.Issue(ctx, token2); err != nil {
-		t.Fatalf("issue token2: %v", err)
-	}
-	if err := tokens.Revoke(ctx, token2.ID, &grace); err != nil {
-		t.Fatalf("revoke with grace: %v", err)
-	}
-	graced, _ := tokens.GetByHash(ctx, token2.Hash)
-	if !graced.Active(time.Now()) {
-		t.Error("token within grace window must stay active")
-	}
-	if !graced.InScope("anything") {
-		t.Error("empty scopes must mean unrestricted")
-	}
-
-	// worker 心跳与离线标记。
-	w := connector.Worker{
-		WorkerID: "it-worker-1", TokenID: got.ID, Slugs: []string{"it-agent-a"},
-		Version: "1.0.0", InFlight: 1, Capacity: 4,
-	}
-	if err := workers.Beat(ctx, w); err != nil {
+	if err := workers.Beat(ctx, connector.Worker{WorkerID: "w-1", TokenID: "agent:demo",
+		Slugs: []string{"demo"}, Version: "t1", InFlight: 1, Capacity: 4,
+		BeatIntervalSeconds: 60}); err != nil {
 		t.Fatalf("beat: %v", err)
 	}
-	online, err := workers.ListOnline(ctx)
-	if err != nil {
-		t.Fatalf("list online: %v", err)
+	list, err := workers.ListOnline(ctx)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("list online = %v, %v", list, err)
 	}
-	found := false
-	for _, item := range online {
-		if item.WorkerID == "it-worker-1" {
-			found = true
-			if item.InFlight != 1 || item.Capacity != 4 || len(item.Slugs) != 1 {
-				t.Errorf("worker = %+v", item)
-			}
-			if item.Offline(time.Now()) {
-				t.Error("fresh heartbeat must be online")
-			}
-		}
+	if list[0].WorkerID != "w-1" || list[0].InFlight != 1 || list[0].Capacity != 4 {
+		t.Fatalf("worker fields = %+v", list[0])
 	}
-	if !found {
-		t.Fatal("worker missing from online list")
+	// upsert：同 (worker, token) 再拍一条覆盖计数
+	if err := workers.Beat(ctx, connector.Worker{WorkerID: "w-1", TokenID: "agent:demo",
+		Slugs: []string{"demo"}, Version: "t1", InFlight: 0, Capacity: 4,
+		BeatIntervalSeconds: 60}); err != nil {
+		t.Fatalf("beat again: %v", err)
 	}
-	stale, err := workers.MarkOfflineStale(ctx, time.Now().Add(time.Hour))
-	if err != nil {
-		t.Fatalf("mark stale: %v", err)
-	}
-	if stale < 1 {
-		t.Errorf("stale marked = %d", stale)
-	}
-	after, _ := workers.ListOnline(ctx)
-	for _, item := range after {
-		if item.WorkerID == "it-worker-1" {
-			t.Error("worker must be offline after stale sweep")
-		}
+	list, _ = workers.ListOnline(ctx)
+	if len(list) != 1 || list[0].InFlight != 0 {
+		t.Fatalf("upsert must overwrite: %+v", list)
 	}
 }
 

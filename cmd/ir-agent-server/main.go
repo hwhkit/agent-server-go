@@ -48,10 +48,8 @@ import (
 	"ir-agent-server/internal/domain/agent"
 	"ir-agent-server/internal/domain/platform"
 	"ir-agent-server/internal/domain/team"
-	infrabackend "ir-agent-server/internal/infra/backend"
 	"ir-agent-server/internal/infra/config"
 	"ir-agent-server/internal/infra/crypto"
-	"ir-agent-server/internal/infra/execengine"
 	"ir-agent-server/internal/infra/httpx"
 	"ir-agent-server/internal/infra/platformhttp"
 	"ir-agent-server/internal/infra/postgres"
@@ -69,7 +67,6 @@ var version = "dev"
 type runtime struct {
 	router          chi.Router
 	db              *postgres.DB
-	providers       *infrabackend.Manager
 	pushSvc         *push.Service
 	dynamic         *dynamic.Service
 	team            *teamrun.Engine
@@ -173,7 +170,6 @@ func buildRuntime(ctx context.Context) (*runtime, *config.Config, error) {
 	teamRuns := postgres.NewTeamRunStore(db)
 	positions := postgres.NewPositionStore(db)
 	queue := postgres.NewTaskQueueStore(db)
-	tokens := postgres.NewTokenStore(db)
 	workers := postgres.NewWorkerStore(db)
 	gateway := postgres.NewGatewayStore(db)
 	a2aTasks := postgres.NewA2ATaskStore(db)
@@ -212,36 +208,17 @@ func buildRuntime(ctx context.Context) (*runtime, *config.Config, error) {
 	// 5. Provider 快照：数据库是 Provider 字段的权威源，启动时做一次带
 	// 全局 revision 栅栏的一致性加载，随后清空配置里的凭据副本（密码与
 	// 主密钥已转入专用状态，不在共享配置里保留明文）。
-	providerStore := infrabackend.NewStore(db.Pool, cipher)
-	providerConfig, providerRevision, err := infrabackend.LoadInitial(ctx, providerStore, cfgPlatform)
-	if err != nil {
-		db.Close()
-		return nil, nil, fmt.Errorf("load agent center providers: %w", err)
-	}
-	providerConfig.AdminPassword = ""
-	providerConfig.AdminPasswordHash = ""
-	providerConfig.AdminSessionSecret = ""
-	if providerConfig.ClaudeEnabled {
-		slog.Warn("Claude Code executor enabled: current_dir is not an OS sandbox; " +
-			"run this service under an isolated low-privilege identity or container")
-	}
+	cfgPlatform.AdminPassword = ""
+	cfgPlatform.AdminPasswordHash = ""
+	cfgPlatform.AdminSessionSecret = ""
 
 	// 6. 两个分工不同的 HTTP 客户端（与旧栈一致）：
 	//   - executor 客户端给网关直调用：不设总超时（单一 deadline 由执行器
 	//     控制），只限制建连并复用长连接；
 	//   - callback 客户端给回传/心跳用：较短超时，避免下游拖住回调循环。
-	executorHTTPClient := newExecutorHTTPClient()
 	callbackHTTPClient := newCallbackHTTPClient()
 
 	// 7. 执行引擎 + Provider 管理器（保存即热更新执行器配置快照）。
-	executor, err := execengine.NewAgentExecutor(
-		execengine.PlaceholderProcessor{}, executorHTTPClient, providerConfig)
-	if err != nil {
-		db.Close()
-		return nil, nil, fmt.Errorf("build executor: %w", err)
-	}
-	providers := infrabackend.NewManager(providerStore, providerConfig, providerRevision,
-		func(next *config.PlatformConfig) { executor.SetConfig(next) })
 
 	// 8. 分发服务：Push/Pull/动态入口/团队编排/A2A 共用同一套准入闸与
 	// 执行闸。remote_pull 队列仅在 AGENT_API 启用时接入。
@@ -250,12 +227,10 @@ func buildRuntime(ctx context.Context) (*runtime, *config.Config, error) {
 		taskQueue = queue
 	}
 	dispatcher := dispatch.NewService(dispatch.Config{
-		Resolver:             agentResolver{store: agents},
-		Engine:               executor,
-		Queue:                taskQueue,
-		DefaultSlug:          cfgIR.DefaultAgentSlug,
-		Remote:               dispatch.RemotePolicy{QueueTTL: seconds(cfgAgentAPI.QueueTTLSeconds), SyncHoldMax: seconds(cfgAgentAPI.SyncHoldMaxSeconds)},
-		GlobalMaxConcurrency: cfgPlatform.GlobalMaxConcurrency,
+		Resolver:    agentResolver{store: agents},
+		Queue:       taskQueue,
+		DefaultSlug: cfgIR.DefaultAgentSlug,
+		Remote:      dispatch.RemotePolicy{QueueTTL: seconds(cfgAgentAPI.QueueTTLSeconds), SyncHoldMax: seconds(cfgAgentAPI.SyncHoldMaxSeconds)},
 	})
 
 	callbackSender := callback.NewSender(callback.Config{
@@ -299,7 +274,6 @@ func buildRuntime(ctx context.Context) (*runtime, *config.Config, error) {
 			WorkerOfflineAfterMiss:   cfgAgentAPI.WorkerOfflineAfterMiss,
 		},
 		Queue:   queue,
-		Tokens:  tokens,
 		Workers: workers,
 		Remote:  agents,
 		Secrets: agentapi.NewCachedSecretSource(agentSecretAdapter{agents}, 2*time.Second),
@@ -326,14 +300,14 @@ func buildRuntime(ctx context.Context) (*runtime, *config.Config, error) {
 	// 11. 动态入口（/agent/{slug}）。
 	dynamicService := dynamic.NewService(dynamic.Deps{
 		Config: dynamic.Config{
-			AllowLegacyBodySignature: providerConfig.AllowLegacyBodySignature,
+			AllowLegacyBodySignature: cfgPlatform.AllowLegacyBodySignature,
 			TrustedUsageReporting:    cfgIR.TrustedUsageReportingEnabled,
 			MaxRequestBodyBytes:      cfgPlatform.MaxRequestBodyBytes,
 			GlobalMaxConcurrency:     cfgPlatform.GlobalMaxConcurrency,
 		},
 		Store:    gateway,
 		Agents:   agents,
-		Engine:   executor,
+		Engine:   dispatcher,
 		Callback: callbackSender,
 		Events:   channelEvents,
 	})
@@ -356,7 +330,7 @@ func buildRuntime(ctx context.Context) (*runtime, *config.Config, error) {
 	// 13. HTTP 路由。
 	adminRouter := apihttp.AdminRouter(apihttp.AdminDeps{
 		Auth: auth, Catalog: catalogService, Dashboard: dash, Engine: teamEngine,
-		Connectors: connectors, Accounts: accountService, Providers: providers,
+		Connectors: connectors, Accounts: accountService,
 		Runs: runs, Audits: audits, ChannelEvents: channelEvents,
 		CookieSecure: cfgPlatform.SecureCookies, CookieTTL: cfgPlatform.AdminSessionTTL,
 		PublicBaseURL: cfgPlatform.PublicBaseURL,
@@ -405,7 +379,7 @@ func buildRuntime(ctx context.Context) (*runtime, *config.Config, error) {
 			RequireBearerAuth:   cfgA2A.RequireBearerAuth,
 			MaxRequestBodyBytes: cfgA2A.MaxRequestBodyBytes,
 			DefaultCardSlug:     cfgA2A.DefaultCardSlug,
-			PublicBaseURL:       providerConfig.PublicBaseURL,
+			PublicBaseURL:       cfgPlatform.PublicBaseURL,
 		}
 		slog.Info("A2A v1.0 endpoint enabled",
 			"route", cfgA2A.BasePath+"/{slug}", "card", "/.well-known/agent-card.json")
@@ -461,7 +435,7 @@ func buildRuntime(ctx context.Context) (*runtime, *config.Config, error) {
 
 	// 14. 后台执行体（在 main 里随停机信号启动/收口）。
 	rt := &runtime{
-		router: router, db: db, providers: providers, pushSvc: pushService,
+		router: router, db: db, pushSvc: pushService,
 		dynamic: dynamicService, team: teamEngine, connectors: connectors,
 		agentAPIEnabled: cfgAgentAPI.Enabled, metrics: metricsRegistry,
 		pushIdempotency: pushIdempotency, retention: postgres.NewRetentionStore(db),
@@ -526,7 +500,6 @@ func buildRuntime(ctx context.Context) (*runtime, *config.Config, error) {
 		"global_max_concurrency", cfgPlatform.GlobalMaxConcurrency,
 		"db_max_conns", cfgPlatform.DBMaxConns,
 		"retention_days", cfgPlatform.RetentionDays,
-		"workspace_root", cfgPlatform.WorkspaceRoot,
 		"max_request_body_bytes", cfgPlatform.MaxRequestBodyBytes,
 		"version", version)
 	return rt, cfgIR, nil
@@ -534,7 +507,6 @@ func buildRuntime(ctx context.Context) (*runtime, *config.Config, error) {
 
 // startLoops 在停机上下文中启动全部后台循环。
 func (rt *runtime) startLoops(ctx context.Context) {
-	go rt.providers.RefreshLoop(ctx)
 	go rt.team.Run(ctx)
 	if rt.agentAPIEnabled {
 		go agentapi.RunReaper(ctx, rt.connectors)

@@ -28,8 +28,6 @@ import (
 	"ir-agent-server/internal/domain/account"
 	"ir-agent-server/internal/domain/platform"
 	"ir-agent-server/internal/domain/team"
-	infrabackend "ir-agent-server/internal/infra/backend"
-	"ir-agent-server/internal/infra/config"
 	"ir-agent-server/internal/infra/crypto"
 	"ir-agent-server/internal/infra/postgres"
 )
@@ -148,19 +146,10 @@ func setupAdmin(t *testing.T) *adminFixture {
 	connectors := agentapi.NewService(agentapi.Deps{
 		Config:  agentapi.Config{LeaseSeconds: 90, RenewInterval: 30 * time.Second, HeartbeatIntervalSeconds: 60, ClaimMaxWait: time.Second, MaxOutstandingLeases: 64, MaxAttempts: 3, QueueTTL: time.Hour},
 		Queue:   postgres.NewTaskQueueStore(db),
-		Tokens:  postgres.NewTokenStore(db),
 		Workers: postgres.NewWorkerStore(db),
 	})
 
 	channelEvents := postgres.NewChannelEventStore(db)
-	backendStore := infrabackend.NewStore(db.Pool, cipher)
-	providerConfig, providerRevision, err := infrabackend.LoadInitial(ctx,
-		backendStore, &config.PlatformConfig{})
-	if err != nil {
-		t.Fatalf("load providers: %v", err)
-	}
-	providers := infrabackend.NewManager(backendStore, providerConfig, providerRevision, nil)
-
 	runs := postgres.NewRunStore(db)
 	// 完整路由（含公开分享路由）：admin 面挂 "/"，公开面挂 /api/share/v1——
 	// 端到端测试经同一服务覆盖两侧。
@@ -175,7 +164,6 @@ func setupAdmin(t *testing.T) *adminFixture {
 		Accounts: admin.NewAccountService(accounts, crypto.HashPassword,
 			postgres.NewAuditStore(db)),
 		ChannelEvents: channelEvents,
-		Providers:     providers,
 	})
 	router := apihttp.NewRouter(apihttp.RouterDeps{
 		Admin:  adminRouter,
@@ -444,35 +432,6 @@ func TestAdminCatalogCRUD(t *testing.T) {
 	snapshot := dataOf(t, envelope)
 	if status != 200 || snapshot["databaseOk"] != true || snapshot["version"] != "test" {
 		t.Errorf("dashboard = %d %v", status, snapshot)
-	}
-
-	// 连接器令牌：签发（明文一次）→ 列表 → 吊销。
-	connectorName := "it-conn-" + fixture.suffix
-	status, envelope = fixture.do(t, "POST", "/agent-connectors",
-		map[string]any{"name": connectorName, "scopes": []string{slug}}, nil)
-	if status != 201 {
-		t.Fatalf("issue connector = %d %v", status, envelope)
-	}
-	token, _ := dataOf(t, envelope)["token"].(string)
-	if !strings.HasPrefix(token, "act_") {
-		t.Errorf("token = %q", token)
-	}
-	status, envelope = fixture.do(t, "GET", "/agent-connectors", nil, nil)
-	found := false
-	for _, item := range envelope["data"].([]any) {
-		entry := item.(map[string]any)
-		if entry["name"] == connectorName {
-			found = true
-			if raw, _ := json.Marshal(entry); bytes.Contains(raw, []byte(token)) {
-				t.Error("connector list must not echo tokens")
-			}
-		}
-	}
-	if !found {
-		t.Error("issued connector missing from list")
-	}
-	if status, _ := fixture.do(t, "DELETE", "/agent-connectors/"+connectorName, nil, nil); status != 204 {
-		t.Errorf("revoke = %d", status)
 	}
 
 	// 审计事件已落库（agent.created 可查）。

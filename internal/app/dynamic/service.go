@@ -49,9 +49,10 @@ type AgentResolver interface {
 	GetBySlug(ctx context.Context, slug string) (*agent.Agent, error)
 }
 
-// Engine 是执行引擎端口（infra/execengine 的 AgentExecutor 结构性满足）。
+// Engine 是执行端口（app/dispatch 的 *Service 结构性满足）：
+// remote_pull 智能体经租约队列在 Edge 执行，本服务做有界同步等待。
 type Engine interface {
-	Execute(ctx context.Context, runtime *agent.ResolvedConfig, task *platform.TaskContext,
+	Execute(ctx context.Context, agentCode string, task *platform.TaskContext,
 		rawInput any, timeout time.Duration) (*platform.ProcessedOutput, error)
 }
 
@@ -152,13 +153,14 @@ func (s *Service) WaitBackground() { s.background.Wait() }
 
 // gatewayRequest 是一次请求经过校验后的可用形态。
 type gatewayRequest struct {
-	slug     string
-	resolved *agent.ResolvedConfig
-	body     []byte
-	raw      map[string]any
-	task     *platform.BoundTask
-	runID    string
-	explicit bool
+	gatesHeld bool
+	slug      string
+	resolved  *agent.ResolvedConfig
+	body      []byte
+	raw       map[string]any
+	task      *platform.BoundTask
+	runID     string
+	explicit  bool
 	// recordKey / lease 为空表示本请求没有持有幂等租约。
 	recordKey string
 	lease     string
@@ -238,6 +240,9 @@ func (s *Service) Handle(ctx context.Context, req Request) Response {
 	var releaseOnce sync.Once
 	releaseSlots := func() {
 		releaseOnce.Do(func() {
+			if !request.gatesHeld {
+				return // remote_pull 未持本地闸（容量由租约队列约束）
+			}
 			s.globalSlots.Release()
 			request.slots.Execution.Release()
 			request.slots.Admission.Release()
@@ -537,8 +542,16 @@ func (s *Service) releaseIdempotency(ctx context.Context, request *gatewayReques
 // 队列里干等的同时把全局槽位全占走。任何一步失败都要 release 幂等租约。
 func (s *Service) acquireCapacity(ctx context.Context, started time.Time,
 	request *gatewayRequest, release func()) (bool, Response) {
+	// remote_pull：容量由租约队列 SQL 计数约束，本机闸不参与（否则会把
+	// 队列允许的排队误判成 429/504）。
+	if request.resolved.ExecutionMode == exec.ModeRemotePull {
+		request.slots = nil
+		request.gatesHeld = false
+		return true, Response{}
+	}
 	entry := s.agentSlots.Get(request.slug, request.resolved.MaxConcurrency, request.resolved.QueueCapacity)
 	request.slots = entry
+	request.gatesHeld = true
 	if !entry.Admission.TryAcquire() {
 		release()
 		resp := s.apiError(429, "agent_overloaded", "Agent queue is full")
@@ -601,7 +614,15 @@ func (request *gatewayRequest) releaseTransition() *platform.GatewayFinalization
 func (s *Service) runSync(ctx context.Context, request *gatewayRequest,
 	started time.Time, remaining time.Duration, releaseSlots func()) Response {
 	_ = releaseSlots // 由 Handle 的 defer 统一释放
-	output, execErr := s.engine.Execute(ctx, request.resolved, request.context, request.raw, remaining)
+	if request.resolved.ExecutionMode != exec.ModeRemotePull {
+		code := "executor_unavailable"
+		s.finalizeFailure(ctx, request, code,
+			"execution modes other than remote_pull were retired in this build; execute via an Edge node",
+			503, nil, s.now().Sub(started).Milliseconds())
+		return s.apiError(503, code,
+			"execution modes other than remote_pull were retired in this build; execute via an Edge node")
+	}
+	output, execErr := s.engine.Execute(ctx, request.slug, request.context, request.raw, remaining)
 	durationMs := s.now().Sub(started).Milliseconds()
 
 	if execErr != nil {
@@ -732,7 +753,13 @@ func (s *Service) runAsync(request *gatewayRequest, callbackURL string,
 			}
 		}()
 
-		output, execErr := s.engine.Execute(ctx, request.resolved, request.context, request.raw, remaining)
+		if request.resolved.ExecutionMode != exec.ModeRemotePull {
+			s.finalizeAcceptedFailure(ctx, request, "executor_unavailable",
+				"execution modes other than remote_pull were retired in this build; execute via an Edge node",
+				202, nil, s.now().Sub(started).Milliseconds())
+			return
+		}
+		output, execErr := s.engine.Execute(ctx, request.slug, request.context, request.raw, remaining)
 		durationMs := s.now().Sub(started).Milliseconds()
 
 		if execErr != nil {

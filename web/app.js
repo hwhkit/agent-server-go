@@ -534,8 +534,6 @@
     const tabs = tabsEl([
       { key: "agents", label: t("agent.tab.agents"), render: agentsTab },
       { key: "positions", label: t("pos.title"), render: renderPositions },
-      { key: "providers", label: t("agent.tab.providers"), render: providersTab },
-      { key: "connectors", label: t("agent.tab.connectors"), render: connectorsTab },
     ], container.dataset.agentsTab || "agents");
     container.append(tabs.el);
     container.append(tabs.body);
@@ -885,128 +883,7 @@
   };
 
 // ---- 执行后端（三列卡片） ----
-  const providersTab = async (body) => {
-    const views = await api.get("/providers");
-    const canEdit = isAdmin();
-    const cards = views.map((view) => {
-      const assignmentChips = (view.assignments || []).map((a) =>
-        h("span", { class: "chip", title: `${a.executor_kind} / ${a.execution_mode}` }, a.label));
-      return h("div", { class: `provider-card ${view.configured ? "configured" : ""}` },
-        h("div", { class: "provider-head" },
-          h("span", { class: `dot ${view.configured ? "on" : "off"}` }),
-          h("span", { class: "provider-name", title: view.id }, view.name),
-          h("span", { class: "chip" }, view.category === "local" ? t("prov.category.local") : t("prov.category.remote"))),
-        h("div", { class: "provider-desc" }, view.description || ""),
-        h("div", { class: `provider-status ${view.configured ? "ok-text" : "muted"}` }, view.status_detail || ""),
-        h("div", { class: "provider-meta small" },
-          h("span", { class: "muted" },
-            `${t("common.revision")} ${view.revision}`,
-            view.secret_configured ? ` · 🔒 ${t("prov.secret")}` : ""),
-          canEdit && view.editable
-            ? h("button", { class: "btn sm", onclick: () => providerEditor(view) }, t("prov.edit"))
-            : null),
-        assignmentChips.length
-          ? h("div", { class: "provider-assign" },
-            h("div", { class: "muted small mb" }, t("prov.assignments")), assignmentChips)
-          : null);
-    });
-    body.append(panel(null,
-      canEdit ? t("prov.sub") : `${t("prov.sub")} ${t("prov.readonly")}`,
-      cards.length ? h("div", { class: "grid3" }, cards) : h("div", { class: "empty" }, t("common.empty"))));
-  };
-
   const SECRET_FIELD_KEYS = new Set(["api_key", "mcp_authorization"]);
-
-  const providerEditor = (view) => {
-    const config = view.config || {};
-    const inputs = {};
-    const grid = h("div", { class: "form-grid" });
-    for (const [key, value] of Object.entries(config)) {
-      if (key === "mcp_authorization_configured") continue;
-      let input;
-      if (SECRET_FIELD_KEYS.has(key)) {
-        input = h("input", {
-          type: "password", autocomplete: "new-password",
-          placeholder: view.secret_configured ? t("agent.secret.placeholder.edit") : "",
-        });
-      } else if (typeof value === "boolean") {
-        input = checkbox(value);
-      } else if (Array.isArray(value)) {
-        input = textInput((value || []).join(", "), { placeholder: "vault-1, vault-2" });
-        input.dataset.array = "1";
-      } else if (value !== null && typeof value === "object") {
-        input = textInput(JSON.stringify(value));
-      } else {
-        input = textInput(value === null || value === undefined ? "" : String(value));
-        if (typeof value === "number") input.type = "number";
-      }
-      inputs[key] = input;
-      const label = key + (SECRET_FIELD_KEYS.has(key) && view.secret_configured ? " 🔒" : "");
-      grid.append(field(label, input,
-        { full: key === "vault_ids" || SECRET_FIELD_KEYS.has(key) }));
-    }
-    const save = async (close) => {
-      const body = {};
-      for (const [key, input] of Object.entries(inputs)) {
-        if (SECRET_FIELD_KEYS.has(key)) {
-          // 空 = 保留既有密文（后端 assignSecret preserveEmpty 语义）。
-          if (input.value.trim()) body[key] = input.value.trim();
-          continue;
-        }
-        if (input.type === "checkbox") { body[key] = input.checked; continue; }
-        if (input.dataset.array) {
-          const text = input.value.trim();
-          body[key] = text ? text.split(",").map((s) => s.trim()).filter(Boolean) : null;
-          continue;
-        }
-        const raw = input.value.trim();
-        if (raw === "") { body[key] = null; continue; }
-        if (input.type === "number") { body[key] = Number(raw); continue; }
-        body[key] = raw;
-      }
-      try {
-        await api.put(`/providers/${encodeURIComponent(view.id)}`, body, { ifMatch: view.revision });
-        close();
-        toast(t("common.saved"), "ok");
-        rerender();
-      } catch (err) { reportError(err); }
-    };
-    openModal(`${t("prov.edit")} · ${view.name}`, grid, [
-      { label: t("common.cancel"), onClick: (close) => close() },
-      { label: t("common.save"), kind: "primary", onClick: save },
-    ], { wide: true });
-  };
-
-  // ---- 连接器 ----
-  const connectorsTab = async (body) => {
-    const items = await api.get("/agent-connectors");
-    const columns = [
-      { label: t("conn.name") }, { label: t("conn.scopes") }, { label: t("run.status") },
-      { label: t("user.created") }, { label: t("common.actions") },
-    ];
-    const rows = (items || []).map((c) => h("tr", {},
-      h("td", { class: "mono" }, c.name),
-      h("td", {}, (c.scopes || []).map((s) => h("span", { class: "chip" }, s))),
-      h("td", {}, c.active
-        ? h("span", { class: "status completed" }, t("conn.active"))
-        : h("span", { class: "status canceled" }, c.revoked_at ? t("conn.revoked") : "—")),
-      h("td", { class: "muted small" }, fmtTime(c.created_at)),
-      h("td", {}, h("button", {
-        class: "btn sm danger",
-        onclick: () => confirmDelete(c.name, async () => {
-          try {
-            await api.del(`/agent-connectors/${encodeURIComponent(c.name)}`);
-            toast(t("common.deleted"), "ok");
-            rerender();
-          } catch (err) { reportError(err); }
-        }),
-      }, t("conn.revoke")))));
-    if (!rows.length) rows.push(emptyRow(columns.length));
-    body.append(panel(null, t("conn.sub"),
-      h("div", { class: "row mb" },
-        h("button", { class: "btn primary", onclick: issueConnectorModal }, `+ ${t("conn.issue")}`)),
-      table(columns, rows)));
-  };
 
   // 批量导入对话框：粘贴 /agents/export 导出的 JSON，逐条结果显示。
   const importAgentsModal = () => {
@@ -1043,39 +920,6 @@
         { label: t("agent.import.submit"), kind: "primary", onClick: doImport },
       ],
       { wide: true });
-  };
-
-  const issueConnectorModal = async () => {
-    let agents = [];
-    try { agents = await api.get("/agents?include_disabled=true"); } catch { /* 选择器可空 */ }
-    const name = textInput("", { placeholder: "ci-runner" });
-    const scopeBoxes = [
-      (() => { const box = checkbox(true, "* （全部）"); box.dataset.scope = "*"; return box; })(),
-      ...agents.map((a) => {
-        const box = checkbox(false, a.slug);
-        box.dataset.scope = a.slug;
-        return box;
-      }),
-    ];
-    const doIssue = async (close) => {
-      const scopes = scopeBoxes.filter((b) => b.checked).map((b) => b.dataset.scope);
-      try {
-        const data = await api.post("/agent-connectors", { name: name.value.trim(), scopes });
-        close();
-        showTokenOnce(data.name, data.token);
-        rerender();
-      } catch (err) { reportError(err); }
-    };
-    openModal(t("conn.issue"),
-      h("div", { class: "form-grid" },
-        field(t("conn.name"), name, { full: true }),
-        field(t("conn.scopes"),
-          h("div", { class: "dep-chips", style: { flexDirection: "column", alignItems: "flex-start" } }, ...scopeBoxes),
-          { full: true })),
-      [
-        { label: t("common.cancel"), onClick: (close) => close() },
-        { label: t("conn.issue"), kind: "primary", onClick: doIssue },
-      ]);
   };
 
   const showTokenOnce = (name, token) => {

@@ -221,14 +221,6 @@ func schemaStatements() []string {
 			online            BOOLEAN NOT NULL DEFAULT true,
 			PRIMARY KEY(worker_id, connector_id))`,
 		`ALTER TABLE agent_pull_workers ALTER COLUMN connector_id TYPE TEXT`,
-		`CREATE TABLE IF NOT EXISTS agent_pull_connectors (
-			id             BIGSERIAL PRIMARY KEY,
-			name           TEXT NOT NULL UNIQUE,
-			token_hash     TEXT NOT NULL UNIQUE,
-			scopes         TEXT NOT NULL DEFAULT '',
-			status         TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','revoked','rotated')),
-			grace_until_ns BIGINT,
-			created_at     TEXT NOT NULL)`,
 
 		// ---- v2 新增（只增不改）----
 		`CREATE TABLE IF NOT EXISTS job_positions (

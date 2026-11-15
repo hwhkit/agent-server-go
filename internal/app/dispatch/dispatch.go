@@ -16,7 +16,6 @@ import (
 	"strings"
 	"time"
 
-	"ir-agent-server/internal/app/gate"
 	"ir-agent-server/internal/domain/agent"
 	"ir-agent-server/internal/domain/connector"
 	"ir-agent-server/internal/domain/exec"
@@ -35,12 +34,6 @@ func NewError(code, detail string) *Error { return &Error{Code: code, Detail: de
 
 func (e *Error) Error() string { return e.Code + ": " + e.Detail }
 
-// Engine 是执行引擎端口。infra/execengine 的 *AgentExecutor 结构上满足。
-type Engine interface {
-	Execute(ctx context.Context, runtime *agent.ResolvedConfig, task *platform.TaskContext,
-		rawInput any, timeout time.Duration) (*platform.ProcessedOutput, error)
-}
-
 // Resolver 按 slug 定位智能体配置快照；未命中返回 agent.ErrNotFound。
 type Resolver interface {
 	Resolve(ctx context.Context, slug string) (*agent.ResolvedConfig, error)
@@ -57,45 +50,28 @@ type RemotePolicy struct {
 // Config 是 Service 的装配参数。
 type Config struct {
 	Resolver Resolver
-	Engine   Engine
 	// Queue 为 nil 时 remote_pull 模式不可用（AGENT_API 未启用）。
 	Queue connector.TaskQueue
 	// DefaultSlug 为空表示没有配置默认智能体。
-	DefaultSlug          string
-	Remote               RemotePolicy
-	GlobalMaxConcurrency int
+	DefaultSlug string
+	Remote      RemotePolicy
 }
 
 // Service 是分发用例服务。并发安全。
 type Service struct {
 	resolver    Resolver
-	engine      Engine
 	queue       connector.TaskQueue
 	defaultSlug string
 	remote      RemotePolicy
-	globalSlots *gate.Semaphore
-	slots       gate.Registry
 }
 
-// NewService 组装分发服务。
 func NewService(cfg Config) *Service {
 	return &Service{
 		resolver:    cfg.Resolver,
-		engine:      cfg.Engine,
 		queue:       cfg.Queue,
 		defaultSlug: strings.TrimSpace(strings.ToLower(cfg.DefaultSlug)),
 		remote:      cfg.Remote,
-		globalSlots: gate.NewSemaphore(cfg.GlobalMaxConcurrency),
 	}
-}
-
-// acquireSlot 在剩余预算内取一个许可；失败一律判 execution_timeout。
-func acquireSlot(ctx context.Context, slots *gate.Semaphore, budget time.Duration, label string) *Error {
-	if !slots.AcquireTimeout(ctx, budget) {
-		return NewError("execution_timeout",
-			fmt.Sprintf("deadline elapsed waiting for %s", label))
-	}
-	return nil
 }
 
 // remainingBudget 返回 timeout 扣掉已耗时后的剩余量（不会为负）。
@@ -124,7 +100,6 @@ func (s *Service) Execute(
 	rawInput any,
 	timeout time.Duration,
 ) (*platform.ProcessedOutput, error) {
-	started := time.Now()
 	config, dispatchErr := s.resolve(ctx, agentCode)
 	if dispatchErr != nil {
 		return nil, dispatchErr
@@ -134,51 +109,41 @@ func (s *Service) Execute(
 			fmt.Sprintf("Agent %s is disabled", config.Slug))
 	}
 
-	if config.ExecutionMode == exec.ModeRemotePull {
-		if s.queue == nil {
-			return nil, NewError("executor_unavailable",
-				"Agent is configured as remote_pull but AGENT_API is disabled")
-		}
-		return s.executeRemote(ctx, config, task, timeout)
+	if config.ExecutionMode != exec.ModeRemotePull {
+		return nil, NewError("executor_unavailable",
+			"execution modes other than remote_pull were retired in this build; "+
+				"execute via an Edge node (agent-api pull)")
 	}
+	if s.queue == nil {
+		return nil, NewError("executor_unavailable",
+			"Agent is configured as remote_pull but AGENT_API is disabled")
+	}
+	return s.executeRemote(ctx, config, task, timeout)
+}
 
-	entry := s.slots.Get(config.Slug, config.MaxConcurrency, config.QueueCapacity)
-	if !entry.Admission.TryAcquire() {
-		return nil, NewError("agent_overloaded", "Agent queue is full")
+// ExecuteResolved 与 Execute 同义，但跳过 slug 解析（调用方已持有配置快照）。
+// 满足动态入口的 Engine 端口形态；执行语义与 Execute 完全一致。
+func (s *Service) ExecuteResolved(
+	ctx context.Context,
+	config *agent.ResolvedConfig,
+	task *platform.TaskContext,
+	_ any,
+	timeout time.Duration,
+) (*platform.ProcessedOutput, error) {
+	if !config.Enabled {
+		return nil, NewError("agent_disabled",
+			fmt.Sprintf("Agent %s is disabled", config.Slug))
 	}
-	defer entry.Admission.Release()
-
-	if dispatchErr := acquireSlot(ctx, entry.Execution,
-		remainingBudget(started, timeout), "Agent execution slot"); dispatchErr != nil {
-		return nil, dispatchErr
+	if config.ExecutionMode != exec.ModeRemotePull {
+		return nil, NewError("executor_unavailable",
+			"execution modes other than remote_pull were retired in this build; "+
+				"execute via an Edge node (agent-api pull)")
 	}
-	defer entry.Execution.Release()
-
-	if dispatchErr := acquireSlot(ctx, s.globalSlots,
-		remainingBudget(started, timeout), "global execution slot"); dispatchErr != nil {
-		return nil, dispatchErr
+	if s.queue == nil {
+		return nil, NewError("executor_unavailable",
+			"Agent is configured as remote_pull but AGENT_API is disabled")
 	}
-	defer s.globalSlots.Release()
-
-	remaining := remainingBudget(started, timeout)
-	if remaining <= 0 {
-		return nil, NewError("execution_timeout", "Agent deadline elapsed before execution")
-	}
-
-	output, err := s.engine.Execute(ctx, config, task, rawInput, remaining)
-	if err != nil {
-		// 执行器的错误码原样透出；Detail 用 Display 形式（"code: detail"）。
-		var failure *exec.Failure
-		if errors.As(err, &failure) {
-			return nil, NewError(failure.Code, failure.Error())
-		}
-		var coded interface{ ErrorCode() string }
-		if errors.As(err, &coded) {
-			return nil, NewError(coded.ErrorCode(), err.Error())
-		}
-		return nil, NewError("executor_failed", err.Error())
-	}
-	return output, nil
+	return s.executeRemote(ctx, config, task, timeout)
 }
 
 // resolve 定位要执行的智能体。

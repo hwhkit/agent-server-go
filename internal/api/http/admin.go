@@ -20,7 +20,6 @@ import (
 
 	"ir-agent-server/internal/app/admin"
 	"ir-agent-server/internal/app/agentapi"
-	"ir-agent-server/internal/app/backend"
 	"ir-agent-server/internal/app/catalog"
 	"ir-agent-server/internal/app/dashboard"
 	"ir-agent-server/internal/app/teamrun"
@@ -44,10 +43,8 @@ type AdminDeps struct {
 	Engine     *teamrun.Engine
 	Connectors *agentapi.Service
 	Accounts   *admin.AccountService
-	// Providers 管理执行后端（原「执行职能体」）；nil 时端点返回 503。
-	Providers backend.Manager
-	Runs      run.Repository
-	Audits    audit.Repository
+	Runs       run.Repository
+	Audits     audit.Repository
 	// ChannelEvents 为 nil 时通道事件端点返回空列表。
 	ChannelEvents ChannelEventLister
 	// CookieSecure 生产必须为 true（HTTPS only）。
@@ -81,9 +78,7 @@ func AdminRouter(deps AdminDeps) chi.Router {
 			r.Get("/team-runs/{id}", h.getTeamRun)
 			r.Get("/runs", h.listRuns)
 			r.Get("/runs/{run_id}", h.getRun)
-			r.Get("/agent-connectors", h.listConnectors)
 			r.Get("/agent-connectors/workers", h.listWorkers)
-			r.Get("/providers", h.listProviders)
 			r.Get("/agents/export", h.exportAgents)
 			r.Get("/audits", h.listAudits)
 			r.Get("/audits/export", h.exportAudits)
@@ -107,9 +102,6 @@ func AdminRouter(deps AdminDeps) chi.Router {
 				r.Post("/team-runs", h.submitTeamRun)
 				r.Post("/team-runs/{id}/cancel", h.cancelTeamRun)
 				r.Post("/team-runs/{id}/retry", h.retryTeamRun)
-				r.Post("/agent-connectors", h.issueConnector)
-				r.Delete("/agent-connectors/{name}", h.revokeConnector)
-				r.Put("/providers/{id}", h.updateProvider)
 				r.Post("/agents/import", h.importAgents)
 				r.Post("/users", h.createUser)
 				r.Put("/users/{username}", h.updateUser)
@@ -918,30 +910,6 @@ func teamRunView(tr *team.TeamRun) map[string]any {
 	return view
 }
 
-func (h *adminHandler) listConnectors(w http.ResponseWriter, r *http.Request) {
-	tokens, err := h.deps.Connectors.ListTokens(r.Context())
-	if err != nil {
-		writeAdminError(w, http.StatusInternalServerError, "storage_error", "list connectors failed")
-		return
-	}
-	views := make([]map[string]any, 0, len(tokens))
-	for _, token := range tokens {
-		view := map[string]any{
-			"id": token.ID, "name": token.Name, "scopes": token.Scopes,
-			"created_at": token.CreatedAt,
-			"active":     token.Active(time.Now()),
-		}
-		if token.RevokedAt != nil {
-			view["revoked_at"] = *token.RevokedAt
-		}
-		if token.GraceUntil != nil {
-			view["grace_until"] = *token.GraceUntil
-		}
-		views = append(views, view)
-	}
-	writeAdminData(w, http.StatusOK, views)
-}
-
 // listWorkers 返回在线连接器 worker（智能体列表「连接状态」的数据源；
 // 远端拉取型智能体由连接器认领执行——名下有活跃心跳即已连接）。
 func (h *adminHandler) listWorkers(w http.ResponseWriter, r *http.Request) {
@@ -967,33 +935,6 @@ func (h *adminHandler) listWorkers(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeAdminData(w, http.StatusOK, views)
-}
-
-func (h *adminHandler) issueConnector(w http.ResponseWriter, r *http.Request) {
-	var payload struct {
-		Name   string   `json:"name"`
-		Scopes []string `json:"scopes"`
-	}
-	if err := decodeAdminBody(w, r, &payload); err != nil {
-		return
-	}
-	plaintext, err := h.deps.Connectors.IssueToken(r.Context(), payload.Name, payload.Scopes)
-	if err != nil {
-		writeAdminError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	// 明文令牌仅此一次出现在响应里。
-	writeAdminData(w, http.StatusCreated, map[string]any{
-		"name": payload.Name, "token": plaintext,
-	})
-}
-
-func (h *adminHandler) revokeConnector(w http.ResponseWriter, r *http.Request) {
-	if err := h.deps.Connectors.RevokeToken(r.Context(), chi.URLParam(r, "name")); err != nil {
-		writeAdminError(w, http.StatusNotFound, "not_found", "connector not found")
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
 }
 
 // ---------------------------------------------------------------------------
@@ -1175,52 +1116,6 @@ func writeAccountError(w http.ResponseWriter, err error) {
 // 执行后端（providers，八模块 IA：智能体 → 执行后端子页）
 // ---------------------------------------------------------------------------
 
-func (h *adminHandler) listProviders(w http.ResponseWriter, r *http.Request) {
-	if h.deps.Providers == nil {
-		writeAdminError(w, http.StatusServiceUnavailable, "providers_unavailable",
-			"executor backend management is not configured")
-		return
-	}
-	views, err := h.deps.Providers.List(r.Context())
-	if err != nil {
-		writeAdminError(w, http.StatusInternalServerError, "storage_error", "list Provider snapshot failed")
-		return
-	}
-	if sessionUserFrom(r).Role != account.RoleAdmin {
-		// 普通用户可观察可用性与岗位分配，但不需要（也不应看到）基础设施
-		// URL、本机二进制路径与可编辑配置。
-		for index := range views {
-			views[index].Config = map[string]any{}
-			views[index].Editable = false
-		}
-	}
-	writeAdminData(w, http.StatusOK, views)
-}
-
-func (h *adminHandler) updateProvider(w http.ResponseWriter, r *http.Request) {
-	if h.deps.Providers == nil {
-		writeAdminError(w, http.StatusServiceUnavailable, "providers_unavailable",
-			"executor backend management is not configured")
-		return
-	}
-	id := strings.ToLower(strings.TrimSpace(chi.URLParam(r, "id")))
-	expected, ok := parseProviderIfMatch(w, r)
-	if !ok {
-		return
-	}
-	var payload map[string]any
-	if err := decodeAdminBody(w, r, &payload); err != nil {
-		return
-	}
-	_, view, err := h.deps.Providers.Update(r.Context(), id, payload, expected,
-		sessionUserFrom(r).Username)
-	if err != nil {
-		writeProviderError(w, err)
-		return
-	}
-	writeAdminData(w, http.StatusOK, view)
-}
-
 // parseProviderIfMatch 严格解析 If-Match：缺省 = 无条件写（用快照 revision
 // 兜底 CAS）；带了必须是单个带引号的非负整数。非法时已写好 400。
 func parseProviderIfMatch(w http.ResponseWriter, r *http.Request) (*int64, bool) {
@@ -1245,20 +1140,4 @@ func parseProviderIfMatch(w http.ResponseWriter, r *http.Request) (*int64, bool)
 		return invalid()
 	}
 	return &revision, true
-}
-
-// writeProviderError 映射执行后端用例错误：404 未知 / 412 CAS 冲突 /
-// 500 存储 / 422 配置校验。
-func writeProviderError(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, backend.ErrUnknownProvider):
-		writeAdminError(w, http.StatusNotFound, "provider_not_found", "智能体 Provider 不存在")
-	case errors.Is(err, backend.ErrStaleRevision):
-		writeAdminError(w, http.StatusPreconditionFailed, "stale_provider_revision",
-			"执行职能体配置已变化，请刷新后重试")
-	case errors.Is(err, backend.ErrStorage):
-		writeAdminError(w, http.StatusInternalServerError, "storage_error", "update provider failed")
-	default:
-		writeAdminError(w, http.StatusUnprocessableEntity, "invalid_provider_config", err.Error())
-	}
 }

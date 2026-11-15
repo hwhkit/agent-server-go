@@ -63,63 +63,6 @@ func (f *fakeQueue) RecordDirectRun(context.Context, domain.DirectRun) (string, 
 }
 func (f *fakeQueue) WaitWake(context.Context, time.Duration) bool { return false }
 
-type fakeTokens struct {
-	byHash map[string]*domain.Token
-	byName map[string]*domain.Token
-}
-
-func newFakeTokens() *fakeTokens {
-	return &fakeTokens{byHash: map[string]*domain.Token{}, byName: map[string]*domain.Token{}}
-}
-
-func (f *fakeTokens) Issue(_ context.Context, t *domain.Token) error {
-	if existing, ok := f.byName[t.Name]; ok {
-		delete(f.byHash, existing.Hash)
-	}
-	f.byHash[t.Hash] = t
-	f.byName[t.Name] = t
-	return nil
-}
-func (f *fakeTokens) GetByHash(_ context.Context, hash string) (*domain.Token, error) {
-	if t, ok := f.byHash[hash]; ok {
-		return t, nil
-	}
-	return nil, domain.ErrTokenNotFound
-}
-func (f *fakeTokens) GetByName(_ context.Context, name string) (*domain.Token, error) {
-	if t, ok := f.byName[name]; ok {
-		return t, nil
-	}
-	return nil, domain.ErrTokenNotFound
-}
-func (f *fakeTokens) List(context.Context) ([]domain.Token, error) {
-	out := make([]domain.Token, 0, len(f.byName))
-	for _, t := range f.byName {
-		out = append(out, *t)
-	}
-	return out, nil
-}
-func (f *fakeTokens) RevokeByName(_ context.Context, name string) error {
-	t, ok := f.byName[name]
-	if !ok {
-		return domain.ErrTokenNotFound
-	}
-	now := time.Now()
-	t.RevokedAt = &now
-	return nil
-}
-func (f *fakeTokens) Revoke(_ context.Context, id string, graceUntil *time.Time) error {
-	for _, t := range f.byName {
-		if t.ID == id {
-			now := time.Now()
-			t.RevokedAt = &now
-			t.GraceUntil = graceUntil
-			return nil
-		}
-	}
-	return domain.ErrTokenNotFound
-}
-
 type fakeWorkers struct{ beats []domain.Worker }
 
 func (f *fakeWorkers) Beat(_ context.Context, w domain.Worker) error {
@@ -135,7 +78,7 @@ type fakeLister struct{ slugs []string }
 
 func (f fakeLister) RemotePullSlugs(context.Context) ([]string, error) { return f.slugs, nil }
 
-func newTestService(queue *fakeQueue, tokens *fakeTokens, workers *fakeWorkers, remote RemoteAgentLister) *Service {
+func newTestService(queue *fakeQueue, workers *fakeWorkers, remote RemoteAgentLister) *Service {
 	return NewService(Deps{
 		Config: Config{
 			LeaseSeconds: 90, RenewInterval: 30 * time.Second,
@@ -143,64 +86,13 @@ func newTestService(queue *fakeQueue, tokens *fakeTokens, workers *fakeWorkers, 
 			MaxOutstandingLeases: 64, MaxAttempts: 3, QueueTTL: time.Hour,
 			WorkerOfflineAfterMiss: 3,
 		},
-		Queue: queue, Tokens: tokens, Workers: workers, Remote: remote,
+		Queue: queue, Workers: workers, Remote: remote,
 	})
 }
 
 // ---------------------------------------------------------------------------
 // 令牌
 // ---------------------------------------------------------------------------
-
-func TestIssueAuthenticateRevoke(t *testing.T) {
-	t.Parallel()
-	tokens := newFakeTokens()
-	svc := newTestService(&fakeQueue{}, tokens, &fakeWorkers{}, nil)
-	ctx := context.Background()
-
-	plaintext, err := svc.IssueToken(ctx, "gpu-box", []string{"Fundamental-Analyst", " "})
-	if err != nil {
-		t.Fatalf("issue: %v", err)
-	}
-	if len(plaintext) < 40 || plaintext[:4] != domain.TokenPrefix {
-		t.Fatalf("plaintext = %q", plaintext[:8])
-	}
-
-	principal, apiErr := svc.Authenticate(ctx, "Bearer "+plaintext)
-	if apiErr != nil {
-		t.Fatalf("authenticate: %+v", apiErr)
-	}
-	if principal.Name != "gpu-box" || len(principal.Scopes) != 1 || principal.Scopes[0] != "fundamental-analyst" {
-		t.Errorf("principal = %+v（scope 应小写清洗）", principal)
-	}
-
-	// 前缀缺失 / 错误令牌 → 401。
-	if _, apiErr := svc.Authenticate(ctx, plaintext[:10]); apiErr == nil || apiErr.Status != 401 {
-		t.Errorf("bare token = %+v", apiErr)
-	}
-	if _, apiErr := svc.Authenticate(ctx, "Bearer act_wrong"); apiErr == nil || apiErr.Status != 401 {
-		t.Errorf("wrong token = %+v", apiErr)
-	}
-
-	// 同名再签发 = 轮换：旧明文立即失效。
-	rotated, err := svc.IssueToken(ctx, "gpu-box", nil)
-	if err != nil {
-		t.Fatalf("rotate: %v", err)
-	}
-	if _, apiErr := svc.Authenticate(ctx, "Bearer "+plaintext); apiErr == nil {
-		t.Error("old token must die on rotation")
-	}
-	if principal, apiErr := svc.Authenticate(ctx, "Bearer "+rotated); apiErr != nil || len(principal.Scopes) != 1 || principal.Scopes[0] != "*" {
-		t.Errorf("rotated auth = %+v %+v（空 scope 应按通配）", principal, apiErr)
-	}
-
-	// 吊销即失效。
-	if err := svc.RevokeToken(ctx, "gpu-box"); err != nil {
-		t.Fatalf("revoke: %v", err)
-	}
-	if _, apiErr := svc.Authenticate(ctx, "Bearer "+rotated); apiErr == nil || apiErr.Message != "connector token revoked" {
-		t.Errorf("revoked auth = %+v", apiErr)
-	}
-}
 
 // ---------------------------------------------------------------------------
 // claim
@@ -212,7 +104,7 @@ func principalWith(scopes ...string) *Principal {
 
 func TestClaimValidationAndScope(t *testing.T) {
 	t.Parallel()
-	svc := newTestService(&fakeQueue{}, newFakeTokens(), &fakeWorkers{}, nil)
+	svc := newTestService(&fakeQueue{}, &fakeWorkers{}, nil)
 	ctx := context.Background()
 
 	if _, apiErr := svc.Claim(ctx, principalWith("demo"), ClaimInput{WorkerID: "BAD_ID!"}); apiErr == nil || apiErr.Code != "invalid_worker_id" {
@@ -236,7 +128,7 @@ func TestClaimDeliveredMapping(t *testing.T) {
 			Payload: []byte(`{"taskBrief":"…"}`), ExecutionDeadline: deadline, LeaseExpiresAt: lease,
 		},
 	}
-	svc := newTestService(queue, newFakeTokens(), &fakeWorkers{}, nil)
+	svc := newTestService(queue, &fakeWorkers{}, nil)
 	task, apiErr := svc.Claim(context.Background(), principalWith("demo"), ClaimInput{WorkerID: "gpu-box-03", Capacity: 4})
 	if apiErr != nil {
 		t.Fatalf("claim: %+v", apiErr)
@@ -254,14 +146,14 @@ func TestClaimDeliveredMapping(t *testing.T) {
 func TestClaimRateLimitedAndLeaseConflict(t *testing.T) {
 	t.Parallel()
 	queue := &fakeQueue{claimOutcome: domain.ClaimRateLimited}
-	svc := newTestService(queue, newFakeTokens(), &fakeWorkers{}, nil)
+	svc := newTestService(queue, &fakeWorkers{}, nil)
 	_, apiErr := svc.Claim(context.Background(), principalWith("demo"), ClaimInput{WorkerID: "w-1"})
 	if apiErr == nil || apiErr.Status != 429 || apiErr.RetryAfter != "2" {
 		t.Errorf("rate limited = %+v", apiErr)
 	}
 
 	queue = &fakeQueue{leaseCounts: map[string]int{"w-1": 2}, claimOutcome: domain.ClaimEmpty}
-	svc = newTestService(queue, newFakeTokens(), &fakeWorkers{}, nil)
+	svc = newTestService(queue, &fakeWorkers{}, nil)
 	_, apiErr = svc.Claim(context.Background(), principalWith("demo"), ClaimInput{WorkerID: "w-1", InFlight: 1})
 	if apiErr == nil || apiErr.Status != 409 || apiErr.Code != "WORKER_LEASE_ACTIVE" {
 		t.Errorf("lease conflict = %+v", apiErr)
@@ -276,7 +168,7 @@ func TestClaimRateLimitedAndLeaseConflict(t *testing.T) {
 func TestClaimEmptyWindowIs204Empty(t *testing.T) {
 	t.Parallel()
 	queue := &fakeQueue{claimOutcome: domain.ClaimEmpty}
-	svc := newTestService(queue, newFakeTokens(), &fakeWorkers{}, nil)
+	svc := newTestService(queue, &fakeWorkers{}, nil)
 	started := time.Now()
 	_, apiErr := svc.Claim(context.Background(), principalWith("demo"), ClaimInput{WorkerID: "w-1"})
 	if apiErr == nil || apiErr.Status != 204 || apiErr.EmptyReason != "empty" {
@@ -290,10 +182,10 @@ func TestClaimEmptyWindowIs204Empty(t *testing.T) {
 func TestClaimWildcardScopeExpands(t *testing.T) {
 	t.Parallel()
 	queue := &fakeQueue{claimOutcome: domain.ClaimEmpty}
-	svc := newTestService(queue, newFakeTokens(), &fakeWorkers{}, fakeLister{slugs: []string{"a1", "a2"}})
+	svc := newTestService(queue, &fakeWorkers{}, fakeLister{slugs: []string{"a1", "a2"}})
 	_, _ = svc.Claim(context.Background(), principalWith("*"), ClaimInput{WorkerID: "w-1", MaxWaitSeconds: 1})
 	// 无 remote-pull 智能体时通配展开为空 → no-scope-match。
-	svc2 := newTestService(queue, newFakeTokens(), &fakeWorkers{}, fakeLister{})
+	svc2 := newTestService(queue, &fakeWorkers{}, fakeLister{})
 	_, apiErr := svc2.Claim(context.Background(), principalWith("*"), ClaimInput{WorkerID: "w-1"})
 	if apiErr == nil || apiErr.EmptyReason != "no-scope-match" {
 		t.Errorf("empty expansion = %+v", apiErr)
@@ -319,7 +211,7 @@ func TestRenewMatrix(t *testing.T) {
 		{domain.RenewUnknown, false, 404, "run_not_found"},
 	}
 	for _, tc := range cases {
-		svc := newTestService(&fakeQueue{renewOutcome: tc.outcome}, newFakeTokens(), &fakeWorkers{}, nil)
+		svc := newTestService(&fakeQueue{renewOutcome: tc.outcome}, &fakeWorkers{}, nil)
 		result, apiErr := svc.Renew(context.Background(), "run-1", "w-1")
 		if tc.wantStatus == 0 {
 			if apiErr != nil || result.Abort != tc.wantAbort {
@@ -331,7 +223,7 @@ func TestRenewMatrix(t *testing.T) {
 			t.Errorf("outcome %v = %+v", tc.outcome, apiErr)
 		}
 	}
-	svc := newTestService(&fakeQueue{}, newFakeTokens(), &fakeWorkers{}, nil)
+	svc := newTestService(&fakeQueue{}, &fakeWorkers{}, nil)
 	if _, apiErr := svc.Renew(context.Background(), " ", "w-1"); apiErr == nil || apiErr.Status != 400 {
 		t.Errorf("missing run id = %+v", apiErr)
 	}
@@ -340,7 +232,7 @@ func TestRenewMatrix(t *testing.T) {
 func TestCompleteValidationAndOutcomes(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	svc := newTestService(&fakeQueue{}, newFakeTokens(), &fakeWorkers{}, nil)
+	svc := newTestService(&fakeQueue{}, &fakeWorkers{}, nil)
 
 	if _, apiErr := svc.Complete(ctx, "r", "w", CompleteInput{Status: "maybe"}); apiErr == nil || apiErr.Code != "invalid_status" {
 		t.Errorf("bad status = %+v", apiErr)
@@ -357,7 +249,7 @@ func TestCompleteValidationAndOutcomes(t *testing.T) {
 
 	// 成功回传。
 	queue := &fakeQueue{completeOut: domain.CompleteOutcome{Accepted: true, RunStatus: "completed"}}
-	svc = newTestService(queue, newFakeTokens(), &fakeWorkers{}, nil)
+	svc = newTestService(queue, &fakeWorkers{}, nil)
 	result, apiErr := svc.Complete(ctx, "r", "w", CompleteInput{
 		Status: "succeeded", Payload: json.RawMessage(`{"summary":"ok"}`),
 		Usage: &CompleteUsage{InputTokens: 8210, OutputTokens: 1204, TotalTokens: 9414},
@@ -367,16 +259,16 @@ func TestCompleteValidationAndOutcomes(t *testing.T) {
 	}
 
 	// 冲突与未找到。
-	svc = newTestService(&fakeQueue{completeOut: domain.CompleteOutcome{Conflict: true}}, newFakeTokens(), &fakeWorkers{}, nil)
+	svc = newTestService(&fakeQueue{completeOut: domain.CompleteOutcome{Conflict: true}}, &fakeWorkers{}, nil)
 	if _, apiErr := svc.Complete(ctx, "r", "w", CompleteInput{Status: "aborted"}); apiErr == nil || apiErr.Code != "RESULT_CONFLICT" {
 		t.Errorf("conflict = %+v", apiErr)
 	}
-	svc = newTestService(&fakeQueue{completeErr: domain.ErrTaskNotFound}, newFakeTokens(), &fakeWorkers{}, nil)
+	svc = newTestService(&fakeQueue{completeErr: domain.ErrTaskNotFound}, &fakeWorkers{}, nil)
 	if _, apiErr := svc.Complete(ctx, "r", "w", CompleteInput{Status: "aborted"}); apiErr == nil || apiErr.Status != 404 {
 		t.Errorf("unknown run = %+v", apiErr)
 	}
 	// 迟到结果仅归档。
-	svc = newTestService(&fakeQueue{completeOut: domain.CompleteOutcome{RunStatus: "superseded"}}, newFakeTokens(), &fakeWorkers{}, nil)
+	svc = newTestService(&fakeQueue{completeOut: domain.CompleteOutcome{RunStatus: "superseded"}}, &fakeWorkers{}, nil)
 	result, apiErr = svc.Complete(ctx, "r", "w", CompleteInput{Status: "succeeded", Payload: json.RawMessage(`{}`)})
 	if apiErr != nil || result.Accepted || result.RunStatus != "superseded" {
 		t.Errorf("superseded = %+v %+v", result, apiErr)
@@ -387,7 +279,7 @@ func TestHeartbeatRegistersAndReports(t *testing.T) {
 	t.Parallel()
 	workers := &fakeWorkers{}
 	queue := &fakeQueue{depth: 3}
-	svc := newTestService(queue, newFakeTokens(), workers, nil)
+	svc := newTestService(queue, workers, nil)
 
 	result, apiErr := svc.Heartbeat(context.Background(), principalWith("demo"), HeartbeatInput{
 		WorkerID: "gpu-box-03", InFlight: 1, Capacity: 4,

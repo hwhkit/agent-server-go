@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -28,28 +27,6 @@ func (f fakeResolver) Resolve(_ context.Context, slug string) (*agent.ResolvedCo
 		return cfg, nil
 	}
 	return nil, agent.ErrNotFound
-}
-
-type fakeEngine struct {
-	mu          sync.Mutex
-	output      *platform.ProcessedOutput
-	err         error
-	block       chan struct{}
-	lastTimeout time.Duration
-	calls       int
-}
-
-func (f *fakeEngine) Execute(_ context.Context, _ *agent.ResolvedConfig, _ *platform.TaskContext,
-	_ any, timeout time.Duration) (*platform.ProcessedOutput, error) {
-	f.mu.Lock()
-	f.calls++
-	f.lastTimeout = timeout
-	block, err, out := f.block, f.err, f.output
-	f.mu.Unlock()
-	if block != nil {
-		<-block
-	}
-	return out, err
 }
 
 type fakeQueue struct {
@@ -129,72 +106,12 @@ func wantDispatchError(t *testing.T, err error, code string) *Error {
 // 本机路径：准入阶梯
 // ---------------------------------------------------------------------------
 
-func TestExecuteSuccessPassesRemainingBudget(t *testing.T) {
-	t.Parallel()
-	engine := &fakeEngine{output: &platform.ProcessedOutput{Summary: "ok"}}
-	svc := NewService(Config{
-		Resolver:             fakeResolver{configs: map[string]*agent.ResolvedConfig{"demo": localConfig("demo")}},
-		Engine:               engine,
-		GlobalMaxConcurrency: 4,
-	})
-	out, err := svc.Execute(context.Background(), "demo", &platform.TaskContext{}, nil, 10*time.Second)
-	if err != nil {
-		t.Fatalf("execute: %v", err)
-	}
-	if out.Summary != "ok" {
-		t.Errorf("output = %+v", out)
-	}
-	if engine.lastTimeout <= 0 || engine.lastTimeout > 10*time.Second {
-		t.Errorf("engine timeout = %v", engine.lastTimeout)
-	}
-}
-
-func TestAdmissionFullFailsFast(t *testing.T) {
-	t.Parallel()
-	cfg := localConfig("demo")
-	cfg.MaxConcurrency, cfg.QueueCapacity = 1, 0 // 准入闸只有 1 个许可
-	block := make(chan struct{})
-	engine := &fakeEngine{block: block, output: &platform.ProcessedOutput{}}
-	svc := NewService(Config{
-		Resolver:             fakeResolver{configs: map[string]*agent.ResolvedConfig{"demo": cfg}},
-		Engine:               engine,
-		GlobalMaxConcurrency: 4,
-	})
-	first := make(chan error, 1)
-	go func() {
-		_, err := svc.Execute(context.Background(), "demo", &platform.TaskContext{}, nil, 5*time.Second)
-		first <- err
-	}()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		engine.mu.Lock()
-		calls := engine.calls
-		engine.mu.Unlock()
-		if calls == 1 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	started := time.Now()
-	_, err := svc.Execute(context.Background(), "demo", &platform.TaskContext{}, nil, 5*time.Second)
-	wantDispatchError(t, err, "agent_overloaded")
-	if time.Since(started) > time.Second {
-		t.Error("admission rejection must be immediate, not budget-bound")
-	}
-	close(block) // 放行第一个任务，回收 goroutine
-	if err := <-first; err != nil {
-		t.Errorf("first execute: %v", err)
-	}
-}
-
 func TestDisabledAgentRejected(t *testing.T) {
 	t.Parallel()
 	cfg := localConfig("demo")
 	cfg.Enabled = false
 	svc := NewService(Config{
-		Resolver:             fakeResolver{configs: map[string]*agent.ResolvedConfig{"demo": cfg}},
-		Engine:               &fakeEngine{},
-		GlobalMaxConcurrency: 1,
+		Resolver: fakeResolver{configs: map[string]*agent.ResolvedConfig{"demo": cfg}},
 	})
 	_, err := svc.Execute(context.Background(), "demo", &platform.TaskContext{}, nil, time.Second)
 	wantDispatchError(t, err, "agent_disabled")
@@ -203,58 +120,34 @@ func TestDisabledAgentRejected(t *testing.T) {
 func TestResolveFallsBackToDefaultAgent(t *testing.T) {
 	t.Parallel()
 	svc := NewService(Config{
-		Resolver:             fakeResolver{configs: map[string]*agent.ResolvedConfig{"fallback": localConfig("fallback")}},
-		Engine:               &fakeEngine{output: &platform.ProcessedOutput{}},
-		DefaultSlug:          "fallback",
-		GlobalMaxConcurrency: 1,
+		Resolver:    fakeResolver{configs: map[string]*agent.ResolvedConfig{"fallback": remoteConfig("fallback")}},
+		DefaultSlug: "fallback",
 	})
-	// 未知 code 与空 code 走同一条回落路径。
-	if _, err := svc.Execute(context.Background(), "ghost", &platform.TaskContext{}, nil, time.Second); err != nil {
-		t.Errorf("explicit miss must fall back: %v", err)
-	}
-	if _, err := svc.Execute(context.Background(), "  ", &platform.TaskContext{}, nil, time.Second); err != nil {
-		t.Errorf("empty code must fall back: %v", err)
+	// 未知 code 与空 code 走同一条回落路径。remote-only 语义下，回落成功的
+	// 可观察证据是错误来自 remote 执行层（AGENT_API 未装配），而非 agent_not_found。
+	for _, code := range []string{"ghost", "  "} {
+		_, err := svc.Execute(context.Background(), code, &platform.TaskContext{}, nil, time.Second)
+		dispatchErr, ok := err.(*Error)
+		if !ok {
+			t.Fatalf("code %q: want *Error, got %T", code, err)
+		}
+		if dispatchErr.Code != "executor_unavailable" {
+			t.Errorf("code %q: fallback must reach remote layer, got %v", code, dispatchErr)
+		}
 	}
 }
 
 func TestDefaultAgentMissingIsExplicit(t *testing.T) {
 	t.Parallel()
 	svc := NewService(Config{
-		Resolver:             fakeResolver{configs: map[string]*agent.ResolvedConfig{}},
-		Engine:               &fakeEngine{},
-		DefaultSlug:          "ghost-default",
-		GlobalMaxConcurrency: 1,
+		Resolver:    fakeResolver{configs: map[string]*agent.ResolvedConfig{}},
+		DefaultSlug: "ghost-default",
 	})
 	_, err := svc.Execute(context.Background(), "x", &platform.TaskContext{}, nil, time.Second)
 	dispatchErr := wantDispatchError(t, err, "agent_not_found")
 	if !strings.Contains(dispatchErr.Detail, "ghost-default") {
 		t.Errorf("detail must name the unregistered default: %q", dispatchErr.Detail)
 	}
-}
-
-func TestEngineErrorCodesPassThrough(t *testing.T) {
-	t.Parallel()
-	svc := NewService(Config{
-		Resolver:             fakeResolver{configs: map[string]*agent.ResolvedConfig{"demo": localConfig("demo")}},
-		Engine:               &fakeEngine{err: &codedError{code: "input_too_large", msg: "prompt exceeded limit"}},
-		GlobalMaxConcurrency: 1,
-	})
-	_, err := svc.Execute(context.Background(), "demo", &platform.TaskContext{}, nil, time.Second)
-	dispatchErr := wantDispatchError(t, err, "input_too_large")
-	if dispatchErr.Detail != "input_too_large: prompt exceeded limit" {
-		t.Errorf("detail = %q", dispatchErr.Detail)
-	}
-}
-
-func TestExecFailureMapping(t *testing.T) {
-	t.Parallel()
-	svc := NewService(Config{
-		Resolver:             fakeResolver{configs: map[string]*agent.ResolvedConfig{"demo": localConfig("demo")}},
-		Engine:               &fakeEngine{err: &exec.Failure{Code: "executor_failed", Message: "cli crashed"}},
-		GlobalMaxConcurrency: 1,
-	})
-	_, err := svc.Execute(context.Background(), "demo", &platform.TaskContext{}, nil, time.Second)
-	wantDispatchError(t, err, "executor_failed")
 }
 
 // ---------------------------------------------------------------------------
@@ -277,11 +170,9 @@ func TestRemoteEnqueueAndResultMapping(t *testing.T) {
 	}
 	runID := "run_explicit_1"
 	svc := NewService(Config{
-		Resolver:             fakeResolver{configs: map[string]*agent.ResolvedConfig{"remote-demo": remoteConfig("remote-demo")}},
-		Engine:               &fakeEngine{},
-		Queue:                queue,
-		Remote:               RemotePolicy{QueueTTL: time.Hour, SyncHoldMax: 300 * time.Second},
-		GlobalMaxConcurrency: 1,
+		Resolver: fakeResolver{configs: map[string]*agent.ResolvedConfig{"remote-demo": remoteConfig("remote-demo")}},
+		Queue:    queue,
+		Remote:   RemotePolicy{QueueTTL: time.Hour, SyncHoldMax: 300 * time.Second},
 	})
 	task := &platform.TaskContext{RunID: &runID, TaskBrief: "brief"}
 	out, err := svc.Execute(context.Background(), "remote-demo", task, nil, 30*time.Second)
@@ -318,7 +209,6 @@ func TestRemoteFailureAndCancelMapping(t *testing.T) {
 	svc := NewService(Config{
 		Resolver: fakeResolver{configs: map[string]*agent.ResolvedConfig{"r": remoteConfig("r")}},
 		Queue:    failed, Remote: RemotePolicy{QueueTTL: time.Hour, SyncHoldMax: time.Second},
-		GlobalMaxConcurrency: 1,
 	})
 	_, err := svc.Execute(context.Background(), "r", &platform.TaskContext{}, nil, time.Second)
 	dispatchErr := wantDispatchError(t, err, "model_overloaded")
@@ -335,10 +225,9 @@ func TestRemoteFailureAndCancelMapping(t *testing.T) {
 func TestRemoteQueueFullIsOverloaded(t *testing.T) {
 	t.Parallel()
 	svc := NewService(Config{
-		Resolver:             fakeResolver{configs: map[string]*agent.ResolvedConfig{"r": remoteConfig("r")}},
-		Queue:                &fakeQueue{enqueueErr: connector.ErrQueueFull},
-		Remote:               RemotePolicy{QueueTTL: time.Hour, SyncHoldMax: time.Second},
-		GlobalMaxConcurrency: 1,
+		Resolver: fakeResolver{configs: map[string]*agent.ResolvedConfig{"r": remoteConfig("r")}},
+		Queue:    &fakeQueue{enqueueErr: connector.ErrQueueFull},
+		Remote:   RemotePolicy{QueueTTL: time.Hour, SyncHoldMax: time.Second},
 	})
 	_, err := svc.Execute(context.Background(), "r", &platform.TaskContext{}, nil, time.Second)
 	wantDispatchError(t, err, "agent_overloaded")
@@ -347,10 +236,9 @@ func TestRemoteQueueFullIsOverloaded(t *testing.T) {
 func TestRemoteSyncHoldTimeoutKeepsTaskRunning(t *testing.T) {
 	t.Parallel()
 	svc := NewService(Config{
-		Resolver:             fakeResolver{configs: map[string]*agent.ResolvedConfig{"r": remoteConfig("r")}},
-		Queue:                &fakeQueue{waitBlock: true},
-		Remote:               RemotePolicy{QueueTTL: time.Hour, SyncHoldMax: 80 * time.Millisecond},
-		GlobalMaxConcurrency: 1,
+		Resolver: fakeResolver{configs: map[string]*agent.ResolvedConfig{"r": remoteConfig("r")}},
+		Queue:    &fakeQueue{waitBlock: true},
+		Remote:   RemotePolicy{QueueTTL: time.Hour, SyncHoldMax: 80 * time.Millisecond},
 	})
 	_, err := svc.Execute(context.Background(), "r", &platform.TaskContext{}, nil, 10*time.Second)
 	dispatchErr := wantDispatchError(t, err, "execution_timeout")
@@ -362,8 +250,7 @@ func TestRemoteSyncHoldTimeoutKeepsTaskRunning(t *testing.T) {
 func TestRemoteUnavailableWithoutQueue(t *testing.T) {
 	t.Parallel()
 	svc := NewService(Config{
-		Resolver:             fakeResolver{configs: map[string]*agent.ResolvedConfig{"r": remoteConfig("r")}},
-		GlobalMaxConcurrency: 1,
+		Resolver: fakeResolver{configs: map[string]*agent.ResolvedConfig{"r": remoteConfig("r")}},
 	})
 	_, err := svc.Execute(context.Background(), "r", &platform.TaskContext{}, nil, time.Second)
 	wantDispatchError(t, err, "executor_unavailable")

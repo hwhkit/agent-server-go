@@ -74,7 +74,6 @@ func akService(t *testing.T, queue *akFakeQueue, secrets *akFakeSecrets, denies 
 			WorkerOfflineAfterMiss: 3,
 		},
 		Queue:   queue,
-		Tokens:  newFakeTokens(),
 		Workers: &fakeWorkers{},
 		Remote:  fakeLister{},
 		Secrets: secrets,
@@ -111,17 +110,6 @@ func TestAgentKeyMasterAuth(t *testing.T) {
 	// 缺 slug 头 → 401。
 	if _, failure := svc.Authenticate(context.Background(), "Bearer "+master); failure == nil {
 		t.Fatalf("missing slug hint: expected failure")
-	}
-	// act_ 前缀仍走令牌路径（不误入 agent-key 分支）。
-	svcTokens := NewService(Deps{Config: Config{}, Tokens: newFakeTokens(), Queue: &akFakeQueue{}, Workers: &fakeWorkers{}})
-	plaintext, err := svcTokens.IssueToken(context.Background(), "conn", []string{"analyst"})
-	if err != nil {
-		t.Fatalf("issue: %v", err)
-	}
-	if principal, failure := svcTokens.Authenticate(context.Background(), "Bearer "+plaintext); failure != nil {
-		t.Fatalf("act_ path broken: %+v", failure)
-	} else if principal.Name != "conn" {
-		t.Fatalf("act_ principal: %+v", principal)
 	}
 }
 
@@ -234,8 +222,7 @@ func TestSubmitRunValidationAndScope(t *testing.T) {
 	}
 	// 未注册 slug（scope 覆盖时才走得到队列层；scope 外先 403 防枚举）→ 404。
 	brokenQueue := &akFakeQueue{directErr: domain.ErrUnknownAgent}
-	brokenSvc := NewService(Deps{Config: Config{}, Queue: brokenQueue, Tokens: newFakeTokens(),
-		Workers: &fakeWorkers{}, Secrets: secrets})
+	brokenSvc := NewService(Deps{Config: Config{}, Queue: brokenQueue, Workers: &fakeWorkers{}, Secrets: secrets})
 	wildcard := &Principal{ID: "tok:1", Name: "conn", Scopes: []string{"*"}}
 	if _, failure := brokenSvc.SubmitRun(context.Background(), wildcard, SubmitRunInput{
 		Slug: "ghost", Status: "succeeded", Payload: json.RawMessage(`{}`)}); failure == nil || failure.Status != 404 {

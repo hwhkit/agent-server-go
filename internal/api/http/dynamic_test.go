@@ -2,7 +2,7 @@ package http_test
 
 // 动态 Agent 入口（/agent/{slug}）端到端集成测试：v1 canonical 签名、
 // nonce 防重放、时间窗、旧签名兼容闸、网关幂等（回放/冲突）、显式 runId
-// 冲突、异步 202+callback、容量闸 429。门禁同 admin_test.go（真 PostgreSQL）。
+// 冲突、异步 202+callback。门禁同 admin_test.go（真 PostgreSQL）；容量语义由租约队列约束（见 dispatch/queue 测试）。
 
 import (
 	"bytes"
@@ -13,7 +13,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -38,7 +37,7 @@ type dynEngine struct {
 	lastRaw any
 }
 
-func (e *dynEngine) Execute(_ context.Context, _ *agent.ResolvedConfig, _ *platform.TaskContext,
+func (e *dynEngine) Execute(_ context.Context, _ string, _ *platform.TaskContext,
 	raw any, _ time.Duration) (*platform.ProcessedOutput, error) {
 	e.mu.Lock()
 	e.calls++
@@ -117,7 +116,7 @@ func setupDynamic(t *testing.T, allowLegacy bool) *dynFixture {
 		}
 		entity := &agent.Agent{
 			Slug: slug, Name: slug, Enabled: true,
-			Binding:   exec.Binding{Kind: exec.KindPi, Mode: exec.ModeLocal},
+			Binding:   exec.Binding{Kind: exec.KindRemotePull, Mode: exec.ModeRemotePull},
 			Positions: []string{"FUNDAMENTAL_ANALYST"}, SigningSecret: []byte(secret),
 			TimeoutSecs: 60, MaxConcurrency: concurrency, QueueCapacity: queue,
 		}
@@ -372,54 +371,4 @@ func TestDynamicAsyncCallbackFlow(t *testing.T) {
 		t.Fatal("callback never delivered")
 	}
 	fixture.service.WaitBackground()
-}
-
-func TestDynamicCapacityGate(t *testing.T) {
-	fixture := setupDynamic(t, false)
-	slug := "dyn-blocked-" + fixture.suffix
-	block := make(chan struct{})
-	fixture.engine.block = block
-	var closeOnce sync.Once
-	release := func() { closeOnce.Do(func() { close(block) }) }
-	defer release()
-
-	body := envelopeBody("", "")
-	first := make(chan int, 1)
-	go func() {
-		headers := fixture.signV1(t, slug, "", "", body, time.Now().Unix(), randomNonce())
-		resp, _ := fixture.post(t, "/agent/"+slug, headers, body)
-		first <- resp.StatusCode
-	}()
-	// 等第一个请求真正进入执行（持有 执行闸+准入闸 各 1）。
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		fixture.engine.mu.Lock()
-		calls := fixture.engine.calls
-		fixture.engine.mu.Unlock()
-		if calls >= 1 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	// 第二个请求：准入闸还有 1（队列容量 1），会卡在执行闸等待——占住最后一个准入许可。
-	second := make(chan int, 1)
-	go func() {
-		headers := fixture.signV1(t, slug, "", "", body, time.Now().Unix(), randomNonce())
-		resp, _ := fixture.post(t, "/agent/"+slug, headers, body)
-		second <- resp.StatusCode
-	}()
-	time.Sleep(200 * time.Millisecond)
-	// 第三个请求：准入闸满（并发 1 + 队列 1 均被占）→ 429 + Retry-After。
-	headers := fixture.signV1(t, slug, "", "", body, time.Now().Unix(), randomNonce())
-	resp, raw := fixture.post(t, "/agent/"+slug, headers, body)
-	if resp.StatusCode != 429 || resp.Header.Get("Retry-After") != "1" {
-		t.Errorf("overload = %d retry-after=%q body=%s", resp.StatusCode, resp.Header.Get("Retry-After"), raw)
-	}
-	if !strings.Contains(string(raw), "agent_overloaded") {
-		t.Errorf("overload body = %s", raw)
-	}
-	// 放行阻塞的执行，回收两个在飞请求。
-	release()
-	<-second
-	<-first
 }

@@ -15,7 +15,6 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -28,97 +27,6 @@ const (
 	exampleAdminSessionSecret = "replace-with-at-least-32-random-bytes"
 	exampleProviderAPIKey     = "replace-me"
 )
-
-// GatewayProtocol 是网关兼容协议。LiteLLM 同时支持 Anthropic Messages 与
-// OpenAI Chat Completions。
-type GatewayProtocol string
-
-const (
-	GatewayProtocolAnthropic GatewayProtocol = "anthropic"
-	GatewayProtocolOpenAI    GatewayProtocol = "openai"
-)
-
-// ParseGatewayProtocol 接受 anthropic / openai / open_ai(大小写与首尾空白不敏感)。
-func ParseGatewayProtocol(value string) (GatewayProtocol, bool) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "anthropic":
-		return GatewayProtocolAnthropic, true
-	case "openai", "open_ai":
-		return GatewayProtocolOpenAI, true
-	default:
-		return "", false
-	}
-}
-
-// GatewayConfig 是经 litellm 网关直调 Agent 的配置。
-type GatewayConfig struct {
-	BaseURL          string
-	APIKey           string
-	Model            string
-	Protocol         GatewayProtocol
-	MaxTokens        uint64
-	MaxAttempts      int
-	MaxResponseBytes int
-}
-
-// LocalAgentConfig 是本机 agent CLI(pi / codex / reasonix)的配置。
-type LocalAgentConfig struct {
-	CodexBinary           string
-	PiBinary              string
-	ReasonixBinary        string
-	DeepseekHarnessBinary string
-	OpenCodeBinary        string
-	OpenCodeDefaultModel  string
-	QwenCodeBinary        string
-	QwenCodeDefaultModel  string
-	GeminiCLIBinary       string
-	GeminiCLIDefaultModel string
-	OpenHandsBinary       string
-	OpenHandsDefaultModel string
-	// FinanceExtensionPath 是 Pi 基本面/技术分析岗位的只读金融数据扩展;
-	// 未配置时保持无工具模式。
-	FinanceExtensionPath string
-	// StrategySkillPaths 是策略分析师可用的标准 SKILL.md 路径;配置时必须为 2-3 个。
-	StrategySkillPaths []string
-	// AnalysisSkillPaths 是基本面/技术分析师可按 Agent 选择的标准 SKILL.md 路径。
-	AnalysisSkillPaths []string
-	// WorkflowSkillPaths 是组合/风控/执行岗位可按 Agent 选择的标准 SKILL.md 路径。
-	WorkflowSkillPaths []string
-	DefaultModel       string
-	AllowedEnv         []string
-	MaxOutputBytes     int
-	MaxPromptBytes     int
-}
-
-// OpenAIAgentsConfig 是 OpenAI 托管 Agents API 配置。
-type OpenAIAgentsConfig struct {
-	Enabled          bool
-	BaseURL          string
-	APIKey           string
-	DefaultModel     string
-	ReasoningEffort  string
-	Environment      string
-	MCPServerURL     string
-	MCPServerLabel   string
-	MCPAuthorization string
-	MCPRequired      bool
-	DeleteSession    bool
-	MaxResponseBytes int
-}
-
-// ClaudeManagedAgentsConfig 是 Anthropic Claude Managed Agents(beta)配置。
-type ClaudeManagedAgentsConfig struct {
-	Enabled          bool
-	BaseURL          string
-	APIKey           string
-	WorkspaceID      string
-	AgentID          string
-	EnvironmentID    string
-	VaultIDs         []string
-	MaxListCostCents *uint64
-	DeleteSession    bool
-	MaxResponseBytes int
-}
 
 // PlatformConfig 是平台运行所需的全部配置。
 type PlatformConfig struct {
@@ -144,20 +52,6 @@ type PlatformConfig struct {
 	AdminSessionTTL        time.Duration
 	SecureCookies          bool
 	AdminTrustedProxyCIDRs []string
-
-	WorkspaceRoot string
-	ClaudeEnabled bool
-	ClaudeBinary  string
-	// ClaudeDefaultModel 是 Agent 未显式指定 claude_model 时使用的默认模型。
-	// 经 litellm 网关时须填网关模型名(如 dsk_4f),否则会回退到 Claude 内置默认模型名。
-	ClaudeDefaultModel   string
-	ClaudeAllowedEnv     []string
-	MaxClaudeOutputBytes int
-
-	Gateway       GatewayConfig
-	LocalAgents   LocalAgentConfig
-	OpenAIAgents  OpenAIAgentsConfig
-	ClaudeManaged ClaudeManagedAgentsConfig
 }
 
 // ---------------------------------------------------------------------------
@@ -389,15 +283,6 @@ func LoadPlatformConfig() (*PlatformConfig, error) {
 
 // PlatformConfigFromFile 把合并后的可选字段落成带默认值的 PlatformConfig 并校验。
 func PlatformConfigFromFile(root *PlatformRootFile) (*PlatformConfig, error) {
-	protocol := GatewayProtocolAnthropic
-	if root.Gateway.Protocol != nil {
-		parsed, ok := ParseGatewayProtocol(*root.Gateway.Protocol)
-		if !ok {
-			return nil, errors.New("[gateway].protocol must be anthropic or openai")
-		}
-		protocol = parsed
-	}
-
 	config := &PlatformConfig{
 		Enabled:                  derefBoolOr(root.Platform.Enabled, true),
 		PublicBaseURL:            strings.TrimRight(derefOr(root.Platform.PublicBaseURL, "http://127.0.0.1:8080"), "/"),
@@ -414,72 +299,6 @@ func PlatformConfigFromFile(root *PlatformRootFile) (*PlatformConfig, error) {
 		AdminSessionTTL:        secondsOr(root.Admin.SessionTTLSecs, 72*60*60),
 		SecureCookies:          derefBoolOr(root.Admin.SecureCookies, false),
 		AdminTrustedProxyCIDRs: derefSliceOr(root.Admin.TrustedProxyCIDRs, nil),
-
-		WorkspaceRoot:        derefOr(root.Claude.WorkspaceRoot, "."),
-		ClaudeEnabled:        derefBoolOr(root.Claude.Enabled, false),
-		ClaudeBinary:         derefOr(root.Claude.Binary, "claude"),
-		ClaudeDefaultModel:   derefOr(root.Claude.DefaultModel, "dsk_4f"),
-		ClaudeAllowedEnv:     derefSliceOr(root.Claude.AllowedEnv, defaultClaudeAllowedEnv),
-		MaxClaudeOutputBytes: derefIntOr(root.Claude.MaxOutputBytes, 1024*1024),
-
-		Gateway: GatewayConfig{
-			BaseURL:          strings.TrimRight(derefOr(root.Gateway.BaseURL, ""), "/"),
-			APIKey:           derefOr(root.Gateway.APIKey, ""),
-			Model:            strings.TrimSpace(derefOr(root.Gateway.Model, "dsk_4f")),
-			Protocol:         protocol,
-			MaxTokens:        derefUintOr(root.Gateway.MaxTokens, 16384),
-			MaxAttempts:      derefIntOr(root.Gateway.MaxAttempts, 3),
-			MaxResponseBytes: derefIntOr(root.Gateway.MaxResponseBytes, 2*1024*1024),
-		},
-
-		LocalAgents: LocalAgentConfig{
-			CodexBinary:           derefOr(root.LocalAgents.CodexBinary, "codex"),
-			PiBinary:              derefOr(root.LocalAgents.PiBinary, "/usr/local/bin/pi"),
-			ReasonixBinary:        derefOr(root.LocalAgents.ReasonixBinary, "/usr/local/bin/reasonix"),
-			DeepseekHarnessBinary: derefOr(root.LocalAgents.DeepseekHarnessBinary, "dsh"),
-			OpenCodeBinary:        derefOr(root.LocalAgents.OpenCodeBinary, "opencode"),
-			OpenCodeDefaultModel:  derefOr(root.LocalAgents.OpenCodeDefaultModel, ""),
-			QwenCodeBinary:        derefOr(root.LocalAgents.QwenCodeBinary, "qwen"),
-			QwenCodeDefaultModel:  derefOr(root.LocalAgents.QwenCodeDefaultModel, ""),
-			GeminiCLIBinary:       derefOr(root.LocalAgents.GeminiCLIBinary, "gemini"),
-			GeminiCLIDefaultModel: derefOr(root.LocalAgents.GeminiCLIDefaultModel, "auto"),
-			OpenHandsBinary:       derefOr(root.LocalAgents.OpenHandsBinary, "openhands"),
-			OpenHandsDefaultModel: derefOr(root.LocalAgents.OpenHandsDefaultModel, ""),
-			FinanceExtensionPath:  nonEmpty(derefOr(root.LocalAgents.FinanceExtensionPath, "")),
-			StrategySkillPaths:    derefSliceOr(root.LocalAgents.StrategySkillPaths, nil),
-			AnalysisSkillPaths:    derefSliceOr(root.LocalAgents.AnalysisSkillPaths, nil),
-			WorkflowSkillPaths:    derefSliceOr(root.LocalAgents.WorkflowSkillPaths, nil),
-			DefaultModel:          derefOr(root.LocalAgents.DefaultModel, "litellm/dsk_4f"),
-			AllowedEnv:            derefSliceOr(root.LocalAgents.AllowedEnv, defaultLocalAgentEnv),
-			MaxOutputBytes:        derefIntOr(root.LocalAgents.MaxOutputBytes, 1024*1024),
-			MaxPromptBytes:        derefIntOr(root.LocalAgents.MaxPromptBytes, 128*1024),
-		},
-		OpenAIAgents: OpenAIAgentsConfig{
-			Enabled:          derefBoolOr(root.OpenAIAgents.Enabled, false),
-			BaseURL:          strings.TrimRight(derefOr(root.OpenAIAgents.BaseURL, "https://api.openai.com/v1"), "/"),
-			APIKey:           derefOr(root.OpenAIAgents.APIKey, ""),
-			DefaultModel:     strings.TrimSpace(derefOr(root.OpenAIAgents.DefaultModel, "gpt-6-astra")),
-			ReasoningEffort:  strings.TrimSpace(derefOr(root.OpenAIAgents.ReasoningEffort, "medium")),
-			Environment:      strings.TrimSpace(derefOr(root.OpenAIAgents.Environment, "none")),
-			MCPServerURL:     nonEmpty(derefOr(root.OpenAIAgents.MCPServerURL, "")),
-			MCPServerLabel:   strings.TrimSpace(derefOr(root.OpenAIAgents.MCPServerLabel, "ir_tools")),
-			MCPAuthorization: derefOr(root.OpenAIAgents.MCPAuthorization, ""),
-			MCPRequired:      derefBoolOr(root.OpenAIAgents.MCPRequired, true),
-			DeleteSession:    derefBoolOr(root.OpenAIAgents.DeleteSession, true),
-			MaxResponseBytes: derefIntOr(root.OpenAIAgents.MaxResponseBytes, 2*1024*1024),
-		},
-		ClaudeManaged: ClaudeManagedAgentsConfig{
-			Enabled:          derefBoolOr(root.ClaudeManaged.Enabled, false),
-			BaseURL:          strings.TrimRight(derefOr(root.ClaudeManaged.BaseURL, "https://api.anthropic.com/v1"), "/"),
-			APIKey:           derefOr(root.ClaudeManaged.APIKey, ""),
-			WorkspaceID:      nonEmpty(derefOr(root.ClaudeManaged.WorkspaceID, "")),
-			AgentID:          strings.TrimSpace(derefOr(root.ClaudeManaged.AgentID, "")),
-			EnvironmentID:    strings.TrimSpace(derefOr(root.ClaudeManaged.EnvironmentID, "")),
-			VaultIDs:         derefSliceOr(root.ClaudeManaged.VaultIDs, nil),
-			MaxListCostCents: root.ClaudeManaged.MaxListCostCents,
-			DeleteSession:    derefBoolOr(root.ClaudeManaged.DeleteSession, true),
-			MaxResponseBytes: derefIntOr(root.ClaudeManaged.MaxResponseBytes, 2*1024*1024),
-		},
 	}
 
 	if err := config.Validate(); err != nil {
@@ -566,54 +385,13 @@ func applyPlatformEnv(root *PlatformRootFile) error {
 	setEnvString("ADMIN__PASSWORD_HASH", &root.Admin.PasswordHash)
 	setEnvString("ADMIN__SESSION_SECRET", &root.Admin.SessionSecret)
 	setEnvCSV("ADMIN__TRUSTED_PROXY_CIDRS", &root.Admin.TrustedProxyCIDRs)
-	setEnvString("CLAUDE__WORKSPACE_ROOT", &root.Claude.WorkspaceRoot)
-	setEnvString("CLAUDE__BINARY", &root.Claude.Binary)
-	setEnvString("CLAUDE__DEFAULT_MODEL", &root.Claude.DefaultModel)
-	setEnvString("AGENT_GATEWAY__BASE_URL", &root.Gateway.BaseURL)
-	setEnvString("AGENT_GATEWAY__API_KEY", &root.Gateway.APIKey)
-	setEnvString("AGENT_GATEWAY__MODEL", &root.Gateway.Model)
-	setEnvString("AGENT_GATEWAY__PROTOCOL", &root.Gateway.Protocol)
-	setEnvString("LOCAL_AGENT__CODEX_BINARY", &root.LocalAgents.CodexBinary)
-	setEnvString("LOCAL_AGENT__PI_BINARY", &root.LocalAgents.PiBinary)
-	setEnvString("LOCAL_AGENT__REASONIX_BINARY", &root.LocalAgents.ReasonixBinary)
-	setEnvString("LOCAL_AGENT__DEEPSEEK_HARNESS_BINARY", &root.LocalAgents.DeepseekHarnessBinary)
-	setEnvString("LOCAL_AGENT__OPENCODE_BINARY", &root.LocalAgents.OpenCodeBinary)
-	setEnvString("LOCAL_AGENT__OPENCODE_DEFAULT_MODEL", &root.LocalAgents.OpenCodeDefaultModel)
-	setEnvString("LOCAL_AGENT__QWEN_CODE_BINARY", &root.LocalAgents.QwenCodeBinary)
-	setEnvString("LOCAL_AGENT__QWEN_CODE_DEFAULT_MODEL", &root.LocalAgents.QwenCodeDefaultModel)
-	setEnvString("LOCAL_AGENT__GEMINI_CLI_BINARY", &root.LocalAgents.GeminiCLIBinary)
-	setEnvString("LOCAL_AGENT__GEMINI_CLI_DEFAULT_MODEL", &root.LocalAgents.GeminiCLIDefaultModel)
-	setEnvString("LOCAL_AGENT__OPENHANDS_BINARY", &root.LocalAgents.OpenHandsBinary)
-	setEnvString("LOCAL_AGENT__OPENHANDS_DEFAULT_MODEL", &root.LocalAgents.OpenHandsDefaultModel)
-	setEnvString("LOCAL_AGENT__DEFAULT_MODEL", &root.LocalAgents.DefaultModel)
-	setEnvString("OPENAI_AGENTS__BASE_URL", &root.OpenAIAgents.BaseURL)
-	setEnvString("OPENAI_AGENTS__API_KEY", &root.OpenAIAgents.APIKey)
-	setEnvString("OPENAI_AGENTS__DEFAULT_MODEL", &root.OpenAIAgents.DefaultModel)
-	setEnvString("OPENAI_AGENTS__REASONING_EFFORT", &root.OpenAIAgents.ReasoningEffort)
-	setEnvString("OPENAI_AGENTS__ENVIRONMENT", &root.OpenAIAgents.Environment)
-	setEnvString("OPENAI_AGENTS__MCP_SERVER_URL", &root.OpenAIAgents.MCPServerURL)
-	setEnvString("OPENAI_AGENTS__MCP_SERVER_LABEL", &root.OpenAIAgents.MCPServerLabel)
-	setEnvString("OPENAI_AGENTS__MCP_AUTHORIZATION", &root.OpenAIAgents.MCPAuthorization)
-	setEnvString("CLAUDE_MANAGED__BASE_URL", &root.ClaudeManaged.BaseURL)
-	setEnvString("CLAUDE_MANAGED__API_KEY", &root.ClaudeManaged.APIKey)
-	setEnvString("CLAUDE_MANAGED__WORKSPACE_ID", &root.ClaudeManaged.WorkspaceID)
-	setEnvString("CLAUDE_MANAGED__AGENT_ID", &root.ClaudeManaged.AgentID)
-	setEnvString("CLAUDE_MANAGED__ENVIRONMENT_ID", &root.ClaudeManaged.EnvironmentID)
 
-	// 兼容现网原有 Anthropic/LiteLLM 环境变量;新 AGENT_GATEWAY__* 优先。
-	if root.Gateway.BaseURL == nil || strings.TrimSpace(*root.Gateway.BaseURL) == "" {
-		setEnvString("ANTHROPIC_BASE_URL", &root.Gateway.BaseURL)
-	}
 	if root.Gateway.APIKey == nil || *root.Gateway.APIKey == "" {
 		setEnvString("ANTHROPIC_AUTH_TOKEN", &root.Gateway.APIKey)
 	}
 	if root.Gateway.Model == nil {
-		setEnvString("CLAUDE__DEFAULT_MODEL", &root.Gateway.Model)
 	}
 
-	if err := setEnvBool("CLAUDE__ENABLED", &root.Claude.Enabled); err != nil {
-		return err
-	}
 	if err := setEnvBool("PLATFORM__ENABLED", &root.Platform.Enabled); err != nil {
 		return err
 	}
@@ -621,21 +399,6 @@ func applyPlatformEnv(root *PlatformRootFile) error {
 		return err
 	}
 	if err := setEnvBool("ADMIN__SECURE_COOKIES", &root.Admin.SecureCookies); err != nil {
-		return err
-	}
-	if err := setEnvBool("OPENAI_AGENTS__ENABLED", &root.OpenAIAgents.Enabled); err != nil {
-		return err
-	}
-	if err := setEnvBool("OPENAI_AGENTS__MCP_REQUIRED", &root.OpenAIAgents.MCPRequired); err != nil {
-		return err
-	}
-	if err := setEnvBool("OPENAI_AGENTS__DELETE_SESSION", &root.OpenAIAgents.DeleteSession); err != nil {
-		return err
-	}
-	if err := setEnvBool("CLAUDE_MANAGED__ENABLED", &root.ClaudeManaged.Enabled); err != nil {
-		return err
-	}
-	if err := setEnvBool("CLAUDE_MANAGED__DELETE_SESSION", &root.ClaudeManaged.DeleteSession); err != nil {
 		return err
 	}
 	if err := setEnvInt("PLATFORM__MAX_REQUEST_BODY_BYTES", &root.Platform.MaxRequestBodyBytes); err != nil {
@@ -653,50 +416,16 @@ func applyPlatformEnv(root *PlatformRootFile) error {
 	if err := setEnvUint("ADMIN__SESSION_TTL_SECS", &root.Admin.SessionTTLSecs); err != nil {
 		return err
 	}
-	if err := setEnvInt("CLAUDE__MAX_OUTPUT_BYTES", &root.Claude.MaxOutputBytes); err != nil {
-		return err
-	}
-	if err := setEnvUint("AGENT_GATEWAY__MAX_TOKENS", &root.Gateway.MaxTokens); err != nil {
-		return err
-	}
-	if err := setEnvInt("AGENT_GATEWAY__MAX_ATTEMPTS", &root.Gateway.MaxAttempts); err != nil {
-		return err
-	}
-	if err := setEnvInt("AGENT_GATEWAY__MAX_RESPONSE_BYTES", &root.Gateway.MaxResponseBytes); err != nil {
-		return err
-	}
-	if err := setEnvInt("LOCAL_AGENT__MAX_OUTPUT_BYTES", &root.LocalAgents.MaxOutputBytes); err != nil {
-		return err
-	}
-	if err := setEnvInt("LOCAL_AGENT__MAX_PROMPT_BYTES", &root.LocalAgents.MaxPromptBytes); err != nil {
-		return err
-	}
-	if err := setEnvInt("OPENAI_AGENTS__MAX_RESPONSE_BYTES", &root.OpenAIAgents.MaxResponseBytes); err != nil {
-		return err
-	}
-	if err := setEnvInt("CLAUDE_MANAGED__MAX_RESPONSE_BYTES", &root.ClaudeManaged.MaxResponseBytes); err != nil {
-		return err
-	}
-	if err := setEnvUint("CLAUDE_MANAGED__MAX_LIST_COST_CENTS", &root.ClaudeManaged.MaxListCostCents); err != nil {
-		return err
-	}
-	setEnvCSV("CLAUDE_MANAGED__VAULT_IDS", &root.ClaudeManaged.VaultIDs)
 
 	if root.LocalAgents.FinanceExtensionPath == nil {
-		setEnvString("LOCAL_AGENT__FINANCE_EXTENSION_PATH", &root.LocalAgents.FinanceExtensionPath)
 	}
 	if root.LocalAgents.StrategySkillPaths == nil {
-		setEnvCSV("LOCAL_AGENT__STRATEGY_SKILL_PATHS", &root.LocalAgents.StrategySkillPaths)
 	}
 	if root.LocalAgents.AnalysisSkillPaths == nil {
-		setEnvCSV("LOCAL_AGENT__ANALYSIS_SKILL_PATHS", &root.LocalAgents.AnalysisSkillPaths)
 	}
 	if root.LocalAgents.WorkflowSkillPaths == nil {
-		setEnvCSV("LOCAL_AGENT__WORKFLOW_SKILL_PATHS", &root.LocalAgents.WorkflowSkillPaths)
 	}
 	// 这两个白名单允许环境变量无条件覆盖文件层。
-	setEnvCSV("CLAUDE__ALLOWED_ENV", &root.Claude.AllowedEnv)
-	setEnvCSV("LOCAL_AGENT__ALLOWED_ENV", &root.LocalAgents.AllowedEnv)
 	return nil
 }
 
@@ -898,159 +627,6 @@ func (c *PlatformConfig) Validate() error {
 		}
 	}
 
-	if strings.TrimSpace(c.WorkspaceRoot) == "" {
-		return errors.New("[claude].workspace_root must not be empty")
-	}
-	if strings.TrimSpace(c.ClaudeBinary) == "" {
-		return errors.New("[claude].binary must not be empty")
-	}
-	if c.MaxClaudeOutputBytes < 4096 {
-		return errors.New("[claude].max_output_bytes must be at least 4096")
-	}
-
-	if strings.TrimSpace(c.Gateway.BaseURL) != "" {
-		if err := validateManagedURL("[gateway].base_url", c.Gateway.BaseURL); err != nil {
-			return err
-		}
-	}
-	if strings.TrimSpace(c.Gateway.Model) == "" {
-		return errors.New("[gateway].model must not be empty")
-	}
-	if c.Gateway.MaxTokens < 256 || c.Gateway.MaxTokens > 131072 {
-		return errors.New("[gateway].max_tokens must be between 256 and 131072")
-	}
-	if c.Gateway.MaxAttempts < 1 || c.Gateway.MaxAttempts > 6 {
-		return errors.New("[gateway].max_attempts must be between 1 and 6")
-	}
-	if c.Gateway.MaxResponseBytes < 4096 || c.Gateway.MaxResponseBytes > 16*1024*1024 {
-		return errors.New("[gateway].max_response_bytes must be between 4096 and 16777216")
-	}
-
-	for _, item := range []struct {
-		name   string
-		binary string
-	}{
-		{"codex_binary", c.LocalAgents.CodexBinary},
-		{"pi_binary", c.LocalAgents.PiBinary},
-		{"reasonix_binary", c.LocalAgents.ReasonixBinary},
-		{"deepseek_harness_binary", c.LocalAgents.DeepseekHarnessBinary},
-		{"opencode_binary", c.LocalAgents.OpenCodeBinary},
-		{"qwen_code_binary", c.LocalAgents.QwenCodeBinary},
-		{"gemini_cli_binary", c.LocalAgents.GeminiCLIBinary},
-		{"openhands_binary", c.LocalAgents.OpenHandsBinary},
-	} {
-		if strings.TrimSpace(item.binary) == "" {
-			return fmt.Errorf("[local_agents].%s must not be empty", item.name)
-		}
-	}
-	if c.LocalAgents.FinanceExtensionPath != "" && !isRegularFile(c.LocalAgents.FinanceExtensionPath) {
-		return errors.New("[local_agents].finance_extension_path must point to a readable file")
-	}
-	if len(c.LocalAgents.StrategySkillPaths) > 0 {
-		if len(c.LocalAgents.StrategySkillPaths) < 2 || len(c.LocalAgents.StrategySkillPaths) > 3 {
-			return errors.New("[local_agents].strategy_skill_paths must contain 2 or 3 SKILL.md files")
-		}
-		for _, path := range c.LocalAgents.StrategySkillPaths {
-			if !isRegularFile(path) {
-				return errors.New("[local_agents].strategy_skill_paths must point to readable files")
-			}
-		}
-	}
-	if len(c.LocalAgents.AnalysisSkillPaths) > 16 {
-		return errors.New("[local_agents].analysis_skill_paths must contain at most 16 SKILL.md files")
-	}
-	for _, path := range c.LocalAgents.AnalysisSkillPaths {
-		if !isRegularFile(path) {
-			return errors.New("[local_agents].analysis_skill_paths must point to readable files")
-		}
-	}
-	if len(c.LocalAgents.WorkflowSkillPaths) > 24 {
-		return errors.New("[local_agents].workflow_skill_paths must contain at most 24 SKILL.md files")
-	}
-	for _, path := range c.LocalAgents.WorkflowSkillPaths {
-		if !isRegularFile(path) {
-			return errors.New("[local_agents].workflow_skill_paths must point to readable files")
-		}
-	}
-	if strings.TrimSpace(c.LocalAgents.DefaultModel) == "" {
-		return errors.New("[local_agents].default_model must not be empty")
-	}
-	if c.LocalAgents.MaxOutputBytes < 4096 {
-		return errors.New("[local_agents].max_output_bytes must be at least 4096")
-	}
-	if c.LocalAgents.MaxPromptBytes < 4096 || c.LocalAgents.MaxPromptBytes > 1024*1024 {
-		return errors.New("[local_agents].max_prompt_bytes must be between 4096 and 1048576")
-	}
-
-	if err := validateManagedURL("[openai_agents].base_url", c.OpenAIAgents.BaseURL); err != nil {
-		return err
-	}
-	if c.OpenAIAgents.Enabled && strings.TrimSpace(c.OpenAIAgents.APIKey) == "" {
-		return errors.New("[openai_agents].enabled=true requires api_key")
-	}
-	if c.OpenAIAgents.Enabled && strings.TrimSpace(c.OpenAIAgents.APIKey) == exampleProviderAPIKey {
-		return errors.New("[openai_agents].api_key is a public template placeholder")
-	}
-	if c.OpenAIAgents.DefaultModel == "" {
-		return errors.New("[openai_agents].default_model must not be empty")
-	}
-	if c.OpenAIAgents.ReasoningEffort == "" {
-		return errors.New("[openai_agents].reasoning_effort must not be empty")
-	}
-	if c.OpenAIAgents.Environment != "none" {
-		return errors.New("[openai_agents].environment currently must be none")
-	}
-	if c.OpenAIAgents.MCPServerURL != "" {
-		if err := validateManagedURL("[openai_agents].mcp_server_url", c.OpenAIAgents.MCPServerURL); err != nil {
-			return err
-		}
-		if c.OpenAIAgents.MCPServerLabel == "" {
-			return errors.New("[openai_agents].mcp_server_label must not be empty")
-		}
-	}
-	if c.OpenAIAgents.MaxResponseBytes < 4096 || c.OpenAIAgents.MaxResponseBytes > 16*1024*1024 {
-		return errors.New("[openai_agents].max_response_bytes must be between 4096 and 16777216")
-	}
-
-	if err := validateManagedURL("[claude_managed].base_url", c.ClaudeManaged.BaseURL); err != nil {
-		return err
-	}
-	if c.ClaudeManaged.Enabled {
-		if strings.TrimSpace(c.ClaudeManaged.APIKey) == "" || c.ClaudeManaged.AgentID == "" || c.ClaudeManaged.EnvironmentID == "" {
-			return errors.New("[claude_managed].enabled=true requires api_key, agent_id, and environment_id")
-		}
-		if strings.TrimSpace(c.ClaudeManaged.APIKey) == exampleProviderAPIKey {
-			return errors.New("[claude_managed].api_key is a public template placeholder")
-		}
-	}
-	if c.ClaudeManaged.MaxResponseBytes < 4096 || c.ClaudeManaged.MaxResponseBytes > 16*1024*1024 {
-		return errors.New("[claude_managed].max_response_bytes must be between 4096 and 16777216")
-	}
-
-	// Rust 侧在 PlatformState::initialize 里 canonicalize workspace_root;
-	// 这里提前解析为绝对路径,后续执行器只做 workspace 逃逸检查。
-	root, err := filepath.Abs(c.WorkspaceRoot)
-	if err != nil {
-		return fmt.Errorf("resolve [claude].workspace_root %s: %w", c.WorkspaceRoot, err)
-	}
-	c.WorkspaceRoot = root
-	return nil
-}
-
-func validateManagedURL(name, value string) error {
-	parsed, err := url.Parse(strings.TrimSpace(value))
-	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-		return fmt.Errorf("%s must be an absolute HTTP(S) URL", name)
-	}
-	if parsed.User != nil {
-		return fmt.Errorf("%s must not contain embedded credentials", name)
-	}
-	if parsed.RawQuery != "" || parsed.Fragment != "" {
-		return fmt.Errorf("%s must not contain a query string or fragment; use the dedicated credential field", name)
-	}
-	if parsed.Scheme == "http" && !IsLoopbackHost(parsed.Hostname()) {
-		return fmt.Errorf("%s must use HTTPS except for loopback development", name)
-	}
 	return nil
 }
 

@@ -95,8 +95,6 @@ secure_cookies = false
 # trusted_proxy_cidrs = ["127.0.0.1/32", "::1/128"]
 
 [claude]
-# Claude Code 以服务进程的 OS 权限运行，并非文件系统沙箱；只有在已完成
-# 独立低权限用户/容器等隔离后才显式启用。
 enabled = false
 workspace_root = "."
 binary = "claude"

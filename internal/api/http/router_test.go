@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -75,30 +76,6 @@ func (stubQueue) RecordDirectRun(context.Context, domain.DirectRun) (string, err
 	return "succeeded", nil
 }
 func (stubQueue) WaitWake(context.Context, time.Duration) bool { return false }
-
-type memTokens struct{ byHash map[string]*domain.Token }
-
-func (m *memTokens) Issue(_ context.Context, t *domain.Token) error {
-	if m.byHash == nil {
-		m.byHash = map[string]*domain.Token{}
-	}
-	m.byHash[t.Hash] = t
-	return nil
-}
-func (m *memTokens) GetByHash(_ context.Context, hash string) (*domain.Token, error) {
-	if t, ok := m.byHash[hash]; ok {
-		return t, nil
-	}
-	return nil, domain.ErrTokenNotFound
-}
-func (m *memTokens) GetByName(context.Context, string) (*domain.Token, error) {
-	return nil, domain.ErrTokenNotFound
-}
-func (m *memTokens) List(context.Context) ([]domain.Token, error) { return nil, nil }
-func (m *memTokens) RevokeByName(context.Context, string) error   { return nil }
-func (m *memTokens) Revoke(context.Context, string, *time.Time) error {
-	return nil
-}
 
 type memWorkers struct{}
 
@@ -218,7 +195,16 @@ func TestPushAdapterSuccessAndErrors(t *testing.T) {
 // Agent API 适配
 // ---------------------------------------------------------------------------
 
-func newAgentAPIServer(t *testing.T, tokens *memTokens) *httptest.Server {
+type memSecrets struct{ bySlug map[string][]byte }
+
+func (m *memSecrets) SigningSecrets(_ context.Context, slug string) ([]byte, []byte, error) {
+	if v, ok := m.bySlug[slug]; ok {
+		return v, nil, nil
+	}
+	return nil, nil, errors.New("not found")
+}
+
+func newAgentAPIServer(t *testing.T, secrets *memSecrets, workers domain.WorkerRegistry) *httptest.Server {
 	t.Helper()
 	service := agentapi.NewService(agentapi.Deps{
 		Config: agentapi.Config{
@@ -226,8 +212,7 @@ func newAgentAPIServer(t *testing.T, tokens *memTokens) *httptest.Server {
 			HeartbeatIntervalSeconds: 60, ClaimMaxWait: 60 * time.Millisecond,
 			MaxOutstandingLeases: 64, MaxAttempts: 3, QueueTTL: time.Hour,
 		},
-		Queue: stubQueue{}, Tokens: tokens, Workers: memWorkers{},
-	})
+		Queue: stubQueue{}, Secrets: secrets, Workers: workers})
 	router := apihttp.NewRouter(apihttp.RouterDeps{
 		AgentAPI: &apihttp.AgentAPIHandler{Service: service},
 	})
@@ -236,14 +221,9 @@ func newAgentAPIServer(t *testing.T, tokens *memTokens) *httptest.Server {
 
 func TestAgentAPIAdapter(t *testing.T) {
 	t.Parallel()
-	tokens := &memTokens{}
-	plaintext := "act_api-test-token"
-	if err := tokens.Issue(context.Background(), &domain.Token{
-		Name: "api-test", Hash: domain.HashToken(plaintext), Scopes: []string{"other-slug"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	server := newAgentAPIServer(t, tokens)
+	secrets := &memSecrets{bySlug: map[string][]byte{"demo-agent": []byte("edge-key-0123456")}}
+	workers := &memWorkers{}
+	server := newAgentAPIServer(t, secrets, workers)
 	defer server.Close()
 
 	// 未带令牌 → 401 + {"code":"unauthorized"}。
@@ -262,9 +242,12 @@ func TestAgentAPIAdapter(t *testing.T) {
 		t.Errorf("error body = %v", errBody)
 	}
 
+	// agent-key 路径：密钥 + X-Agent-Slug（scope 由密钥所属 slug 决定）。
+	slug := "demo-agent"
 	post := func(path, body string) (*http.Response, map[string]any) {
 		request, _ := http.NewRequest(http.MethodPost, server.URL+path, bytes.NewReader([]byte(body)))
-		request.Header.Set("Authorization", "Bearer "+plaintext)
+		request.Header.Set("Authorization", "Bearer edge-key-0123456")
+		request.Header.Set("X-Agent-Slug", slug)
 		request.Header.Set("Content-Type", "application/json")
 		response, err := http.DefaultClient.Do(request)
 		if err != nil {
@@ -278,26 +261,27 @@ func TestAgentAPIAdapter(t *testing.T) {
 		return response, decoded
 	}
 
-	// scope 不交叉 → 204 + X-Agent-Api-Reason: no-scope-match。
+	// scope 不交叉（agent-key 绑定自己的 slug）→ 204 + no-scope-match。
 	resp, _ = post("/agent-api/v1/claim", `{"workerId":"w-1","preferredSlugs":["demo"]}`)
 	if resp.StatusCode != 204 || resp.Header.Get("X-Agent-Api-Reason") != "no-scope-match" {
 		t.Errorf("claim = %d reason=%q", resp.StatusCode, resp.Header.Get("X-Agent-Api-Reason"))
 	}
-	// 队列空 → 204 + reason: empty（长轮询窗口后）。
-	resp, _ = post("/agent-api/v1/claim", `{"workerId":"w-1","preferredSlugs":["other-slug"]}`)
+	// 队列空 → 204 + reason: empty。
+	resp, _ = post("/agent-api/v1/claim", `{"workerId":"w-1","preferredSlugs":["demo-agent"]}`)
 	if resp.StatusCode != 204 || resp.Header.Get("X-Agent-Api-Reason") != "empty" {
 		t.Errorf("empty claim = %d reason=%q", resp.StatusCode, resp.Header.Get("X-Agent-Api-Reason"))
 	}
 	// heartbeat → 200 + 间隔回执。
 	resp, body := post("/agent-api/v1/heartbeat",
-		`{"workerId":"w-1","inFlight":0,"capacity":2,"capabilities":{"slugs":["other-slug"],"version":"1.0"}}`)
+		`{"workerId":"w-1","inFlight":0,"capacity":2,"capabilities":{"slugs":["demo-agent"],"version":"1.0"}}`)
 	if resp.StatusCode != 200 || body["heartbeatIntervalSeconds"] != float64(60) ||
 		body["renewIntervalSeconds"] != float64(30) {
 		t.Errorf("heartbeat = %d %v", resp.StatusCode, body)
 	}
 	// renew 未知 run → 404 run_not_found。
 	request, _ := http.NewRequest(http.MethodPost, server.URL+"/agent-api/v1/renew", nil)
-	request.Header.Set("Authorization", "Bearer "+plaintext)
+	request.Header.Set("Authorization", "Bearer edge-key-0123456")
+	request.Header.Set("X-Agent-Slug", slug)
 	request.Header.Set("X-Agent-Run-ID", "run-unknown")
 	request.Header.Set("X-Agent-Worker-ID", "w-1")
 	renewResp, err := http.DefaultClient.Do(request)

@@ -11,7 +11,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	domaintoken "ir-agent-server/internal/domain/token"
 	"log/slog"
 	"strings"
 	"time"
@@ -85,7 +84,6 @@ type RemoteAgentLister interface {
 type Service struct {
 	cfg     Config
 	queue   domain.TaskQueue
-	tokens  domain.TokenRepository
 	workers domain.WorkerRegistry
 	remote  RemoteAgentLister
 	secrets AgentSecretSource
@@ -96,7 +94,6 @@ type Service struct {
 type Deps struct {
 	Config  Config
 	Queue   domain.TaskQueue
-	Tokens  domain.TokenRepository
 	Workers domain.WorkerRegistry
 	Remote  RemoteAgentLister
 	// Secrets 支撑智能体密钥连接点（agent-key 鉴权）；nil 时仅 act_ 令牌可用。
@@ -110,8 +107,7 @@ var errDeniesUnavailable = fmt.Errorf("cluster deny list is not available")
 
 // NewService 组装 agent-api 用例服务。
 func NewService(deps Deps) *Service {
-	return &Service{cfg: deps.Config, queue: deps.Queue, tokens: deps.Tokens,
-		workers: deps.Workers, remote: deps.Remote,
+	return &Service{cfg: deps.Config, queue: deps.Queue, workers: deps.Workers, remote: deps.Remote,
 		secrets: deps.Secrets, denies: deps.Denies}
 }
 
@@ -128,65 +124,25 @@ func (s *Service) ListOnlineWorkers(ctx context.Context) ([]domain.Worker, error
 // 令牌
 // ---------------------------------------------------------------------------
 
-// Authenticate 校验 Bearer 凭据；两条路径按前缀分派：
-//   - act_ 前缀 → 管理台签发的连接器令牌（吊销即失效，轮换宽限内仍有效，§9）；
-//   - 其余 → 智能体密钥连接点（方案 B）：需要 X-Agent-Slug 头（可选
-//     X-Agent-Cluster 选派生子密钥），hints 由 HTTP 层从请求头提取。
+// Authenticate 校验 Bearer 凭据：智能体密钥连接点（方案 B）——需要
+// X-Agent-Slug 头（可选 X-Agent-Cluster 选派生子密钥）。act_ 连接器令牌
+// 已随执行后端一并退役；历史令牌不再被接受。
 func (s *Service) Authenticate(ctx context.Context, bearer string, agentHints ...AgentKeyHint) (*Principal, *Failure) {
 	token := strings.TrimSpace(strings.TrimPrefix(bearer, "Bearer "))
 	if token == "" {
-		return nil, failure(401, "unauthorized", "missing connector token")
+		return nil, failure(401, "unauthorized", "missing agent key")
 	}
-	if !strings.HasPrefix(token, domain.TokenPrefix) {
-		hint := AgentKeyHint{}
-		if len(agentHints) > 0 {
-			hint = agentHints[0]
-		}
-		return s.AuthenticateAgentKey(ctx, token, hint.Slug, hint.Cluster)
+	hint := AgentKeyHint{}
+	if len(agentHints) > 0 {
+		hint = agentHints[0]
 	}
-	stored, err := s.tokens.GetByHash(ctx, domain.HashToken(token))
-	if err != nil {
-		return nil, failure(401, "unauthorized", "invalid connector token")
-	}
-	if !stored.Active(time.Now()) {
-		message := "connector token revoked"
-		if stored.GraceUntil != nil {
-			message = "connector token expired after rotation"
-		}
-		return nil, failure(401, "unauthorized", message)
-	}
-	return &Principal{ID: stored.ID, Name: stored.Name, Scopes: normalizeScopes(stored.Scopes)}, nil
+	return s.AuthenticateAgentKey(ctx, token, hint.Slug, hint.Cluster)
 }
 
 // IssueToken 签发新令牌；明文仅此一次返回，服务端只存哈希。
 // 同名再签发即轮换（旧哈希立即失效）。
-func (s *Service) IssueToken(ctx context.Context, name string, scopes []string) (string, error) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return "", fmt.Errorf("connector name must not be empty")
-	}
-	plaintext := domain.TokenPrefix + domaintoken.Random(32)
-	record := &domain.Token{
-		Name:   name,
-		Hash:   domain.HashToken(plaintext),
-		Scopes: normalizeScopes(scopes),
-	}
-	if err := s.tokens.Issue(ctx, record); err != nil {
-		return "", fmt.Errorf("issue connector token: %w", err)
-	}
-	return plaintext, nil
-}
-
 // RevokeToken 立即吊销（无宽限）。
-func (s *Service) RevokeToken(ctx context.Context, name string) error {
-	return s.tokens.RevokeByName(ctx, name)
-}
-
 // ListTokens 返回令牌记录（永不含明文/哈希外的敏感材料；展示态由 api 层组装）。
-func (s *Service) ListTokens(ctx context.Context) ([]domain.Token, error) {
-	return s.tokens.List(ctx)
-}
-
 // ---------------------------------------------------------------------------
 // claim（§1）
 // ---------------------------------------------------------------------------
