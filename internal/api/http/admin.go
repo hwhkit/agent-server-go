@@ -30,7 +30,7 @@ import (
 	"ir-agent-server/internal/domain/position"
 	"ir-agent-server/internal/domain/run"
 	"ir-agent-server/internal/domain/team"
-	"ir-agent-server/internal/infra/crypto"
+	domaintoken "ir-agent-server/internal/domain/token"
 )
 
 // AdminCookieName 是管理台会话 Cookie 名。
@@ -1204,7 +1204,7 @@ func (a *adminHandler) createAPIKey(w http.ResponseWriter, r *http.Request) {
 		request.Name = "default"
 	}
 	// API Key 格式：irak_<random>。生产环境应落库（哈希）并支持吊销。
-	key := "irak_" + crypto.RandomToken(32)
+	key := "irak_" + domaintoken.Random(32)
 	writeAdminData(w, http.StatusCreated, map[string]any{
 		"name":     request.Name,
 		"api_key":  key,
