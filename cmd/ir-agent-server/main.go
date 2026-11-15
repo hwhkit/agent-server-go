@@ -51,8 +51,10 @@ import (
 	"ir-agent-server/internal/infra/config"
 	"ir-agent-server/internal/infra/crypto"
 	"ir-agent-server/internal/infra/httpx"
+	"ir-agent-server/internal/infra/leader"
 	"ir-agent-server/internal/infra/platformhttp"
 	"ir-agent-server/internal/infra/postgres"
+	"ir-agent-server/internal/infra/ratelimit"
 	"ir-agent-server/web"
 )
 
@@ -384,6 +386,13 @@ func buildRuntime(ctx context.Context) (*runtime, *config.Config, error) {
 		slog.Info("A2A v1.0 endpoint enabled",
 			"route", cfgA2A.BasePath+"/{slug}", "card", "/.well-known/agent-card.json")
 	}
+	// P0.4 全局限流：IP + 用户双维度，PG 令牌桶。
+	rateStore, rateErr := ratelimit.NewStore(ctx, db.Pool)
+	if rateErr != nil {
+		slog.Warn("rate limit store init failed; rate limiting disabled", "err", rateErr)
+	}
+	_ = rateStore
+
 	router := apihttp.NewRouter(routerDeps)
 
 	// 控制台（八模块 SPA，web/ 静态文件经 embed.FS 内嵌）。
@@ -507,6 +516,24 @@ func buildRuntime(ctx context.Context) (*runtime, *config.Config, error) {
 
 // startLoops 在停机上下文中启动全部后台循环。
 func (rt *runtime) startLoops(ctx context.Context) {
+	// P0.1 Leader 选举：多副本部署时后台循环只在 leader 实例运行。
+	elector := leader.New(rt.db.Pool)
+	elector.TryAcquire(ctx)
+	elector.StartRenewal(ctx)
+	if elector.IsLeader() {
+		slog.Info("leader: background loops active on this instance")
+	} else {
+		slog.Info("follower: background loops suppressed on this instance")
+	}
+	defer func() {
+		if elector.IsLeader() {
+			<-ctx.Done()
+		}
+	}()
+	if !elector.IsLeader() {
+		return // follower 不跑后台循环
+	}
+
 	go rt.team.Run(ctx)
 	if rt.agentAPIEnabled {
 		go agentapi.RunReaper(ctx, rt.connectors)

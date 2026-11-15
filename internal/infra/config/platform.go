@@ -37,6 +37,10 @@ type PlatformConfig struct {
 	// AllowLegacyBodySignature 仅用于迁移旧动态 Agent 调用方。旧
 	// X-IR-Signature 只覆盖 body、没有 timestamp/nonce，默认必须关闭。
 	AllowLegacyBodySignature bool
+	// RateLimitIPPerMinute 是每 IP 每分钟请求上限（0=不限）。
+	RateLimitIPPerMinute int
+	// RateLimitUserPerMinute 是每用户每分钟请求上限（0=不限）。
+	RateLimitUserPerMinute int
 	// RetentionDays 是历史数据保留窗口（天）：channel_events 与 audit_log
 	// 超窗即被周期清扫。0（默认）= 关闭——保留期限是合规决策，由部署方
 	// 显式开启；过期管理会话无论如何都会被清扫。
@@ -73,6 +77,8 @@ type PlatformSectionFile struct {
 	PublicBaseURL            *string `toml:"public_base_url"`
 	MaxRequestBodyBytes      *int    `toml:"max_request_body_bytes"`
 	GlobalMaxConcurrency     *int    `toml:"global_max_concurrency"`
+	RateLimitIPPerMinute     *int    `toml:"rate_limit_ip_per_minute"`
+	RateLimitUserPerMinute   *int    `toml:"rate_limit_user_per_minute"`
 	RetentionDays            *int    `toml:"retention_days"`
 	DBMaxConns               *int    `toml:"db_max_conns"`
 	AllowLegacyBodySignature *bool   `toml:"allow_legacy_body_signature"`
@@ -288,6 +294,8 @@ func PlatformConfigFromFile(root *PlatformRootFile) (*PlatformConfig, error) {
 		PublicBaseURL:            strings.TrimRight(derefOr(root.Platform.PublicBaseURL, "http://127.0.0.1:8080"), "/"),
 		MaxRequestBodyBytes:      derefIntOr(root.Platform.MaxRequestBodyBytes, 2*1024*1024),
 		GlobalMaxConcurrency:     derefIntOr(root.Platform.GlobalMaxConcurrency, 16),
+		RateLimitIPPerMinute:     derefIntOr(root.Platform.RateLimitIPPerMinute, 60),
+		RateLimitUserPerMinute:   derefIntOr(root.Platform.RateLimitUserPerMinute, 30),
 		RetentionDays:            derefIntOr(root.Platform.RetentionDays, 0),
 		DBMaxConns:               derefIntOr(root.Platform.DBMaxConns, 0),
 		AllowLegacyBodySignature: derefBoolOr(root.Platform.AllowLegacyBodySignature, false),
@@ -405,6 +413,12 @@ func applyPlatformEnv(root *PlatformRootFile) error {
 		return err
 	}
 	if err := setEnvInt("PLATFORM__GLOBAL_MAX_CONCURRENCY", &root.Platform.GlobalMaxConcurrency); err != nil {
+		return err
+	}
+	if err := setEnvInt("PLATFORM__RATE_LIMIT_IP_PER_MINUTE", &root.Platform.RateLimitIPPerMinute); err != nil {
+		return err
+	}
+	if err := setEnvInt("PLATFORM__RATE_LIMIT_USER_PER_MINUTE", &root.Platform.RateLimitUserPerMinute); err != nil {
 		return err
 	}
 	if err := setEnvInt("PLATFORM__RETENTION_DAYS", &root.Platform.RetentionDays); err != nil {
