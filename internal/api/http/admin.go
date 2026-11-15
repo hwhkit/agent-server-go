@@ -30,6 +30,7 @@ import (
 	"ir-agent-server/internal/domain/position"
 	"ir-agent-server/internal/domain/run"
 	"ir-agent-server/internal/domain/team"
+	"ir-agent-server/internal/infra/crypto"
 )
 
 // AdminCookieName 是管理台会话 Cookie 名。
@@ -84,6 +85,7 @@ func AdminRouter(deps AdminDeps) chi.Router {
 			r.Get("/audits/export", h.exportAudits)
 			r.Get("/channel-events", h.listChannelEvents)
 			r.Get("/users", h.listUsers)
+			r.Post("/auth/register", h.registerUser)
 
 			// 写操作：管理员 + CSRF。
 			r.Group(func(r chi.Router) {
@@ -104,6 +106,7 @@ func AdminRouter(deps AdminDeps) chi.Router {
 				r.Post("/team-runs/{id}/retry", h.retryTeamRun)
 				r.Post("/agents/import", h.importAgents)
 				r.Post("/users", h.createUser)
+				r.Post("/auth/api-keys", h.createAPIKey)
 				r.Put("/users/{username}", h.updateUser)
 				r.Delete("/users/{username}", h.deleteUser)
 			})
@@ -1140,4 +1143,72 @@ func parseProviderIfMatch(w http.ResponseWriter, r *http.Request) (*int64, bool)
 		return invalid()
 	}
 	return &revision, true
+}
+
+// registerUserRequest 是注册请求体。
+type registerUserRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// registerUser POST /api/v1/auth/register — 用户自注册（role=user）。
+func (a *adminHandler) registerUser(w http.ResponseWriter, r *http.Request) {
+	var request registerUserRequest
+	if err := decodeAdminBody(w, r, &request); err != nil {
+		return
+	}
+	request.Username = strings.TrimSpace(strings.ToLower(request.Username))
+	if len(request.Username) < 3 || len(request.Username) > 120 {
+		writeAdminError(w, http.StatusUnprocessableEntity, "invalid_username",
+			"Username must be 3-120 characters")
+		return
+	}
+	if len(request.Password) < 8 {
+		writeAdminError(w, http.StatusUnprocessableEntity, "weak_password",
+			"Password must be at least 8 characters")
+		return
+	}
+	view, err := a.deps.Accounts.Create(r.Context(), request.Username, request.Password,
+		"user", request.Username)
+	if err != nil {
+		writeAdminError(w, http.StatusConflict, "registration_failed", err.Error())
+		return
+	}
+	writeAdminData(w, http.StatusCreated, map[string]any{
+		"username": view.Username, "role": view.Role,
+	})
+}
+
+// createAPIKeyRequest 是 API Key 生成请求。
+type createAPIKeyRequest struct {
+	Name string `json:"name"`
+}
+
+// createAPIKey POST /api/admin/v2/auth/api-keys — 为当前用户生成 API Key。
+func (a *adminHandler) createAPIKey(w http.ResponseWriter, r *http.Request) {
+	token, ok := sessionCookie(r)
+	if !ok {
+		writeAdminError(w, http.StatusUnauthorized, "unauthorized", "missing session cookie")
+		return
+	}
+	session, err := a.deps.Auth.Authenticate(r.Context(), token)
+	if err != nil {
+		writeAdminError(w, http.StatusUnauthorized, "unauthorized", "invalid session")
+		return
+	}
+	var request createAPIKeyRequest
+	if err := decodeAdminBody(w, r, &request); err != nil {
+		return
+	}
+	if strings.TrimSpace(request.Name) == "" {
+		request.Name = "default"
+	}
+	// API Key 格式：irak_<random>。生产环境应落库（哈希）并支持吊销。
+	key := "irak_" + crypto.RandomToken(32)
+	writeAdminData(w, http.StatusCreated, map[string]any{
+		"name":     request.Name,
+		"api_key":  key,
+		"username": session.Username,
+		"notice":   "API key is shown only once; store it securely",
+	})
 }

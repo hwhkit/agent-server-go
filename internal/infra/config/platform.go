@@ -296,7 +296,7 @@ func PlatformConfigFromFile(root *PlatformRootFile) (*PlatformConfig, error) {
 		GlobalMaxConcurrency:     derefIntOr(root.Platform.GlobalMaxConcurrency, 16),
 		RateLimitIPPerMinute:     derefIntOr(root.Platform.RateLimitIPPerMinute, 60),
 		RateLimitUserPerMinute:   derefIntOr(root.Platform.RateLimitUserPerMinute, 30),
-		RetentionDays:            derefIntOr(root.Platform.RetentionDays, 0),
+		RetentionDays:            derefIntOr(root.Platform.RetentionDays, 90),
 		DBMaxConns:               derefIntOr(root.Platform.DBMaxConns, 0),
 		AllowLegacyBodySignature: derefBoolOr(root.Platform.AllowLegacyBodySignature, false),
 
