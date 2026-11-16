@@ -1295,6 +1295,40 @@
     await issue(false);
   };
 
+  // subscribeTeamRunEvents：用 EventSource 订阅 TeamRun 步骤实时事件。
+  // 有事件到达时自动刷新团队运行列表；终态自动关闭。
+  const sseConnections = new Map();
+  const subscribeTeamRunEvents = (runId) => {
+    if (sseConnections.has(runId)) return; // 已订阅
+    const es = new EventSource(`/api/admin/v2/team-runs/${runId}/events`);
+    sseConnections.set(runId, es);
+    es.onmessage = () => rerender(); // 任何事件都刷新
+    es.addEventListener("succeeded", () => {
+      toast(`${t("team.step")} → ${t("status.success")}`, "ok");
+      rerender();
+    });
+    es.addEventListener("failed", () => {
+      toast(`${t("team.step")} → ${t("status.failed")}`, "err");
+      rerender();
+    });
+    es.addEventListener("completed", () => {
+      es.close();
+      sseConnections.delete(runId);
+      toast(t("team.runCompleted") || "团队运行完成", "ok");
+      rerender();
+    });
+    es.addEventListener("failed_run", () => {
+      es.close();
+      sseConnections.delete(runId);
+      rerender();
+    });
+    es.onerror = () => {
+      // SSE 断开（服务端关闭或网络故障）→ 清理并降级为轮询
+      es.close();
+      sseConnections.delete(runId);
+    };
+  };
+
   const submitRunModal = (team) => {
     const input = h("textarea", { rows: 5, placeholder: '{"topic": "…"}' });
     input.value = "{}";
@@ -1311,6 +1345,8 @@
         });
         close();
         toast(`${t("team.run.submitted")} · ${run.id}`, "ok");
+        // SSE 实时订阅：步骤状态变化即时推送（替代轮询）。
+        subscribeTeamRunEvents(run.id);
         navigate("/runs");
       } catch (err) { reportError(err); }
     };

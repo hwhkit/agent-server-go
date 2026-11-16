@@ -417,6 +417,14 @@ func (s *Service) Complete(ctx context.Context, runID, workerID string, in Compl
 		return nil, failure(400, "invalid_request", "error.code is required for failed")
 	}
 
+	// 合约校验（RULE-CONTRACT-001）：succeeded 结果必须匹配岗位 output_schema。
+	// 拿不到 schema 时跳过（自定义岗位可无 schema）。
+	if in.Status == "succeeded" && len(in.Payload) > 0 {
+		if err := validateOutputSchema(ctx, in.Payload); err != nil {
+			return nil, failure(409, "contract_mismatch", err.Error())
+		}
+	}
+
 	// 规范化结果文档：幂等重放按此文档字节比较（Go map 序列化键序稳定）。
 	resultDoc := map[string]any{
 		"status":  in.Status,
@@ -540,3 +548,19 @@ func RunReaper(ctx context.Context, service *Service) {
 }
 
 // randomToken 返回 bytes 字节密码学随机数据的 URL-safe base64(无填充)编码。
+
+// validateOutputSchema 校验 succeeded 结果的基本结构。
+// MVP：确认 payload 是有效 JSON 对象且非空；完整 schema 校验后续迭代。
+func validateOutputSchema(_ context.Context, payload json.RawMessage) error {
+	if len(payload) == 0 {
+		return fmt.Errorf("payload is empty")
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(payload, &obj); err != nil {
+		return fmt.Errorf("payload must be a JSON object: %v", err)
+	}
+	if len(obj) == 0 {
+		return fmt.Errorf("payload must not be an empty object")
+	}
+	return nil
+}
