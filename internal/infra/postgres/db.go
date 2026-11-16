@@ -222,6 +222,19 @@ func schemaStatements() []string {
 			PRIMARY KEY(worker_id, connector_id))`,
 		`ALTER TABLE agent_pull_workers ALTER COLUMN connector_id TYPE TEXT`,
 
+		// ---- P1.8 LLM 成本追踪 ----
+		`CREATE TABLE IF NOT EXISTS usage_daily (
+			day           TEXT NOT NULL,
+			agent_slug    TEXT NOT NULL,
+			username      TEXT NOT NULL DEFAULT '',
+			input_tokens  BIGINT NOT NULL DEFAULT 0,
+			output_tokens BIGINT NOT NULL DEFAULT 0,
+			total_tokens  BIGINT NOT NULL DEFAULT 0,
+			run_count     BIGINT NOT NULL DEFAULT 0,
+			PRIMARY KEY (day, agent_slug, username))`,
+		`CREATE INDEX IF NOT EXISTS idx_usage_daily_day ON usage_daily(day DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_usage_daily_user ON usage_daily(username, day DESC)`,
+
 		// ---- v2 新增（只增不改）----
 		`CREATE TABLE IF NOT EXISTS job_positions (
 			code          TEXT PRIMARY KEY,
