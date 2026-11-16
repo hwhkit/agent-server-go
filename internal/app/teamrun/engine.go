@@ -189,15 +189,6 @@ func (e *Engine) Retry(ctx context.Context, id, actor string) (*team.TeamRun, er
 }
 
 func (e *Engine) Submit(ctx context.Context, submission Submission) (*team.TeamRun, error) {
-	// 结果缓存：同输入 15 分钟内返回已有完成的运行。
-	if cached := e.cache.Get(submission.TeamID, submission.Input); cached != "" {
-		if existing, err := e.teamRuns.Get(ctx, cached); err == nil && existing.Status == team.TeamRunCompleted {
-			slog.Info("team run cache hit", "team", submission.TeamID, "cached_run", cached)
-			return existing, nil
-		}
-		e.cache.Delete(submission.TeamID, submission.Input)
-	}
-
 	definition, err := e.teams.Get(ctx, submission.TeamID)
 	if err != nil {
 		if errors.Is(err, team.ErrNotFound) {
