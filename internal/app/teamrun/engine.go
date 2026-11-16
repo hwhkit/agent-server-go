@@ -50,7 +50,59 @@ type Aborter interface {
 }
 
 // Engine 是编排引擎。
+
+// RunCache 是同输入去重缓存（TTL 15 分钟）。
+type RunCache struct {
+	mu      sync.RWMutex
+	entries map[string]cacheEntry
+	ttl     time.Duration
+}
+
+type cacheEntry struct {
+	runID     string
+	expiresAt time.Time
+}
+
+func newRunCache() *RunCache {
+	return &RunCache{entries: make(map[string]cacheEntry), ttl: 15 * time.Minute}
+}
+
+func (c *RunCache) key(teamID string, input json.RawMessage) string {
+	return teamID + ":" + string(input)
+}
+
+func (c *RunCache) Get(teamID string, input json.RawMessage) string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	e, ok := c.entries[c.key(teamID, input)]
+	if !ok || time.Now().After(e.expiresAt) {
+		return ""
+	}
+	return e.runID
+}
+
+func (c *RunCache) Set(teamID string, input json.RawMessage, runID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := time.Now()
+	for k, v := range c.entries {
+		if now.After(v.expiresAt) {
+			delete(c.entries, k)
+		}
+	}
+	c.entries[c.key(teamID, input)] = cacheEntry{runID: runID, expiresAt: now.Add(c.ttl)}
+}
+
+func (c *RunCache) Delete(teamID string, input json.RawMessage) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.entries, c.key(teamID, input))
+}
+
 type Engine struct {
+	// Notifier 在 TeamRun 到终态时回调（nil 时跳过）。
+	Notifier   func(runID string, status string)
+	cache      *RunCache
 	teams      team.Repository
 	teamRuns   team.TeamRunRepository
 	agentRuns  run.Repository
@@ -86,6 +138,7 @@ func NewEngine(deps Deps) *Engine {
 		interval = 15 * time.Second
 	}
 	return &Engine{
+		cache: newRunCache(),
 		teams: deps.Teams, teamRuns: deps.TeamRuns, agentRuns: deps.AgentRuns,
 		agents: deps.Agents, dispatcher: deps.Dispatcher, aborter: deps.Aborter,
 		reconcileInterval: interval,
@@ -136,6 +189,15 @@ func (e *Engine) Retry(ctx context.Context, id, actor string) (*team.TeamRun, er
 }
 
 func (e *Engine) Submit(ctx context.Context, submission Submission) (*team.TeamRun, error) {
+	// 结果缓存：同输入 15 分钟内返回已有完成的运行。
+	if cached := e.cache.Get(submission.TeamID, submission.Input); cached != "" {
+		if existing, err := e.teamRuns.Get(ctx, cached); err == nil && existing.Status == team.TeamRunCompleted {
+			slog.Info("team run cache hit", "team", submission.TeamID, "cached_run", cached)
+			return existing, nil
+		}
+		e.cache.Delete(submission.TeamID, submission.Input)
+	}
+
 	definition, err := e.teams.Get(ctx, submission.TeamID)
 	if err != nil {
 		if errors.Is(err, team.ErrNotFound) {
@@ -310,7 +372,11 @@ func (e *Engine) advanceOnce(ctx context.Context, tr *team.TeamRun) (bool, error
 		}
 		cas := map[string]team.StepState{evaluation.FailFastStep: team.StepFailed}
 		tr.Error = &team.StepError{Code: "step_failed", Message: message}
-		return e.save(ctx, tr.ID, failed, team.TeamRunFailed, cas)
+		ok, err := e.save(ctx, tr.ID, failed, team.TeamRunFailed, cas)
+		if ok && err == nil && e.Notifier != nil {
+			go e.Notifier(tr.ID, "failed")
+		}
+		return ok, err
 	}
 
 	steps := cloneSteps(tr.Steps)
@@ -337,6 +403,13 @@ func (e *Engine) advanceOnce(ctx context.Context, tr *team.TeamRun) (bool, error
 		ok, err := e.save(ctx, tr.ID, steps, status, cas)
 		if ok && err == nil {
 			slog.Info("team run completed", "team_run", tr.ID)
+			if e.Notifier != nil {
+				go e.Notifier(tr.ID, "completed")
+			}
+			// 结果缓存：完成的 TeamRun 写入缓存（同输入 15 分钟去重）。
+			if e.cache != nil {
+				e.cache.Set(tr.Snapshot.ID, tr.Input, tr.ID)
+			}
 		}
 		return ok, err
 	}
