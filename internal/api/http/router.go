@@ -1,6 +1,8 @@
 package http
 
 import (
+	"net/http"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
@@ -10,6 +12,8 @@ import (
 // RouterDeps 是 HTTP 装配依赖。可选项为 nil 时对应路由不挂载
 // （与旧栈「按配置启用」的语义一致）。
 type RouterDeps struct {
+	// RateLimiter 是全局限流中间件（nil 时跳过限流）。
+	RateLimiter func(http.Handler) http.Handler
 	// PushPath 是 Push 端点路径（配置 [ir].push_path，缺省 /ir/push）。
 	PushPath string
 	Push     *PushHandler
@@ -36,6 +40,9 @@ type RouterDeps struct {
 func NewRouter(deps RouterDeps) chi.Router {
 	router := chi.NewRouter()
 	router.Use(middleware.Compress(5)) // 管理台 SPA/JSON 响应 gzip（267KB → ~60KB）
+	if deps.RateLimiter != nil {
+		router.Use(deps.RateLimiter)
+	}
 	router.Use(SecurityHeaders)
 	// chi 要求：中间件必须在任何路由注册之前 Use。/metrics 端点由 hwhkit
 	// 框架在外层 mux 提供（promhttp），这里只做请求计数。

@@ -1,0 +1,64 @@
+# IR (Intelligent Router) — Prometheus 告警规则
+# 放到 Prometheus rules 目录或 Grafana Alerting 中导入。
+# 路径建议: /etc/prometheus/rules/ir-alerts.yml
+
+groups:
+  - name: ir_critical
+    rules:
+      - alert: IRHighErrorRate
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m])) /
+          sum(rate(http_requests_total[5m])) > 0.05
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "Error rate > 5%"
+          description: "5xx errors are {{ $value | humanizePercentage }} of total requests"
+
+      - alert: IRTeamRunBacklog
+        expr: ir_team_runs_active > 100
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "Team run backlog > 100"
+          description: "Active team runs: {{ $value }}. Edge capacity may be insufficient."
+
+      - alert: IRQueueDepthHigh
+        expr: ir_pull_queue_depth > 50
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "Pull queue depth > 50"
+          description: "Tasks waiting for edge workers: {{ $value }}"
+
+      - alert: IREdgeWorkersLow
+        expr: ir_edge_workers_online < 2
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "Fewer than 2 edge workers online"
+          description: "Only {{ $value }} edge workers online. System will stall."
+
+      - alert: IRPgConnectionsHigh
+        expr: ir_pg_connections_active > 0.8 * ir_pg_connections_max
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "PG connections > 80% of max"
+          description: "{{ $value }} active connections approaching pool limit"
+
+      - alert: IRRateLimitHeavy
+        expr: sum(rate(http_requests_total{status="429"}[5m])) > 10
+        for: 10m
+        labels: {severity: info}
+        annotations:
+          summary: "Heavy rate limiting (>10 429/s)"
+          description: "Consider increasing rate limits or investigating abuse"
+
+      - alert: IRInstanceDown
+        expr: up{job="ir-core"} == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: "Core instance {{ $labels.instance }} is down"
+          description: "Has been down for more than 1 minute"

@@ -38,6 +38,8 @@ const AdminCookieName = "ir_admin_session"
 
 // AdminDeps 是管理路由的装配依赖。
 type AdminDeps struct {
+	// SSE 是 TeamRun 实时事件代理（nil 时 SSE 端点返回 501）。
+	SSE        *Broker
 	Auth       *admin.Auth
 	Catalog    *catalog.Service
 	Dashboard  *dashboard.Service

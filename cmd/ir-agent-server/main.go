@@ -333,6 +333,7 @@ func buildRuntime(ctx context.Context) (*runtime, *config.Config, error) {
 	adminRouter := apihttp.AdminRouter(apihttp.AdminDeps{
 		Auth: auth, Catalog: catalogService, Dashboard: dash, Engine: teamEngine,
 		Connectors: connectors, Accounts: accountService,
+		SSE:  apihttp.NewBroker(),
 		Runs: runs, Audits: audits, ChannelEvents: channelEvents,
 		CookieSecure: cfgPlatform.SecureCookies, CookieTTL: cfgPlatform.AdminSessionTTL,
 		PublicBaseURL: cfgPlatform.PublicBaseURL,
@@ -348,9 +349,29 @@ func buildRuntime(ctx context.Context) (*runtime, *config.Config, error) {
 	// 公开分享服务：token 限流 + 脱敏视图 + 越权防护（app/share 口径）。
 	shareService := share.NewService(teamShares, teams, shareRunner{engine: teamEngine},
 		shareRuns{store: runs}, share.Config{})
+	// P0.4 全局限流：IP + 用户双维度，PG 令牌桶。
+	rateStore, rateErr := ratelimit.NewStore(ctx, db.Pool)
+	if rateErr != nil {
+		slog.Warn("rate limit store init failed; rate limiting disabled", "err", rateErr)
+	}
+	var rateMiddleware func(http.Handler) http.Handler
+	if rateErr == nil && cfgPlatform.RateLimitIPPerMinute > 0 {
+		rateMiddleware = ratelimit.Middleware(rateStore, ratelimit.Config{
+			Enabled:       true,
+			IPPerMinute:   cfgPlatform.RateLimitIPPerMinute,
+			UserPerMinute: cfgPlatform.RateLimitUserPerMinute,
+			Burst:         10,
+			KeyPrefix:     "api",
+		})
+		slog.Info("rate limiting enabled",
+			"ip_per_min", cfgPlatform.RateLimitIPPerMinute,
+			"user_per_min", cfgPlatform.RateLimitUserPerMinute)
+	}
+
 	routerDeps := apihttp.RouterDeps{
-		PushPath: cfgIR.PushPath,
-		Share:    apihttp.ShareRouter(&apihttp.ShareHandler{Service: shareService}),
+		RateLimiter: rateMiddleware,
+		PushPath:    cfgIR.PushPath,
+		Share:       apihttp.ShareRouter(&apihttp.ShareHandler{Service: shareService}),
 		Dynamic: &apihttp.DynamicHandler{
 			Service: dynamicService, MaxRequestBytes: int64(cfgPlatform.MaxRequestBodyBytes),
 		},
@@ -386,12 +407,9 @@ func buildRuntime(ctx context.Context) (*runtime, *config.Config, error) {
 		slog.Info("A2A v1.0 endpoint enabled",
 			"route", cfgA2A.BasePath+"/{slug}", "card", "/.well-known/agent-card.json")
 	}
-	// P0.4 全局限流：IP + 用户双维度，PG 令牌桶。
-	rateStore, rateErr := ratelimit.NewStore(ctx, db.Pool)
 	if rateErr != nil {
 		slog.Warn("rate limit store init failed; rate limiting disabled", "err", rateErr)
 	}
-	_ = rateStore
 
 	router := apihttp.NewRouter(routerDeps)
 

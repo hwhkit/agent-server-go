@@ -1,0 +1,87 @@
+{
+  "title": "IR (Intelligent Router) — Production Overview",
+  "tags": ["ir", "production"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "panels": [
+    {
+      "title": "Request Rate (req/s)",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "targets": [{
+        "expr": "sum(rate(http_requests_total[5m])) by (handler)",
+        "legendFormat": "{{handler}}"
+      }],
+      "type": "timeseries"
+    },
+    {
+      "title": "Request Latency p95 (seconds)",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "targets": [{
+        "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, handler))",
+        "legendFormat": "{{handler}}"
+      }],
+      "type": "timeseries"
+    },
+    {
+      "title": "Error Rate (5xx/s)",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "targets": [{
+        "expr": "sum(rate(http_requests_total{status=~\"5..\"}[5m])) by (handler)",
+        "legendFormat": "{{handler}}"
+      }],
+      "type": "timeseries"
+    },
+    {
+      "title": "Active Team Runs",
+      "gridPos": {"h": 8, "w": 6, "x": 12, "y": 8},
+      "targets": [{
+        "expr": "ir_team_runs_active"
+      }],
+      "type": "stat"
+    },
+    {
+      "title": "Queue Depth (pending tasks)",
+      "gridPos": {"h": 8, "w": 6, "x": 18, "y": 8},
+      "targets": [{
+        "expr": "ir_pull_queue_depth"
+      }],
+      "type": "stat"
+    },
+    {
+      "title": "Online Edge Workers",
+      "gridPos": {"h": 8, "w": 6, "x": 12, "y": 16},
+      "targets": [{
+        "expr": "ir_edge_workers_online"
+      }],
+      "type": "stat"
+    },
+    {
+      "title": "Rate Limited Requests",
+      "gridPos": {"h": 8, "w": 6, "x": 18, "y": 16},
+      "targets": [{
+        "expr": "sum(rate(http_requests_total{status=\"429\"}[5m]))",
+        "legendFormat": "429/s"
+      }],
+      "type": "timeseries"
+    },
+    {
+      "title": "Agent Task Duration p95 (by slug)",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
+      "targets": [{
+        "expr": "histogram_quantile(0.95, sum(rate(ir_agent_task_duration_seconds_bucket[5m])) by (le, agent_slug))",
+        "legendFormat": "{{agent_slug}}"
+      }],
+      "type": "timeseries"
+    },
+    {
+      "title": "PostgreSQL Connections",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
+      "targets": [{
+        "expr": "ir_pg_connections_active"
+      }, {
+        "expr": "ir_pg_connections_idle"
+      }],
+      "type": "timeseries"
+    }
+  ]
+}
