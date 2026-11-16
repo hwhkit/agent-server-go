@@ -559,8 +559,5 @@ func validateOutputSchema(_ context.Context, payload json.RawMessage) error {
 	if err := json.Unmarshal(payload, &obj); err != nil {
 		return fmt.Errorf("payload must be a JSON object: %v", err)
 	}
-	if len(obj) == 0 {
-		return fmt.Errorf("payload must not be an empty object")
-	}
 	return nil
 }
