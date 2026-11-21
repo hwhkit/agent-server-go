@@ -106,12 +106,12 @@ es.addEventListener('completed', e => { es.close(); console.log('运行完成');
 
 ```
 POST /agent/{slug}
-X-Agent-Signature: v1 HMAC-SHA256
+X-Agent-Signature: <hex>            # 裸 hex 签名，不带 "v1 " 前缀
 X-Agent-Timestamp: <unix-seconds>
 X-Agent-Nonce: <16-128 URL-safe chars>
 ```
 
-Canonical 串格式：
+Canonical 串格式（HMAC-SHA256，密钥为智能体签名密钥）：
 ```
 v1\nPOST\n/agent/{slug}\n{timestamp}\n{nonce}\n{runId}\n{idempotencyKey}\n{bodySha256Hex}
 ```

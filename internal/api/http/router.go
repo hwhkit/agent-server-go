@@ -41,7 +41,7 @@ func NewRouter(deps RouterDeps) chi.Router {
 	router := chi.NewRouter()
 	router.Use(middleware.Compress(5)) // 管理台 SPA/JSON 响应 gzip（267KB → ~60KB）
 	if deps.RateLimiter != nil {
-		router.Use(deps.RateLimiter)
+		router.Use(SkipRateLimit(deps.RateLimiter, "/health", "/health/ready"))
 	}
 	router.Use(SecurityHeaders)
 	// chi 要求：中间件必须在任何路由注册之前 Use。/metrics 端点由 hwhkit
@@ -76,4 +76,23 @@ func NewRouter(deps RouterDeps) chi.Router {
 		router.Mount("/", deps.Admin)
 	}
 	return router
+}
+
+// SkipRateLimit 包装限流中间件：命中的路径直通不计预算。健康端点必须豁免
+// ——LB/k8s 探针与 compose 初始化脚本都以秒级频率轮询 /health*，计入预算
+// 会把同 IP 的真实请求（如 init 登录）挤出 429。
+func SkipRateLimit(limiter func(http.Handler) http.Handler, paths ...string) func(http.Handler) http.Handler {
+	skip := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		skip[p] = true
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if skip[r.URL.Path] {
+				next.ServeHTTP(w, r)
+				return
+			}
+			limiter(next).ServeHTTP(w, r)
+		})
+	}
 }

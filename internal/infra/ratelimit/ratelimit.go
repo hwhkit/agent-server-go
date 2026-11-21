@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -73,30 +74,37 @@ func (s *Store) Take(ctx context.Context, key string, capacity int, perMinute in
 
 	// Upsert + 惰性补充：单条 SQL 原子完成。
 	// capacity 是桶容量；tokens 补充到不超过 capacity。
+	// 注意：SQL 必须引用全部绑定参数（曾有未使用的 $2 导致 PG Prepare
+	// 阶段 "could not determine data type" 报错）。
 	var allowed bool
-	_ = s.db.QueryRow(ctx, `
+	err := s.db.QueryRow(ctx, `
 		WITH existing AS (
 			SELECT tokens, updated_ns FROM rate_limit_buckets WHERE bucket_key = $1
 		), updated AS (
 			SELECT
 				LEAST(
-					$3::double precision,
+					$2::double precision,
 					COALESCE(
-						(SELECT tokens FROM existing), $3::double precision
-					) + ($5::double precision * (($4::bigint - COALESCE((SELECT updated_ns FROM existing), $4::bigint)) / 1000000000.0))
+						(SELECT tokens FROM existing), $2::double precision
+					) + ($4::double precision * (($3::bigint - COALESCE((SELECT updated_ns FROM existing), $3::bigint)) / 1000000000.0))
 				) AS new_tokens
 		)
 		INSERT INTO rate_limit_buckets (bucket_key, tokens, updated_ns)
 		VALUES ($1,
 			GREATEST(0, (SELECT new_tokens FROM updated) - 1),
-			$4
+			$3
 		)
 		ON CONFLICT (bucket_key) DO UPDATE SET
 			tokens = GREATEST(0, (SELECT new_tokens FROM updated) - 1),
-			updated_ns = $4
+			updated_ns = $3
 		RETURNING (SELECT new_tokens FROM updated) >= 1
-	`, key, capacity, capacity, now, refillRate).Scan(&allowed)
-	return allowed, nil // 存储故障不阻断请求（fail-open）
+	`, key, capacity, now, refillRate).Scan(&allowed)
+	if err != nil {
+		// 存储故障必须真·fail-open：查询失败时放行并上抛，由中间件记日志。
+		// （旧实现吞掉错误返回 (false, nil)，实际是 fail-closed 全量 429。）
+		return true, err
+	}
+	return allowed, nil
 }
 
 // Middleware 创建限流中间件。
@@ -115,7 +123,9 @@ func Middleware(store *Store, cfg Config) func(http.Handler) http.Handler {
 				ipAllowed, err := store.Take(ctx,
 					fmt.Sprintf("%s:ip:%s", cfg.KeyPrefix, ip),
 					cfg.Burst, cfg.IPPerMinute)
-				if err == nil && !ipAllowed {
+				if err != nil {
+					slog.Warn("rate limit: take failed (fail-open)", "err", err)
+				} else if !ipAllowed {
 					tooManyRequests(w, "ip")
 					return
 				}
@@ -128,7 +138,9 @@ func Middleware(store *Store, cfg Config) func(http.Handler) http.Handler {
 					userAllowed, err := store.Take(ctx,
 						fmt.Sprintf("%s:user:%s", cfg.KeyPrefix, username),
 						cfg.Burst, cfg.UserPerMinute)
-					if err == nil && !userAllowed {
+					if err != nil {
+						slog.Warn("rate limit: take failed (fail-open)", "err", err)
+					} else if !userAllowed {
 						tooManyRequests(w, "user")
 						return
 					}
