@@ -351,6 +351,27 @@ func (s *GatewayStore) FinalizeRun(ctx context.Context, finalization platform.Ga
 	return tx.Commit(ctx)
 }
 
+// CompleteIdempotency 在不触碰 run 行的前提下完成幂等租约。remote_pull 成功
+// 时连接器 complete 已终态化 run（FinalizeRun 的 run UPDATE 会 0 行命中），
+// 动态入口此时只需把租约标记 completed 供同键重放读取缓存响应。
+func (s *GatewayStore) CompleteIdempotency(ctx context.Context, agentSlug, key, leaseID, responseBody string) error {
+	ctx, cancel := finalizationContext(ctx)
+	defer cancel()
+	tag, err := s.db.Pool.Exec(ctx,
+		`UPDATE idempotency_records SET status = 'completed',
+		 response_body = $4, updated_at = $5
+		 WHERE agent_slug = $1 AND key = $2 AND lease_id = $3
+		 AND status = 'processing'`,
+		agentSlug, key, leaseID, responseBody, nowTS())
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return errors.New("idempotency lease is no longer owned by this request")
+	}
+	return nil
+}
+
 // randomToken 返回 n 字节随机数据的 base64url（无填充）编码（租约 ID 用）。
 func randomToken(n int) string {
 	raw := make([]byte, n)

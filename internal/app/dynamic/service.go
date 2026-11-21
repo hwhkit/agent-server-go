@@ -42,6 +42,9 @@ type Store interface {
 	StartRun(ctx context.Context, agentSlug, runID string, revision int64,
 		executorKind, executionMode string, requestJSON *string) (bool, error)
 	FinalizeRun(ctx context.Context, finalization platform.GatewayRunFinalization) error
+	// CompleteIdempotency 只完成幂等租约（不动 run 行）。remote_pull 成功
+	// 时连接器 complete 已在队列侧终态化 run，二次改写会撞状态机。
+	CompleteIdempotency(ctx context.Context, agentSlug, key, leaseID, responseBody string) error
 }
 
 // AgentResolver 按 slug 定位智能体（domain 仓储结构性满足）。
@@ -660,6 +663,21 @@ func (s *Service) runSync(ctx context.Context, request *gatewayRequest,
 	}
 	responseBody := string(encoded)
 
+	if request.resolved.ExecutionMode == exec.ModeRemotePull {
+		// 连接器 complete 已在队列侧写入 run 终态与 result_json；这里只完成
+		// 幂等租约（同键重放返回同一响应体），不再二次改写 run 行——那会
+		// 撞上已完成状态机，把一次成功执行误报成 state_unavailable。
+		// recordKey/lease 为空表示请求未持有租约，无需完成。
+		if request.recordKey != "" && request.lease != "" {
+			if err := s.store.CompleteIdempotency(ctx, request.slug,
+				request.recordKey, request.lease, responseBody); err != nil {
+				slog.Error("commit Agent idempotency failed", "agent", request.slug, "run_id", request.runID, "error", err)
+				return s.apiError(503, "state_unavailable",
+					"Agent result was produced but its state could not be committed")
+			}
+		}
+		return s.agentResponse(200, responseBody, request, request.runID, false)
+	}
 	responseCode := int64(200)
 	if err := s.store.FinalizeRun(ctx, platform.GatewayRunFinalization{
 		AgentSlug: request.slug, RunID: request.runID, Status: "completed",
@@ -798,47 +816,31 @@ func (s *Service) runAsync(request *gatewayRequest, callbackURL string,
 		bodyText := string(encoded)
 		receipt, callbackErr := s.deliverCallback(ctx, request, callbackURL, payload, bodyText)
 
-		runStatus := "completed"
-		var errorCode *string
-		accepted := int64(202)
-		responseCode := &accepted
 		resultJSON := bodyText
 		switch {
 		case callbackErr != nil:
-			runStatus = "failed"
-			code, status := callbackDeliveryOutcome(callbackErr)
-			errorCode = &code
-			mapped := int64(status)
-			responseCode = &mapped
+			code, _ := callbackDeliveryOutcome(callbackErr)
 			message := "Callback delivery failed"
 			if code == "outcome_uncertain" {
 				message = "Callback delivery outcome is uncertain"
 			}
 			resultJSON = platform.SerializedGatewayError(code, message)
 		case receipt == nil:
-			runStatus = "failed"
-			code := "callback_delivery_failed"
-			errorCode = &code
-			badGateway := int64(502)
-			responseCode = &badGateway
-			resultJSON = platform.SerializedGatewayError(code, "Callback delivery returned no receipt")
+			resultJSON = platform.SerializedGatewayError("callback_delivery_failed",
+				"Callback delivery returned no receipt")
 		case !receipt.Accepted:
-			runStatus = "failed"
-			code := "callback_rejected"
-			errorCode = &code
-			badGateway := int64(502)
-			responseCode = &badGateway
-			resultJSON = platform.SerializedGatewayError(code, "Callback result was not accepted")
+			resultJSON = platform.SerializedGatewayError("callback_rejected",
+				"Callback result was not accepted")
 		}
-		if err := s.store.FinalizeRun(ctx, platform.GatewayRunFinalization{
-			AgentSlug: request.slug, RunID: request.runID, Status: runStatus,
-			DurationMs: s.now().Sub(started).Milliseconds(), ErrorCode: errorCode,
-			ResponseCode: responseCode, ResultJSON: &resultJSON,
-			ExecutorResultJSON: executorResultJSON,
-			Idempotency:        request.completeTransition(resultJSON),
-		}); err != nil {
-			slog.Error("record async run completion failed",
-				"agent", request.slug, "run_id", request.runID, "error", err)
+		// remote_pull 成功时连接器 complete 已终态化 run（状态翻转不可写）；
+		// 回执结果只进 channel_events（deliverCallback/失败分支已记录），
+		// 这里完成幂等租约供同键重放读取（未持有租约则跳过）。
+		if request.recordKey != "" && request.lease != "" {
+			if err := s.store.CompleteIdempotency(ctx, request.slug,
+				request.recordKey, request.lease, resultJSON); err != nil {
+				slog.Error("record async run completion failed",
+					"agent", request.slug, "run_id", request.runID, "error", err)
+			}
 		}
 	}()
 }
