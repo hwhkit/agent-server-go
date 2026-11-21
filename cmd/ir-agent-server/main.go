@@ -538,19 +538,11 @@ func (rt *runtime) startLoops(ctx context.Context) {
 	elector := leader.New(rt.db.Pool)
 	elector.TryAcquire(ctx)
 	elector.StartRenewal(ctx)
-	if elector.IsLeader() {
-		slog.Info("leader: background loops active on this instance")
-	} else {
-		slog.Info("follower: background loops suppressed on this instance")
-	}
-	defer func() {
-		if elector.IsLeader() {
-			<-ctx.Done()
-		}
-	}()
 	if !elector.IsLeader() {
+		slog.Info("follower: background loops suppressed on this instance")
 		return // follower 不跑后台循环
 	}
+	slog.Info("leader: background loops active on this instance")
 
 	go rt.team.Run(ctx)
 	if rt.agentAPIEnabled {
